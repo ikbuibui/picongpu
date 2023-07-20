@@ -1,0 +1,3 @@
+- TODO
+    - fix cmakelists
+    - clean up code
