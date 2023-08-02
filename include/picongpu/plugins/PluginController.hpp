@@ -35,6 +35,8 @@
 #include "picongpu/plugins/output/images/Visualisation.hpp"
 #include "picongpu/plugins/transitionRadiation/TransitionRadiation.hpp"
 
+#include "picongpu/plugins/HelloPlugin.hpp"
+
 #include <pmacc/assert.hpp>
 /* That's an abstract plugin for image output with the possibility
  * to store the image as png file or send it via a sockets to a server.
@@ -135,7 +137,8 @@ namespace picongpu
             Checkpoint,
             EnergyFields,
             ChargeConservation,
-            SumCurrents
+            SumCurrents,
+            HelloPlugin
 
 #if(ENABLE_OPENPMD == 1)
             ,
