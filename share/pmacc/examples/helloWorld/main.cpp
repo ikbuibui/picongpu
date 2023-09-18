@@ -18,29 +18,29 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <pmacc/math/Vector.hpp>
-#include <pmacc/Environment.hpp>
-#include <pmacc/mappings/kernel/MappingDescription.hpp>
-#include <pmacc/mappings/kernel/AreaMapping.hpp>
-#include <pmacc/dimensions/DataSpace.hpp>
-#include <pmacc/lockstep.hpp>
+#include "include/HelloKernel.hpp"
 #include "pmacc/memory/buffers/HostDeviceBuffer.hpp"
 
-#include "HelloKernel.hpp"
+#include <pmacc/Environment.hpp>
+#include <pmacc/dimensions/DataSpace.hpp>
+#include <pmacc/lockstep.hpp>
+#include <pmacc/mappings/kernel/AreaMapping.hpp>
+#include <pmacc/mappings/kernel/MappingDescription.hpp>
+#include <pmacc/math/Vector.hpp>
 
-#include <iostream>
 #include <fstream>
+#include <iostream>
 
-auto main(int argc, char **argv) -> int
+auto main(int argc, char** argv) -> int
 {
     const pmacc::DataSpace<DIM2> devices = pmacc::DataSpace<DIM2>::create(2);
     const pmacc::DataSpace<DIM2> periodic = pmacc::DataSpace<DIM2>::create(0);
     pmacc::Environment<DIM2>::get().initDevices(devices, periodic);
 
     /* define a grid */
-    const pmacc::DataSpace<DIM2> gridSize{100u, 100u};
+    const pmacc::DataSpace<DIM2> gridSize{40u, 40u};
 
-    pmacc::GridController<DIM2> &gc = pmacc::Environment<DIM2>::get().GridController();
+    pmacc::GridController<DIM2>& gc = pmacc::Environment<DIM2>::get().GridController();
 
     /* device local grid size */
     const pmacc::DataSpace<DIM2> localGridSize{gridSize / devices};
@@ -48,30 +48,29 @@ auto main(int argc, char **argv) -> int
     pmacc::Environment<DIM2>::get().initGrids(gridSize, localGridSize, gc.getPosition() * localGridSize);
 
     /* Get reference to subGrid object, which holds local position, global position,
-     * and size information, as offset of local position wrt global position 
+     * and size information, as offset of local position wrt global position
      */
-    const pmacc::SubGrid<DIM2> &subGrid = pmacc::Environment<DIM2>::get().SubGrid();
+    const pmacc::SubGrid<DIM2>& subGrid = pmacc::Environment<DIM2>::get().SubGrid();
 
-    /* define mapping description, this takes in guard size? (here 4x4 cells in 1 supercell, which is a guard) 
+    /* define mapping description, this takes in guard size? (here 4x4 cells in 1 supercell, which is a guard)
      * so i think supercell size is described here, but cant i decouple supercell size from guard size?
      * maybe this isnt guard size, only supercell size
      */
     using MappingDesc = pmacc::MappingDescription<DIM2, pmacc::math::CT::Int<4, 4>>;
 
-    /* adds guards to the dataspace 
+    /* adds guards to the dataspace
      * here guard size is calulated by using the supercell size
      */
     pmacc::GridLayout<DIM2> layout{subGrid.getLocalDomain().size, MappingDesc::SuperCellSize::toRT()};
     std::cout << gc.getPosition() << "\t" << gc.getGlobalRank() << "\t" << subGrid.getLocalDomain().toString() << "\n";
 
-    /* mapping 
-     * takes in the grid layout - CELLS dataspace + guard, and num of SUPERCELLS in guard 
+    /* mapping
+     * takes in the grid layout - CELLS dataspace + guard, and num of SUPERCELLS in guard
      */
     std::unique_ptr<MappingDesc> mapping;
     mapping = std::make_unique<MappingDesc>(layout.getDataSpace(), pmacc::DataSpace<DIM2>::create(1));
 
     /* mapping the supercells to the actual local domain? */
-    // pmacc::AreaMapping<pmacc::type::CORE + pmacc::type::BORDER, MappingDesc> mapper(*mapping);
     pmacc::AreaMapping<pmacc::type::CORE + pmacc::type::BORDER, MappingDesc> mapper(*mapping);
 
     /* define a device buffer - defines a buffer on each device? */
