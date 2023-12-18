@@ -120,7 +120,7 @@ namespace picongpu
                     {
                         min = minR;
                         max = maxR;
-                        nBins = n_bins + 2;
+                        // nBins = n_bins + 2;
                         scaling = scalingR;
                     }
 
@@ -173,7 +173,7 @@ namespace picongpu
                     : axisSplit{axSplit}
                     , label{label}
                     , units{units}
-                    , lAK{attrFunctor, axSplit.nBins}
+                    , lAK{attrFunctor, axSplit.nBins + 2}
                 {
                 }
 
