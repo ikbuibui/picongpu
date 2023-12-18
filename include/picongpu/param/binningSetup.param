@@ -32,7 +32,7 @@ namespace picongpu
         inline void getBinning(BinningCreator& binningCreator)
         {
             /// USER CODE GOES BELOW
-
+            binningExample(binningCreator);
             /// USER CODE ENDS HERE
         }
 
@@ -103,12 +103,11 @@ namespace picongpu
             auto timeDescription = createFunctorDescription<uint32_t>(getTime, "time_axis", timeDimension);
 
             // Create Axis
-            auto ax_time
-                = axis::createLinear(axis::AxisSplitting(axis::Range<uint32_t>{0, 2000}, 2000), timeDescription);
+            auto ax_time = axis::createLinear(axis::AxisSplitting(axis::Range<uint32_t>{0, 2}, 2), timeDescription);
 
 
             // Bring the axes together in a tuple
-            auto axisTuple = createTuple(ax_y, ax_py);
+            auto axisTuple = createTuple(ax_y, ax_py, ax_time, ax_time, ax_time);
 
             /**
              * Define the species to do binning over here
@@ -171,9 +170,9 @@ namespace picongpu
                     .setJsonCfg(R"({"hdf5":{"dataset":{"chunks":"auto"}}})")
                     .setOpenPMDExtension("h5");
 
-                binningCreator.addBinner("particleBinning", createTuple(ax_time, ax_py), speciesTuple, getCounts)
-                    .setDumpPeriod(2000)
-                    .setNormalizeByBinVolume(false);
+                // binningCreator.addBinner("particleBinning", createTuple(ax_time, ax_py), speciesTuple, getCounts)
+                //     .setDumpPeriod(2000)
+                //     .setNormalizeByBinVolume(false);
             }
         }
     } // namespace plugins::binning
