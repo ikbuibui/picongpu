@@ -63,7 +63,7 @@ namespace pmacc
              *
              * @param cellIdx index into the underlying RNG provider
              */
-            HDINLINE void init(const RNGSpace& cellIdx)
+            DINLINE void init(const RNGSpace& cellIdx)
             {
                 m_rngBox = m_rngBox.shift(cellIdx);
             }

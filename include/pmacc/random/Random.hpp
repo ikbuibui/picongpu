@@ -59,7 +59,7 @@ namespace pmacc
              * @param cellIdx index into the underlying RNG Provider
              */
             template<typename T_Offset>
-            HDINLINE void init(const T_Offset& cellIdx)
+            DINLINE void init(const T_Offset& cellIdx)
             {
                 RNGHandle::init(cellIdx);
             }
