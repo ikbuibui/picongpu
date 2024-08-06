@@ -30,11 +30,9 @@
 #include "pmacc/eventSystem/eventSystem.hpp"
 #include "pmacc/eventSystem/events/EventPool.hpp"
 #include "pmacc/eventSystem/queues/QueueController.hpp"
-#include "pmacc/eventSystem/tasks/Factory.hpp"
 #include "pmacc/mappings/simulation/Filesystem.hpp"
 #include "pmacc/mappings/simulation/GridController.hpp"
 #include "pmacc/mappings/simulation/SubGrid.hpp"
-#include "pmacc/particles/tasks/ParticleFactory.hpp"
 #include "pmacc/pluginSystem/PluginConnector.hpp"
 #include "pmacc/simulationControl/SimulationDescription.hpp"
 
@@ -70,23 +68,11 @@ namespace pmacc
              */
             HINLINE pmacc::EnvironmentController& EnvironmentController();
 
-            /** get the singleton Factory
-             *
-             * @return instance of Factory
-             */
-            HINLINE pmacc::Factory& Factory();
-
             /** get the singleton EventPool
              *
              * @return instance of EventPool
              */
             HINLINE pmacc::EventPool& EventPool();
-
-            /** get the singleton ParticleFactory
-             *
-             * @return instance of ParticleFactory
-             */
-            HINLINE pmacc::ParticleFactory& ParticleFactory();
 
             /** get the singleton DataConnector
              *

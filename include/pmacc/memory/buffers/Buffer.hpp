@@ -51,6 +51,7 @@ namespace pmacc
 
     public:
         using DataBoxType = DataBox<PitchedBox<T_Type, T_dim>>;
+        using ConstDataBoxType = DataBox<PitchedBox<T_Type const, T_dim>>;
 
         /** constructor
          *
@@ -71,7 +72,6 @@ namespace pmacc
 
         virtual ~Buffer()
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
         }
 
         /** get the capacity of the buffer
@@ -98,7 +98,6 @@ namespace pmacc
          */
         virtual size_t size()
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
             return alpaka::getPtrNative(this->currentSizeBufferHost)[0];
         }
 
@@ -108,7 +107,6 @@ namespace pmacc
          */
         virtual void setSize(size_t const newSize)
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
             PMACC_ASSERT(static_cast<size_t>(newSize) <= static_cast<size_t>(capacityND().productOfComponents()));
             alpaka::getPtrNative(this->currentSizeBufferHost)[0] = newSize;
         }
@@ -187,6 +185,8 @@ namespace pmacc
 
         /** get accessor to the container elements */
         virtual DataBox<PitchedBox<T_Type, T_dim>> getDataBox() = 0;
+
+        virtual DataBox<PitchedBox<T_Type const, T_dim>> getDataBox() const = 0;
 
         /** @return true if there are no paddings between rows of the data else false */
         inline bool isContiguous()

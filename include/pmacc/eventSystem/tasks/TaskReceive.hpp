@@ -29,14 +29,14 @@
 
 namespace pmacc
 {
-    template<class TYPE, unsigned DIM>
+    template<class TYPE, unsigned DIM, typename ACCESS>
     class Exchange;
 
-    template<class TYPE, unsigned DIM>
+    template<class TYPE, unsigned DIM, typename ACCESS>
     class TaskReceive : public MPITask
     {
     public:
-        TaskReceive(Exchange<TYPE, DIM>& ex) : exchange(&ex), state(Constructor)
+        TaskReceive(Exchange<TYPE, DIM, ACCESS>& ex) : exchange(&ex), state(Constructor)
         {
         }
 
@@ -175,7 +175,7 @@ namespace pmacc
         };
 
 
-        Exchange<TYPE, DIM>* exchange;
+        Exchange<TYPE, DIM, ACCESS>* exchange;
         state_t state;
         size_t newBufferSize;
         EventTask setSizeEvent;

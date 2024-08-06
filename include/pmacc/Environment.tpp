@@ -27,6 +27,7 @@
 #include "pmacc/alpakaHelper/acc.hpp"
 #include "pmacc/attribute/FunctionSpecifier.hpp"
 #include "pmacc/communication/manager_common.hpp"
+#include "pmacc/scheduling/Manager.hpp"
 #include "pmacc/types.hpp"
 
 #include <stdexcept>
@@ -65,27 +66,12 @@ namespace pmacc
         }
 
 
-        pmacc::Factory& Environment::Factory()
-        {
-            PMACC_ASSERT_MSG(
-                EnvironmentContext::getInstance().isMpiInitialized()
-                    && EnvironmentContext::getInstance().isDeviceSelected(),
-                "Environment< DIM >::initDevices() must be called before this method!");
-            return Factory::getInstance();
-        }
-
         pmacc::EventPool& Environment::EventPool()
         {
             PMACC_ASSERT_MSG(
                 EnvironmentContext::getInstance().isDeviceSelected(),
                 "Environment< DIM >::initDevices() must be called before this method!");
             return EventPool::getInstance();
-        }
-
-
-        pmacc::ParticleFactory& Environment::ParticleFactory()
-        {
-            return ParticleFactory::getInstance();
         }
 
 
@@ -170,6 +156,8 @@ namespace pmacc
 
         QueueController().activate();
 
+        scheduling::Manager::getRedGrapes();
+
         MemoryInfo();
 
         SimulationDescription();
@@ -240,6 +228,7 @@ namespace pmacc
 
         void EnvironmentContext::finalize()
         {
+            scheduling::Manager::getRedGrapes().barrier();
             if(m_isMpiInitialized)
             {
                 eventSystem::waitForAllTasks();
@@ -363,7 +352,7 @@ namespace pmacc
  * implementations.
  */
 #if !defined(PMACC_NO_TPP_INCLUDE)
-#    include "pmacc/eventSystem/tasks/Factory.tpp"
-#    include "pmacc/fields/tasks/FieldFactory.tpp"
-#    include "pmacc/particles/tasks/ParticleFactory.tpp"
+// #    include "pmacc/eventSystem/tasks/Factory.tpp"
+// #    include "pmacc/fields/tasks/FieldFactory.tpp"
+// #    include "pmacc/particles/tasks/ParticleFactory.tpp"
 #endif

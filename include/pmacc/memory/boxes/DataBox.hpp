@@ -38,12 +38,12 @@ namespace pmacc
 
         DataBox(DataBox const&) = default;
 
-        HDINLINE decltype(auto) operator()(DataSpace<Base::Dim> const& idx = {}) const
+        HDINLINE auto& operator()(DataSpace<Base::Dim> const& idx = {}) const
         {
             return Base::operator[](idx);
         }
 
-        HDINLINE decltype(auto) operator()(DataSpace<Base::Dim> const& idx = {})
+        HDINLINE auto& operator()(DataSpace<Base::Dim> const& idx = {})
         {
             return Base::operator[](idx);
         }

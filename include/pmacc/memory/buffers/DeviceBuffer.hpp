@@ -24,7 +24,6 @@
 
 #include "pmacc/assert.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
-#include "pmacc/eventSystem/tasks/Factory.hpp"
 #include "pmacc/memory/Array.hpp"
 #include "pmacc/memory/boxes/DataBox.hpp"
 #include "pmacc/memory/buffers/Buffer.hpp"
@@ -48,7 +47,7 @@ namespace pmacc
      * @tparam T_dim dimension of the buffer
      */
     template<class T_Type, unsigned T_dim>
-    class DeviceBuffer : public Buffer<T_Type, T_dim>
+    class DeviceBufferBase : public Buffer<T_Type, T_dim>
     {
         using BufferType = ::alpaka::Buf<ComputeDevice, T_Type, AlpakaDim<DIM1>, MemIdxType>;
         using ViewType = alpaka::ViewPlainPtr<ComputeDevice, T_Type, AlpakaDim<T_dim>, MemIdxType>;
@@ -102,7 +101,7 @@ namespace pmacc
          *
          * @attention offset + size must be less or equal to the size of the source buffer
          */
-        DeviceBuffer(MemSpace<T_dim> const& size, bool sizeOnDevice = false)
+        DeviceBufferBase(MemSpace<T_dim> const& size, bool sizeOnDevice = false)
             : Buffer<T_Type, T_dim>(size)
             , devBuffer(alpaka::allocBuf<T_Type, MemIdxType>(
                   manager::Device<ComputeDevice>::get().current(),
@@ -136,8 +135,8 @@ namespace pmacc
          *
          * @attention offset + size must be less or equal to the size of the source buffer
          */
-        DeviceBuffer(
-            DeviceBuffer<T_Type, T_dim>& source,
+        DeviceBufferBase(
+            DeviceBufferBase<T_Type, T_dim>& source,
             MemSpace<T_dim> size,
             MemSpace<T_dim> offset,
             bool sizeOnDevice = false)
@@ -159,7 +158,7 @@ namespace pmacc
             reset(true);
         }
 
-        ~DeviceBuffer() override
+        ~DeviceBufferBase() override
         {
             eventSystem::startOperation(ITask::TASK_DEVICE);
         }
@@ -293,6 +292,81 @@ namespace pmacc
         }
     };
 
+
+    /** N-dimensional device buffer
+     *
+     * @tparam T_Type datatype of the buffer
+     * @tparam T_dim dimension of the buffer
+     */
+    template<typename T_Type, uint32_t T_dim, typename T_Access = redGrapes::access::IOAccess>
+    struct DeviceBuffer
+    {
+        using DeviceBufferType = DeviceBufferBase<T_Type, T_dim>;
+
+        redGrapes::SharedResourceObject<DeviceBufferType, T_Access> deviceBufferResource;
+
+        template<typename... Args>
+        DeviceBuffer(Args&&... args) : deviceBufferResource(std::forward<Args>(args)...)
+        {
+        }
+
+        /** Copies the data from the given DeviceBuffer to this HostBuffer.
+         *
+         * @param other DeviceBuffer to copy data from
+         */
+        // void copyFrom(DeviceBuffer<T_Type, T_dim>& other)
+        // {
+        //     scheduling::Manager::getInstance()
+        //         .emplace_task([](auto srcBuf, auto thisBus) {}, srcBuf.read(), thisBuf.write())
+        //         .get();
+        //     copyTask(other, this);
+        //     Environment<>::get().Factory().createTaskCopy(other, *this);
+        // }
+
+        void setValue(const T_Type& value)
+        {
+            scheduling::Manager::getRedGrapes().emplace_task(
+                [value](auto hostBuf)
+                {
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    hostBuf->setValue(value);
+                    std::cout << "value set \n";
+                },
+                deviceBufferResource.res.make_access().write());
+        }
+
+        void reset(bool preserveData = true)
+        {
+            scheduling::Manager::getRedGrapes().emplace_task(
+                [preserveData](auto hostBuf)
+                {
+                    hostBuf->reset(preserveData);
+                    std::cout << "reset \n";
+                },
+                deviceBufferResource.write());
+        }
+
+        // T_Type* data() const
+        // {
+        //     eventSystem::startOperation(ITask::TASK_HOST);
+        //     PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
+        //     return alpaka::getPtrNative(*(this->obj->view));
+        // }
+
+        auto getDataBox(T_Access access) const noexcept
+        {
+            return AccessHelper::DataBox(deviceBufferResource, access);
+        }
+
+        // auto getDataBoxRead() const noexcept
+        // {
+        //     // return expression that has a const databox
+        //     //     and also a resource access.ResourceAccess will be used by lockstep kernel to add dependency
+        //     return AccessHelper::DataBox<HostBufferType const>(
+        //         hostBufferResource.obj,
+        //         hostBufferResource.res.make_access(redGrapes::access::IOAccess::read));
+        // }
+    };
     /** Factory for a new heap-allocated DeviceBuffer buffer object that is a deep copy of the given device
      * buffer
      *
@@ -311,5 +385,6 @@ namespace pmacc
         eventSystem::getTransactionEvent().waitForFinished();
         return result;
     }
+
 
 } // namespace pmacc

@@ -27,14 +27,14 @@
 
 namespace pmacc
 {
-    template<class TYPE, unsigned DIM>
+    template<class TYPE, unsigned DIM, typename ACCESS>
     class Exchange;
 
-    template<class TYPE, unsigned DIM>
+    template<class TYPE, unsigned DIM, typename ACCESS>
     class TaskSend : public MPITask
     {
     public:
-        TaskSend(Exchange<TYPE, DIM>& ex) : exchange(&ex), state(Constructor)
+        TaskSend(Exchange<TYPE, DIM, ACCESS>& ex) : exchange(&ex), state(Constructor)
         {
         }
 
@@ -137,7 +137,7 @@ namespace pmacc
             Finish
         };
 
-        Exchange<TYPE, DIM>* exchange;
+        Exchange<TYPE, DIM, ACCESS>* exchange;
         state_t state;
     };
 

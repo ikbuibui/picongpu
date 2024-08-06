@@ -20,29 +20,24 @@
 
 #include <pmacc/Environment.hpp>
 #include <pmacc/dimensions/DataSpace.hpp>
-#include <pmacc/lockstep.hpp>
-#include <pmacc/mappings/kernel/AreaMapping.hpp>
-#include <pmacc/mappings/kernel/MappingDescription.hpp>
-#include <pmacc/math/Vector.hpp>
 #include <pmacc/memory/buffers/HostBuffer.hpp>
+#include <pmacc/scheduling/Manager.hpp>
 
-#include <fstream>
 #include <iostream>
 #include <memory>
+#include <thread>
 
-#define NUM_STEPS 1000
+#include <redGrapes/redGrapes.hpp>
+#include <redGrapes/resource/ioresource.hpp>
+
 #define NUM_DEVICES_PER_DIM 1
-#define THERMAL_DIFFUSIVITY 4 // POSITIVE FACTOR
-#define DX 4 // GRID SPACING
-#define DT 1 // TIME STEP - STABLE IF DT < (DX * DX) / (4 * THERMAL_DIFFUSIVITY)
-
 
 auto main(int argc, char** argv) -> int
 {
     const auto devices = pmacc::DataSpace<DIM2>::create(NUM_DEVICES_PER_DIM);
     const auto periodic = pmacc::DataSpace<DIM2>::create(1);
     pmacc::Environment<DIM2>::get().initDevices(devices, periodic);
-    std::cout << devices;
+
     /** define a gloabl grid */
     const pmacc::DataSpace<DIM2> gridSize{256u, 256u};
 
@@ -55,6 +50,30 @@ auto main(int argc, char** argv) -> int
 
     // /** define host buffers, two because we dont do in place writes */
     auto buff1 = std::make_unique<pmacc::HostBuffer<float, DIM2>>(pmacc::DataSpace<DIM2>::create(1));
+
+    auto res = redGrapes::IOResource<double>(6.);
+
+    pmacc::scheduling::Manager::getRedGrapes().emplace_task(
+        [](auto res) { std::cout << "value " << *res << "\n"; },
+        res.read());
+
+
+    pmacc::scheduling::Manager::getRedGrapes().emplace_task(
+        [](auto res)
+        {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            *res = 7;
+            std::cout << "value set \n";
+        },
+        res.write());
+
+    pmacc::scheduling::Manager::getRedGrapes().emplace_task(
+        [](auto res) { std::cout << "value " << *res << "\n"; },
+        res.write());
+
+
+    buff1->setValue(2.f);
+    buff1->reset(true);
 
     pmacc::Environment<DIM2>::get().finalize();
 

@@ -93,6 +93,9 @@ namespace pmacc::exec::detail
             PMACC_CHECK_KERNEL_MSG(alpaka::wait(manager::Device<ComputeDevice>::get().current());
                                    , std::string("Crash before kernel call ") + kernelInfo);
 
+            // parse here. call emplace task using the expression template to find
+            // Put the databox conversion here and change the
+            // make kernel launcher a friend and then use a private method to do that conversion to databox
             pmacc::TaskKernel* taskKernel = pmacc::Environment<>::get().Factory().createTaskKernel(kernelName);
 
             auto gridExtent = m_gridExtent.toAlpakaKernelVec();
@@ -100,6 +103,8 @@ namespace pmacc::exec::detail
             auto elemExtent = math::Vector<IdxType, T_dim>::create(1).toAlpakaKernelVec();
             auto workDiv
                 = ::alpaka::WorkDivMembers<::alpaka::DimInt<T_dim>, IdxType>(gridExtent, blockExtent, elemExtent);
+
+            // if T_Args is a dataBoxType type then derefernce and then pass
 
             auto const kernelTask
                 = ::alpaka::createTaskKernel<Acc<T_dim>>(workDiv, m_kernel, std::forward<T_Args>(args)...);

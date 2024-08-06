@@ -26,11 +26,15 @@
 #include "pmacc/alpakaHelper/acc.hpp"
 #include "pmacc/assert.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
-#include "pmacc/eventSystem/eventSystem.hpp"
-#include "pmacc/eventSystem/tasks/Factory.hpp"
+#include "pmacc/exec/KernelLauncher.hpp"
 #include "pmacc/memory/Array.hpp"
 #include "pmacc/memory/boxes/DataBoxDim1Access.hpp"
 #include "pmacc/memory/buffers/Buffer.hpp"
+#include "pmacc/scheduling/Manager.hpp"
+#include "redGrapes/resource/ioresource.hpp"
+
+#include <cstdint>
+#include <memory>
 
 namespace pmacc
 {
@@ -48,13 +52,15 @@ namespace pmacc
      * @tparam T_dim dimension of the buffer
      */
     template<typename T_Type, uint32_t T_dim>
-    class HostBuffer : public Buffer<T_Type, T_dim>
+    class HostBufferBase : public Buffer<T_Type, T_dim>
     {
         using BufferType = ::alpaka::Buf<HostDevice, T_Type, AlpakaDim<DIM1>, MemIdxType>;
         using ViewType = alpaka::ViewPlainPtr<HostDevice, T_Type, AlpakaDim<T_dim>, MemIdxType>;
 
     public:
         using DataBoxType = typename Buffer<T_Type, T_dim>::DataBoxType;
+        using ConstDataBoxType = typename Buffer<T_Type, T_dim>::ConstDataBoxType;
+
         std::optional<BufferType> hostBuffer;
         std::optional<ViewType> view;
 
@@ -63,7 +69,6 @@ namespace pmacc
         BufferType1D as1DBuffer()
         {
             auto numElements = this->size();
-            eventSystem::startOperation(ITask::TASK_HOST);
             return BufferType1D(
                 alpaka::getPtrNative(*view),
                 alpaka::getDev(*hostBuffer),
@@ -72,7 +77,6 @@ namespace pmacc
 
         ViewType getAlpakaView() const
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
             return *view;
         }
 
@@ -80,7 +84,7 @@ namespace pmacc
          *
          * @param size extent for each dimension (in elements)
          */
-        HostBuffer(MemSpace<T_dim> size)
+        HostBufferBase(MemSpace<T_dim> size)
             : Buffer<T_Type, T_dim>(size)
             , hostBuffer(alpaka::allocMappedBufIfSupported<T_Type, MemIdxType>(
                   manager::Device<HostDevice>::get().current(),
@@ -107,7 +111,7 @@ namespace pmacc
          *
          * @attention offset + size must be less or equal to the size of the source buffer
          */
-        HostBuffer(HostBuffer& source, MemSpace<T_dim> size, MemSpace<T_dim> offset = MemSpace<T_dim>())
+        HostBufferBase(HostBufferBase& source, MemSpace<T_dim> size, MemSpace<T_dim> offset = MemSpace<T_dim>())
             : Buffer<T_Type, T_dim>(size)
             , hostBuffer(source->hostBuffer)
         {
@@ -120,30 +124,18 @@ namespace pmacc
             reset(true);
         }
 
-        ~HostBuffer() override
+        ~HostBufferBase() override
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
-        }
-
-        /** Copies the data from the given DeviceBuffer to this HostBuffer.
-         *
-         * @param other DeviceBuffer to copy data from
-         */
-        void copyFrom(DeviceBuffer<T_Type, T_dim>& other)
-        {
-            Environment<>::get().Factory().createTaskCopy(other, *this);
         }
 
         T_Type* data() override
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
             PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
             return alpaka::getPtrNative(*view);
         }
 
         void reset(bool preserveData = true) override
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
             this->setSize(this->capacityND().productOfComponents());
             if(!preserveData)
             {
@@ -173,7 +165,7 @@ namespace pmacc
             auto current_size = static_cast<int64_t>(this->size());
             using D1Box = DataBoxDim1Access<DataBoxType>;
             D1Box d1Box(memBox, this->capacityND());
-#pragma omp parallel for
+            // #pragma omp parallel for
             for(int64_t i = 0; i < current_size; i++)
             {
                 d1Box[i] = value;
@@ -182,10 +174,16 @@ namespace pmacc
 
         DataBoxType getDataBox() override
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
             auto pitchBytes = MemSpace<T_dim>(getPitchesInBytes(*view));
             return DataBoxType(PitchedBox<T_Type, T_dim>(alpaka::getPtrNative(*view), pitchBytes));
         }
+
+        ConstDataBoxType getDataBox() const override
+        {
+            auto pitchBytes = MemSpace<T_dim>(getPitchesInBytes(*view));
+            return ConstDataBoxType(PitchedBox<const T_Type, T_dim>(alpaka::getPtrNative(*view), pitchBytes));
+        }
+
 
         typename Buffer<T_Type, T_dim>::CPtr getCPtrCurrentSize() final
         {
@@ -199,9 +197,144 @@ namespace pmacc
         {
             PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
             size_t const size = this->capacityND().productOfComponents();
-            eventSystem::startOperation(ITask::TASK_HOST);
             return {alpaka::getPtrNative(*view), size};
         }
     };
+
+    template<typename T_Type, uint32_t T_dim>
+    struct HostBuffer;
+
+    namespace AccessHelper
+    {
+        // template<typename T_Type, uint32_t T_dim>
+        // struct DataBox : redGrapes::ResourceAccessPair<HostBuffer<T_Type, T_dim>>
+        // {
+        //     template<typename T_Kernel, uint32_t T_dim_>
+        //     friend class pmacc::exec::detail::KernelLauncher;
+
+
+        //     DataBox(HostBuffer<T_Type, T_dim> hb, redGrapes::access::IOAccess access)
+        //         : redGrapes::ResourceAccessPair<HostBuffer<T_Type, T_dim>>(hb.obj, hb.res.make_access(access))
+        //     {
+        //     }
+        //     auto operator*() const
+        //     {
+        //         return this->first->getDataBox();
+        //     }
+        // };
+
+
+        template<typename T_HostBufferBase>
+        struct DataBox
+        {
+            template<typename T_Kernel, uint32_t T_dim_>
+            friend class pmacc::exec::detail::KernelLauncher;
+
+
+            DataBox(std::shared_ptr<T_HostBufferBase> hbb) : hbb{hbb}
+            {
+            }
+
+            auto operator*() const
+            {
+                return hbb->getDataBox();
+            }
+
+        private:
+            std::shared_ptr<T_HostBufferBase> hbb;
+        };
+
+
+        template<typename T_HostBuffer>
+        struct Data : redGrapes::ResourceAccessPair<T_HostBuffer>
+        {
+            template<typename T_Kernel, uint32_t T_dim>
+            friend class pmacc::exec::detail::KernelLauncher;
+
+            using redGrapes::ResourceAccessPair<T_HostBuffer>::ResourceAccessPair;
+
+            auto* operator*() const
+            {
+                return this->first->data();
+            }
+        };
+
+    } // namespace AccessHelper
+
+    /** N-dimensional host buffer
+     *
+     * @tparam T_Type datatype for buffer data
+     * @tparam T_dim dimension of the buffer
+     */
+    template<typename T_Type, uint32_t T_dim>
+    struct HostBuffer
+    {
+        using HostBufferType = HostBufferBase<T_Type, T_dim>;
+
+        redGrapes::IOResource<HostBufferType> hostBufferResource;
+
+        template<typename... Args>
+        HostBuffer(Args&&... args) : hostBufferResource(std::forward<Args>(args)...)
+        {
+        }
+
+        /** Copies the data from the given DeviceBuffer to this HostBuffer.
+         *
+         * @param other DeviceBuffer to copy data from
+         */
+        // void copyFrom(DeviceBuffer<T_Type, T_dim>& other)
+        // {
+        //     scheduling::Manager::getInstance()
+        //         .emplace_task([](auto srcBuf, auto thisBus) {}, srcBuf.read(), thisBuf.write())
+        //         .get();
+        //     copyTask(other, this);
+        //     Environment<>::get().Factory().createTaskCopy(other, *this);
+        // }
+
+        void setValue(const T_Type& value)
+        {
+            scheduling::Manager::getRedGrapes().emplace_task(
+                [value](auto hostBuf)
+                {
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    hostBuf->setValue(value);
+                    std::cout << "value set \n";
+                },
+                hostBufferResource.write());
+        }
+
+        void reset(bool preserveData = true)
+        {
+            scheduling::Manager::getRedGrapes().emplace_task(
+                [preserveData](auto hostBuf)
+                {
+                    hostBuf->reset(preserveData);
+                    std::cout << "reset \n";
+                },
+                hostBufferResource.write());
+        }
+
+        // T_Type* data() const
+        // {
+        //     eventSystem::startOperation(ITask::TASK_HOST);
+        //     PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
+        //     return alpaka::getPtrNative(*(this->obj->view));
+        // }
+
+        auto getDataBox(redGrapes::access::IOAccess access) const noexcept
+        {
+            return AccessHelper::DataBox(hostBufferResource, access);
+        }
+
+        // auto getDataBoxRead() const noexcept
+        // {
+        //     // return expression that has a const databox
+        //     //     and also a resource access.ResourceAccess will be used by lockstep kernel to add dependency
+        //     return AccessHelper::DataBox<HostBufferType const>(
+        //         hostBufferResource.obj,
+        //         hostBufferResource.res.make_access(redGrapes::access::IOAccess::read));
+        // }
+    };
+
 
 } // namespace pmacc
