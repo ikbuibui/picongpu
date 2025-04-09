@@ -18,16 +18,18 @@
  * and the GNU Lesser General Public License along with PMacc.
  * If not, see <http://www.gnu.org/licenses/>.
  */
-
 #include "catch2/matchers/catch_matchers.hpp"
 #include "catch2/matchers/catch_matchers_range_equals.hpp"
 #include "picongpu/plugins/binning/BinningData.hpp"
 #include "picongpu/plugins/binning/DomainInfo.hpp"
+#include "picongpu/plugins/binning/FilteredSpecies.hpp"
 #include "picongpu/plugins/binning/FunctorDescription.hpp"
 #include "picongpu/plugins/binning/axis/Axis.hpp"
 #include "picongpu/plugins/binning/axis/LinearAxis.hpp"
+#include "picongpu/plugins/binning/binners/FieldBinner.hpp"
 #include "picongpu/plugins/binning/binners/ParticleBinner.hpp"
 #include "pmacc/mappings/kernel/MappingDescription.hpp"
+#include "pmacc/meta/String.hpp"
 
 #include <pmacc/test/PMaccFixture.hpp>
 
@@ -47,10 +49,7 @@ constexpr auto simDim = 3;
 using TestFixture = pmacc::test::PMaccFixture<simDim>;
 static TestFixture fixture;
 
-// static_assert(false, "sadfasd");
 using namespace picongpu::plugins::binning;
-
-
 using SuperCellSize = typename picongpu::mCT::shrinkTo<picongpu::mCT::Int<8, 8, 4>, simDim>::type;
 
 auto getAxisTuple()
@@ -73,8 +72,45 @@ auto getAxisTuple()
     return std::make_tuple(ax_y);
 }
 
-auto depData = createFunctorDescription<double>([]() -> double { return 0.; }, "test");
-auto bd = ParticleBinningData("binnerOutputName", getAxisTuple(), std::tuple<>{}, depData, std::tuple<>{});
+auto getAxisTupleField()
+{
+    auto getPositionY = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo) -> int { return 1; };
 
-auto cellDescription = pmacc::MappingDescription<simDim, SuperCellSize>(pmacc::DataSpace<simDim>(8, 8, 4));
-auto binner = ParticleBinner(bd, &cellDescription);
+    // Create Functor Description
+    auto cellPositionYDescription = createFunctorDescription<int>(getPositionY, "position_axisY");
+
+    // Create Axis Splitting
+    auto rangeY = axis::Range{0, 1};
+    auto cellY_splitting = axis::AxisSplitting(rangeY, 1);
+
+    // Create Axis
+    auto ax_y = axis::createLinear(cellY_splitting, cellPositionYDescription);
+    return std::make_tuple(ax_y);
+}
+
+TEST_CASE("Binner")
+{
+    SECTION("TRIVIAL Particle")
+    {
+        auto depData = createFunctorDescription<double>([]() -> double { return 0.; }, "test");
+        auto bd = ParticleBinningData("binnerOutputName", getAxisTuple(), std::tuple<>{}, depData, std::tuple<>{});
+
+        auto cellDescription = pmacc::MappingDescription<simDim, SuperCellSize>(pmacc::DataSpace<simDim>(8, 8, 4));
+        auto binner = ParticleBinner(bd, &cellDescription);
+
+        binner.notify(42);
+    }
+
+    SECTION("TRIVIAL field")
+    {
+        auto depData = createFunctorDescription<double>(
+            [](auto const worker, auto const& domainInfo) -> double { return 0.; },
+            "test");
+        auto bd = FieldBinningData("binnerOutputName", getAxisTupleField(), std::tuple<>{}, depData, std::tuple<>{});
+
+        auto cellDescription = pmacc::MappingDescription<simDim, SuperCellSize>(pmacc::DataSpace<simDim>(8, 8, 4));
+        auto binner = FieldBinner(bd, &cellDescription);
+
+        binner.notify(42);
+    }
+}
