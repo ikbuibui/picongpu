@@ -41,24 +41,26 @@
 // static_assert(false, "sadfasd");
 using namespace picongpu::plugins::binning;
 
-
-auto getPositionY = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> int
+auto getAxisTuple()
 {
-    auto posBin = getParticlePosition<DomainOrigin::TOTAL>(domainInfo, particle);
-    return posBin[1];
-};
+    auto getPositionY = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> int
+    {
+        auto posBin = getParticlePosition<DomainOrigin::TOTAL>(domainInfo, particle);
+        return posBin[1];
+    };
 
-// Create Functor Description
-auto cellPositionYDescription = createFunctorDescription<int>(getPositionY, "position_axisY");
+    // Create Functor Description
+    auto cellPositionYDescription = createFunctorDescription<int>(getPositionY, "position_axisY");
 
-// Create Axis Splitting
-auto rangeY = axis::Range{0, 1};
-auto cellY_splitting = axis::AxisSplitting(rangeY, 1);
+    // Create Axis Splitting
+    auto rangeY = axis::Range{0, 1};
+    auto cellY_splitting = axis::AxisSplitting(rangeY, 1);
 
-// Create Axis
-auto ax_y = axis::createLinear(cellY_splitting, cellPositionYDescription);
-
+    // Create Axis
+    auto ax_y = axis::createLinear(cellY_splitting, cellPositionYDescription);
+    return std::make_tuple(ax_y);
+}
 
 auto depData = createFunctorDescription<double>([]() -> double {}, "test");
-auto bd = ParticleBinningData("binnerOutputName", std::make_tuple(ax_y), std::tuple<>{}, depData, std::tuple<>{});
+auto bd = ParticleBinningData("binnerOutputName", getAxisTuple(), std::tuple<>{}, depData, std::tuple<>{});
 // auto binner = make_unique<ParticleBinner>(bd, cellDescription);
