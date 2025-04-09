@@ -113,8 +113,8 @@ namespace picongpu
                 if(author.length() > 0)
                     series.setAuthor(author);
 
-                std::string date = helper::getDateString("%F %T %z");
-                series.setDate(date);
+                // std::string date = helper::getDateString("%F %T %z");
+                // series.setDate(date);
                 /* end recommended openPMD global attributes */
 
                 ::openPMD::Iteration iteration = series.writeIterations()[currentStep];
