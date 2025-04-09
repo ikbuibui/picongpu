@@ -93,6 +93,61 @@ endif()
 
 include_directories(BEFORE "${CMAKE_CURRENT_SOURCE_DIR}/../../../include")
 
+
+################################################################################
+# OpenPMD
+################################################################################
+
+# find openPMD installation
+find_package(openPMD 0.15 CONFIG COMPONENTS MPI)
+if(openPMD_FOUND)
+    # HDF5 and ADIOS require linking against C libraries but this is not correctly
+    # exposed.
+    list(PREPEND HOST_LIBS MPI::MPI_C)
+
+    if(openPMD_HAVE_ADIOS2 OR openPMD_HAVE_HDF5)
+        message(STATUS "Found openPMD: ${openPMD_DIR}")
+        add_definitions(-DENABLE_OPENPMD=1)
+        # TOML
+        set(
+            PIC_toml11_PROVIDER "intern" CACHE
+            STRING "Use internally shipped or external toml11 library.")
+        set_property(
+            CACHE PIC_toml11_PROVIDER
+            PROPERTY STRINGS "intern;extern")
+        mark_as_advanced(PIC_toml11_PROVIDER)
+        if(${PIC_toml11_PROVIDER} STREQUAL "intern")
+            add_subdirectory(
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../thirdParty/toml11"
+                "${CMAKE_CURRENT_BINARY_DIR}/build_toml11"
+                # EXCLUDE_FROM_ALL ensures that toml11 is not part of
+                # make install.
+                # The library is header-only and linking it against
+                # PIConGPU targets is sufficient.
+                # It needs not be part of any build or install targets
+                # explicitly.
+                EXCLUDE_FROM_ALL)
+        else()
+            # Since toml11 4.0 was a breaking change,
+            # it needs separate find_package() calls
+            find_package(toml11 3.7.0 CONFIG QUIET)
+            if(NOT toml11_FOUND)
+                find_package(toml11 4.0 CONFIG REQUIRED)
+            endif()
+            message(STATUS "toml11: Found version '${toml11_VERSION}'")
+        endif()
+        list(PREPEND HOST_LIBS openPMD::openPMD)
+    else()
+        message(STATUS "Found openPMD at ${openPMD_DIR}, but PIConGPU requires"
+                        " availability of either its ADIOS2 or HDF5 backend - "
+                        "NOT BUILDING the openPMD plugin")
+        PIC_dependency_set_status(openPMD FALSE)
+    endif()
+    OPTION(ENABLE_OPENPMD ON)
+else(openPMD_FOUND)
+    message(STATUS "Could NOT find openPMD - set openPMD_DIR or check your CMAKE_PREFIX_PATH")
+endif(openPMD_FOUND)
+
 ###############################################################################
 # Targets
 ###############################################################################

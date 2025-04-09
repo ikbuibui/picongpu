@@ -15,5 +15,7 @@ foreach(testCaseFilepath ${NON_DIMENSIONAL_TESTS})
         SYSTEM PRIVATE
         $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>)
     target_link_libraries(${testExe} PRIVATE nlohmann_json::nlohmann_json)
+    target_link_libraries(${testExe} PRIVATE openPMD::openPMD)
+    target_compile_definitions(${testExe} PUBLIC ENABLE_OPENPMD=1)
     add_test(NAME "${testCase}" COMMAND mpiexec ${MPI_RUNTIME_FLAGS} -n 1 ./${testExe})
 endforeach()
