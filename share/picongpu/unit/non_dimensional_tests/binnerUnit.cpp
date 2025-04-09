@@ -27,6 +27,9 @@
 #include "picongpu/plugins/binning/axis/Axis.hpp"
 #include "picongpu/plugins/binning/axis/LinearAxis.hpp"
 #include "picongpu/plugins/binning/binners/ParticleBinner.hpp"
+#include "pmacc/mappings/kernel/MappingDescription.hpp"
+
+#include <pmacc/test/PMaccFixture.hpp>
 
 #include <algorithm>
 #include <type_traits>
@@ -38,8 +41,17 @@
 #include <catch2/matchers/catch_matchers_all.hpp>
 
 
+constexpr auto simDim = 3;
+
+//! Helper to setup the PMacc environment
+using TestFixture = pmacc::test::PMaccFixture<simDim>;
+static TestFixture fixture;
+
 // static_assert(false, "sadfasd");
 using namespace picongpu::plugins::binning;
+
+
+using SuperCellSize = typename picongpu::mCT::shrinkTo<picongpu::mCT::Int<8, 8, 4>, simDim>::type;
 
 auto getAxisTuple()
 {
@@ -61,6 +73,8 @@ auto getAxisTuple()
     return std::make_tuple(ax_y);
 }
 
-auto depData = createFunctorDescription<double>([]() -> double {}, "test");
+auto depData = createFunctorDescription<double>([]() -> double { return 0.; }, "test");
 auto bd = ParticleBinningData("binnerOutputName", getAxisTuple(), std::tuple<>{}, depData, std::tuple<>{});
-// auto binner = make_unique<ParticleBinner>(bd, cellDescription);
+
+auto cellDescription = pmacc::MappingDescription<simDim, SuperCellSize>(pmacc::DataSpace<simDim>(8, 8, 4));
+auto binner = ParticleBinner(bd, &cellDescription);
