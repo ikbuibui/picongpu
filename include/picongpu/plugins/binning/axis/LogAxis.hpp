@@ -22,8 +22,6 @@
 #include "picongpu/plugins/binning/UnitConversion.hpp"
 #include "picongpu/plugins/binning/axis/Axis.hpp"
 
-#include <pmacc/memory/buffers/HostDeviceBuffer.hpp>
-
 #include <array>
 #include <cstdint>
 #include <string>
