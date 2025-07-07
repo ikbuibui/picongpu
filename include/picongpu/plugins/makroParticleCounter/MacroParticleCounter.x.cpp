@@ -17,6 +17,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
+
 #if (ENABLE_OPENPMD == 1)
 #    include "picongpu/defines.hpp"
 #    include "picongpu/particles/filter/filter.hpp"
@@ -124,7 +125,7 @@ namespace picongpu
      *
      */
     template<typename T_Species>
-    class PerSuperCell : public plugins::multi::IInstance
+    class MacroParticleCounter : public plugins::multi::IInstance
     {
     public:
         using Species = T_Species;
@@ -141,7 +142,7 @@ namespace picongpu
                 size_t const id,
                 MappingDesc* cellDescription) override
             {
-                return std::make_shared<PerSuperCell<Species>>(help, id, cellDescription);
+                return std::make_shared<MacroParticleCounter<Species>>(help, id, cellDescription);
             }
 
             // find all valid filter for the current used species
@@ -266,7 +267,10 @@ namespace picongpu
             return std::shared_ptr<plugins::multi::IHelp>(new Help{});
         }
 
-        PerSuperCell(std::shared_ptr<plugins::multi::IHelp>& help, size_t const id, MappingDesc* cellDescription)
+        MacroParticleCounter(
+            std::shared_ptr<plugins::multi::IHelp>& help,
+            size_t const id,
+            MappingDesc* cellDescription)
             : m_cellDescription(cellDescription)
             , m_help(std::static_pointer_cast<Help>(help))
             , m_id(id)
@@ -286,7 +290,7 @@ namespace picongpu
             pmacc::Filesystem::get().createDirectoryWithPermissions(foldername);
         }
 
-        virtual ~PerSuperCell()
+        virtual ~MacroParticleCounter()
         {
             m_Series.reset();
         }
@@ -411,7 +415,7 @@ namespace picongpu
                 {
                     infix = "";
                 }
-                std::string filename = foldername + std::string("/makroParticlePerSupercell") + infix
+                std::string filename = foldername + std::string("/macroParticlePerSupercell") + infix
                                        + std::string(".") + m_help->file_name_extension.get(m_id);
                 log<picLog::INPUT_OUTPUT>("openPMD open Series at: %1%") % filename;
 
@@ -422,5 +426,5 @@ namespace picongpu
 
 } // namespace picongpu
 
-PIC_REGISTER_SPECIES_PLUGIN(picongpu::plugins::multi::Master<picongpu::PerSuperCell<boost::mpl::_1>>);
+PIC_REGISTER_SPECIES_PLUGIN(picongpu::plugins::multi::Master<picongpu::MacroParticleCounter<boost::mpl::_1>>);
 #endif
