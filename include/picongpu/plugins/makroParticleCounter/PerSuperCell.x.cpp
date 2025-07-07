@@ -1,4 +1,4 @@
-/* Copyright 2014-2024 Rene Widera, Richard Pausch
+/* Copyright 2013-2024 Axel Huebl, Heiko Burau, Rene Widera, Tapish Narwal
  *
  * This file is part of PIConGPU.
  *
@@ -18,41 +18,52 @@
  */
 
 #if (ENABLE_OPENPMD == 1)
-
 #    include "picongpu/defines.hpp"
 #    include "picongpu/particles/filter/filter.hpp"
-#    include "picongpu/plugins/ILightweightPlugin.hpp"
+#    include "picongpu/particles/traits/SpeciesEligibleForSolver.hpp"
+#    include "picongpu/plugins/PhaseSpace/AxisDescription.hpp"
+#    include "picongpu/plugins/PhaseSpace/DumpHBufferOpenPMD.hpp"
+#    include "picongpu/plugins/PhaseSpace/Pair.hpp"
+#    include "picongpu/plugins/PhaseSpace/PhaseSpaceFunctors.hpp"
 #    include "picongpu/plugins/PluginRegistry.hpp"
 #    include "picongpu/plugins/common/openPMDAttributes.hpp"
 #    include "picongpu/plugins/common/openPMDDefaultExtension.hpp"
 #    include "picongpu/plugins/common/openPMDWriteMeta.hpp"
+#    include "picongpu/plugins/misc/misc.hpp"
+#    include "picongpu/plugins/multi/multi.hpp"
+#    include "picongpu/traits/frame/GetMass.hpp"
 
-#    include <pmacc/dataManagement/DataConnector.hpp>
-#    include <pmacc/mappings/kernel/AreaMapping.hpp>
+#    include <pmacc/communication/manager_common.hpp>
+#    include <pmacc/lockstep/lockstep.hpp>
 #    include <pmacc/mappings/simulation/Filesystem.hpp>
+#    include <pmacc/math/Vector.hpp>
 #    include <pmacc/memory/buffers/GridBuffer.hpp>
-#    include <pmacc/memory/shared/Allocate.hpp>
 #    include <pmacc/mpi/MPIReduce.hpp>
 #    include <pmacc/mpi/reduceMethods/Reduce.hpp>
-#    include <pmacc/particles/algorithm/ForEach.hpp>
+#    include <pmacc/pluginSystem/INotify.hpp>
+#    include <pmacc/traits/HasFlag.hpp>
+#    include <pmacc/traits/HasIdentifiers.hpp>
 
-#    include <fstream>
-#    include <iomanip>
-#    include <iostream>
 #    include <memory>
 #    include <string>
+#    include <utility>
 
-#    include <openPMD/openPMD.hpp>
+#    include <mpi.h>
 
 namespace picongpu
 {
     using namespace pmacc;
 
     //! Count macro particles per superCell
-    struct CountMakroParticle
+    struct KernelCountMacroParticles
     {
         template<typename ParBox, typename CounterBox, typename Mapping, typename T_Worker>
-        DINLINE void operator()(T_Worker const& worker, ParBox parBox, CounterBox counterBox, Mapping mapper) const
+        DINLINE void operator()(
+            T_Worker const& worker,
+            ParBox parBox,
+            CounterBox counterBox,
+            Mapping mapper,
+            auto filter) const
         {
             DataSpace<simDim> const superCellIdx(mapper.getSuperCellIndex(worker.blockDomIdxND()));
             /* counterBox has no guarding supercells*/
@@ -65,16 +76,25 @@ namespace picongpu
             masterOnly([&]() { counterValue = 0; });
             worker.sync();
 
+            auto accFilter = filter(worker, superCellIdxNoGuard);
+
             auto forEachParticle = pmacc::particles::algorithm::acc::makeForEach(worker, parBox, superCellIdx);
 
+            // end kernel if we have no particles
+            if(!forEachParticle.hasParticles())
+                return;
+
             forEachParticle(
-                [&counterValue](auto const& lockstepWorker, auto& /*particle*/)
+                [&accFilter, &counterValue](auto const& lockstepWorker, auto& particle)
                 {
-                    alpaka::atomicAdd(
-                        lockstepWorker.getAcc(),
-                        &counterValue,
-                        static_cast<uint64_cu>(1LU),
-                        ::alpaka::hierarchy::Threads{});
+                    if(accFilter(lockstepWorker, particle))
+                    {
+                        alpaka::atomicAdd(
+                            lockstepWorker.getAcc(),
+                            &counterValue,
+                            static_cast<uint64_cu>(1LU),
+                            ::alpaka::hierarchy::Threads{});
+                    }
                 });
 
             worker.sync();
@@ -84,135 +104,238 @@ namespace picongpu
                 {
                     PMACC_DEVICE_ASSERT_MSG(
                         counterValue == forEachParticle.numParticles(),
-                        "[makroParticlesCounter] Number of particles counted and given by the iteration algorithm "
+                        "[macroParticlesCounter] Number of particles counted and given by the iteration algorithm "
                         "differ.");
                     counterBox(superCellIdxNoGuard) = counterValue;
                 });
         }
     };
 
-    /** Count makro particle of a species and write down the result to a global HDF5 file.
+    namespace po = boost::program_options;
+
+    /** Count macro particle of a species and write down the result to a global HDF5 file.
      *
-     * - count the total number of makro particle per supercell
+     * - count the total number of macro particles per supercell
      * - store one number (size_t) per supercell in a mesh
      * - Output: - create a folder with the name of the plugin
      *           - per time step one file with the name "result_[currentStep].h5" is created
      *             (or a different extension in case of another openPMD backend)
-     * - HDF5 Format: - default openPMD output for meshes
-     *                - the attribute name in the HDF5 file is "makroParticleCount"
+     *           - the attribute name in the openPMD file is "makroParticlePerSupercell"
      *
      */
-    template<class ParticlesType>
-    class PerSuperCell : public ILightweightPlugin
+    template<typename T_Species>
+    class PerSuperCell : public plugins::multi::IInstance
     {
+    public:
+        using Species = T_Species;
+
+        struct Help : public plugins::multi::IHelp
+        {
+            /** creates an instance
+             *
+             * @param help plugin defined help
+             * @param id index of the plugin, range: [0;help->getNumPlugins())
+             */
+            std::shared_ptr<IInstance> create(
+                std::shared_ptr<IHelp>& help,
+                size_t const id,
+                MappingDesc* cellDescription) override
+            {
+                return std::make_shared<PerSuperCell<Species>>(help, id, cellDescription);
+            }
+
+            // find all valid filter for the current used species
+            template<typename T>
+            using Op = typename particles::traits::GenerateSolversIfSpeciesEligible<T, Species>::type;
+            using EligibleFilters = pmacc::mp_flatten<pmacc::mp_transform<Op, particles::filter::AllParticleFilters>>;
+
+            //! periodicity of computing the particle energy
+            plugins::multi::Option<std::string> notifyPeriod = {"period", "notify period"};
+            plugins::multi::Option<std::string> filter = {"filter", "particle filter: "};
+
+            plugins::multi::Option<std::string> file_name_extension
+                = {"ext",
+                   "openPMD filename extension (this controls the"
+                   "backend picked by the openPMD API)",
+                   openPMD::getDefaultExtension().c_str()};
+
+            plugins::multi::Option<std::string> file_name_infix
+                = {"infix",
+                   "openPMD filename infix (default: '_%06T' for file-based iteration layout, pick 'NULL' for "
+                   "group-based layout",
+                   std::string("_%06T").c_str()};
+
+            plugins::multi::Option<std::string> json_config
+                = {"json", "advanced (backend) configuration for openPMD in JSON format", "{}"};
+
+            //! string list with all possible particle filters
+            std::string concatenatedFilterNames;
+            std::vector<std::string> allowedFilters;
+
+            ///! method used by plugin controller to get --help description
+            void registerHelp(
+                boost::program_options::options_description& desc,
+                std::string const& masterPrefix = std::string{}) override
+            {
+                meta::ForEach<EligibleFilters, plugins::misc::AppendName<boost::mpl::_1>> getEligibleFilterNames;
+                getEligibleFilterNames(allowedFilters);
+
+                concatenatedFilterNames = plugins::misc::concatenateToString(allowedFilters, ", ");
+
+                notifyPeriod.registerHelp(desc, masterPrefix + prefix);
+                filter.registerHelp(desc, masterPrefix + prefix, std::string("[") + concatenatedFilterNames + "]");
+
+                file_name_extension.registerHelp(desc, masterPrefix + prefix);
+                file_name_infix.registerHelp(desc, masterPrefix + prefix);
+
+                json_config.registerHelp(desc, masterPrefix + prefix);
+            }
+
+            void expandHelp(
+                boost::program_options::options_description& desc,
+                std::string const& masterPrefix = std::string{}) override
+            {
+            }
+
+            void validateOptions() override
+            {
+                if(notifyPeriod.size() != filter.size())
+                    throw std::runtime_error(
+                        name + ": parameter filter and period are not used the same number of times");
+
+                // check if user passed filter name are valid
+                for(auto const& filterName : filter)
+                {
+                    if(std::find(allowedFilters.begin(), allowedFilters.end(), filterName) == allowedFilters.end())
+                    {
+                        throw std::runtime_error(name + ": unknown filter '" + filterName + "'");
+                    }
+                }
+            }
+
+            size_t getNumPlugins() const override
+            {
+                return notifyPeriod.size();
+            }
+
+            std::string getDescription() const override
+            {
+                return description;
+            }
+
+            std::string getOptionPrefix() const
+            {
+                return prefix;
+            }
+
+            std::string getName() const override
+            {
+                return name;
+            }
+
+            std::string const name = "MacroParticleCounter";
+            //! short description of the plugin
+            std::string const description = "create openPMD file with macro particle count per superCell";
+            //! prefix used for command line arguments
+            std::string const prefix = Species::FrameType::getName() + std::string("_macroParticlesPerSuperCell");
+        };
+
+
     private:
-        typedef MappingDesc::SuperCellSize SuperCellSize;
-        typedef GridBuffer<size_t, simDim> GridBufferType;
+        MappingDesc* m_cellDescription = nullptr;
 
-        std::string notifyPeriod;
-        std::string m_filenameExtension = openPMD::getDefaultExtension();
-        std::string m_filenameInfix = "_%06T";
-
-        std::string pluginName;
-        std::string pluginPrefix;
+        std::shared_ptr<Help> m_help;
+        size_t m_id;
         std::string foldername;
-        MappingDesc* cellDescription;
+        using SuperCellSize = MappingDesc::SuperCellSize;
+        using GridBufferType = GridBuffer<size_t, simDim>;
 
-        mpi::MPIReduce reduce;
+        mpi::MPIReduce reduce{};
 
         std::unique_ptr<GridBufferType> localResult;
 
-        // @todo upon switching to C++17, use std::option instead
-        std::unique_ptr<::openPMD::Series> m_Series;
+        std::optional<::openPMD::Series> m_Series;
 
         ::openPMD::Offset m_offset;
         ::openPMD::Extent m_extent;
 
     public:
-        PerSuperCell()
-            : pluginName("PerSuperCell: create hdf5 with macro particle count per superCell")
-            , pluginPrefix(ParticlesType::FrameType::getName() + std::string("_macroParticlesPerSuperCell"))
-            , foldername(pluginPrefix)
-            , cellDescription(nullptr)
+        //! must be implemented by the user
+        static std::shared_ptr<plugins::multi::IHelp> getHelp()
         {
-            Environment<>::get().PluginConnector().registerPlugin(this);
+            return std::shared_ptr<plugins::multi::IHelp>(new Help{});
+        }
+
+        PerSuperCell(std::shared_ptr<plugins::multi::IHelp>& help, size_t const id, MappingDesc* cellDescription)
+            : m_cellDescription(cellDescription)
+            , m_help(std::static_pointer_cast<Help>(help))
+            , m_id(id)
+        {
+            // set how often the plugin should be executed while PIConGPU is running
+            Environment<>::get().PluginConnector().setNotificationPeriod(this, m_help->notifyPeriod.get(id));
+
+
+            SubGrid<simDim> const& subGrid = Environment<simDim>::get().SubGrid();
+
+            DataSpace<simDim> localSuperCells(subGrid.getLocalDomain().size / SuperCellSize::toRT());
+            localResult = std::make_unique<GridBufferType>(localSuperCells);
+
+            /* create folder for openPMD files*/
+            foldername = Species::FrameType::getName() + std::string("_") + m_help->filter.get(id)
+                         + std::string("_macroParticlesPerSuperCell");
+            pmacc::Filesystem::get().createDirectoryWithPermissions(foldername);
         }
 
         virtual ~PerSuperCell()
         {
+            m_Series.reset();
         }
 
         void notify(uint32_t currentStep) override
         {
-            countMakroParticles<CORE + BORDER>(currentStep);
+            countMacroParticles<CORE + BORDER>(currentStep);
         }
 
-        void pluginRegisterHelp(po::options_description& desc) override
+        void restart(uint32_t restartStep, std::string const& restartDirectory) override
         {
-            desc.add_options()(
-                (pluginPrefix + ".period").c_str(),
-                po::value<std::string>(&notifyPeriod),
-                "enable plugin [for each n-th step]");
-            desc.add_options()(
-                (pluginPrefix + ".ext").c_str(),
-                po::value<std::string>(&m_filenameExtension),
-                ("openPMD filename extension (default: '" + m_filenameExtension + "')").c_str());
-            desc.add_options()(
-                (pluginPrefix + ".infix").c_str(),
-                po::value<std::string>(&m_filenameInfix),
-                "openPMD filename infix (default: '_%06T' for file-based iteration layout, pick 'NULL' for "
-                "group-based layout");
         }
 
-        std::string pluginGetName() const override
+        void checkpoint(uint32_t currentStep, std::string const& checkpointDirectory) override
         {
-            return pluginName;
-        }
-
-        void setMappingDescription(MappingDesc* cellDescription) override
-        {
-            this->cellDescription = cellDescription;
-        }
-
-    private:
-        void pluginLoad() override
-        {
-            if(!notifyPeriod.empty())
-            {
-                Environment<>::get().PluginConnector().setNotificationPeriod(this, notifyPeriod);
-                SubGrid<simDim> const& subGrid = Environment<simDim>::get().SubGrid();
-                /* local count of supercells without any guards*/
-                DataSpace<simDim> localSuperCells(subGrid.getLocalDomain().size / SuperCellSize::toRT());
-                localResult = std::make_unique<GridBufferType>(localSuperCells);
-
-                /* create folder for hdf5 files*/
-                pmacc::Filesystem::get().createDirectoryWithPermissions(foldername);
-            }
-        }
-
-        void pluginUnload() override
-        {
-            m_Series.reset();
         }
 
         template<uint32_t AREA>
-        void countMakroParticles(uint32_t currentStep)
+        void countMacroParticles(uint32_t currentStep)
         {
             openSeries();
 
             DataConnector& dc = Environment<>::get().DataConnector();
 
-            auto particles = dc.get<ParticlesType>(ParticlesType::FrameType::getName());
+            auto particles = dc.get<Species>(Species::FrameType::getName());
+            auto idProvider = dc.get<IdProvider>("globalId");
 
             /*############ count particles #######################################*/
             using SuperCellSize = MappingDesc::SuperCellSize;
-            auto const mapper = makeAreaMapper<AREA>(*cellDescription);
+            auto const mapper = makeAreaMapper<AREA>(*m_cellDescription);
 
-            PMACC_LOCKSTEP_KERNEL(CountMakroParticle{})
-                .config(mapper.getGridDim(), *particles)(
-                    particles->getDeviceParticlesBox(),
-                    localResult->getDeviceBuffer().getDataBox(),
-                    mapper);
+
+            auto kernel = PMACC_LOCKSTEP_KERNEL(KernelCountMacroParticles{}).config(mapper.getGridDim(), *particles);
+
+            auto bindKernel = std::bind(
+                kernel,
+                particles->getDeviceParticlesBox(),
+                localResult->getDeviceBuffer().getDataBox(),
+                mapper,
+                std::placeholders::_1);
+
+            meta::ForEach<typename Help::EligibleFilters, plugins::misc::ExecuteIfNameIsEqual<boost::mpl::_1>>{}(
+                m_help->filter.get(m_id),
+                currentStep,
+                idProvider->getDeviceGenerator(),
+                bindKernel);
+
+
+            PMACC_LOCKSTEP_KERNEL(KernelCountMacroParticles{}).config(mapper.getGridDim(), *particles)();
 
             localResult->deviceToHost();
 
@@ -283,25 +406,21 @@ namespace picongpu
             {
                 GridController<simDim>& gc = Environment<simDim>::get().GridController();
 
-                std::string infix = m_filenameInfix;
+                std::string infix = m_help->m_filenameInfix.get(m_id);
                 if(infix == "NULL")
                 {
                     infix = "";
                 }
                 std::string filename = foldername + std::string("/makroParticlePerSupercell") + infix
-                                       + std::string(".") + m_filenameExtension;
+                                       + std::string(".") + m_help->file_name_extension.get(m_id);
                 log<picLog::INPUT_OUTPUT>("openPMD open Series at: %1%") % filename;
 
-                m_Series = std::make_unique<::openPMD::Series>(
-                    filename,
-                    ::openPMD::Access::CREATE,
-                    gc.getCommunicator().getMPIComm());
+                m_Series = ::openPMD::Series(filename, ::openPMD::Access::CREATE, gc.getCommunicator().getMPIComm());
             }
         }
     };
 
 } // namespace picongpu
 
-PIC_REGISTER_SPECIES_PLUGIN(picongpu::PerSuperCell<boost::mpl::_1>);
-
+PIC_REGISTER_SPECIES_PLUGIN(picongpu::plugins::multi::Master<picongpu::PerSuperCell<boost::mpl::_1>>);
 #endif
