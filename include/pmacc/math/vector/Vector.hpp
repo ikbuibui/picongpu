@@ -64,6 +64,8 @@ namespace pmacc
         template<typename T_Type, uint32_t T_dim, typename T_Storage = ArrayStorage<T_Type, T_dim>>
         struct Vector;
 
+        //@TODO: Implement expression template
+
         template<typename T_Type, uint32_t T_dim, typename T_Storage>
         struct Vector : private T_Storage
         {
