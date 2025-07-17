@@ -34,6 +34,12 @@
 
 namespace pmacc
 {
+    /**
+     * @brief Determines the promoted arithmetic type between two types, T1 and T2.
+     */
+    template<typename T1, typename T2>
+    using PromotedType = std::common_type_t<T1, T2>;
+
     namespace math
     {
         /** Array storge for vector data
@@ -494,64 +500,181 @@ namespace pmacc
             return s << vec.toString();
         }
 
-        /** binary operators
-         * @{
-         */
-#define PMACC_VECTOR_BINARY_OP(resultScalarType, op)                                                                  \
-    template<typename T_Type, uint32_t T_dim, typename T_Storage, typename T_OtherStorage>                            \
-    constexpr auto operator op(                                                                                       \
-        const Vector<T_Type, T_dim, T_Storage>& lhs,                                                                  \
-        const Vector<T_Type, T_dim, T_OtherStorage>& rhs)                                                             \
+/**
+ * @brief Defines binary arithmetic operators for Vector types.
+ *
+ * This macro generates three overloads for a given operator (op):
+ * 1. Vector<T1> op Vector<T2>
+ * 2. Vector<T1> op scalar<T2>
+ * 3. scalar<T1> op Vector<T2>
+ *
+ * It automatically deduces the result vector's type using PromotedType to prevent
+ * precision loss during mixed-type operations.
+ */
+#define PMACC_VECTOR_ARITHMETIC_OP(op)                                                                                \
+    /* Overload 1: Vector<T1> op Vector<T2> */                                                                        \
+    template<typename T1, typename T2, uint32_t T_dim, typename Storage1, typename Storage2>                          \
+    requires std::is_arithmetic_v<T1> && std::is_arithmetic_v<T2>                                                     \
+    constexpr auto operator op(const Vector<T1, T_dim, Storage1>& lhs, const Vector<T2, T_dim, Storage2>& rhs)        \
     {                                                                                                                 \
-        /* to avoid allocation side effects the result is always a vector                                             \
-         * with default policies                                                                                      \
-         */                                                                                                           \
-        Vector<resultScalarType, T_dim> result{};                                                                     \
-        for(uint32_t i = 0u; i < T_dim; i++)                                                                          \
-            result[i] = lhs[i] op rhs[i];                                                                             \
+        using ResultScalarType = PromotedType<T1, T2>;                                                                \
+        Vector<ResultScalarType, T_dim> result{};                                                                     \
+        for(uint32_t i = 0; i < T_dim; ++i)                                                                           \
+        {                                                                                                             \
+            result[i] = static_cast<ResultScalarType>(lhs[i]) op static_cast<ResultScalarType>(rhs[i]);               \
+        }                                                                                                             \
         return result;                                                                                                \
     }                                                                                                                 \
                                                                                                                       \
-    template<typename T_Type, uint32_t T_dim, typename T_Storage>                                                     \
-    constexpr auto operator op(                                                                                       \
-        const Vector<T_Type, T_dim, T_Storage>& lhs,                                                                  \
-        typename Vector<T_Type, T_dim, T_Storage>::type rhs)                                                          \
+    /* Overload 2: Vector<T1> op scalar<T2> */                                                                        \
+    template<typename T1, uint32_t T_dim, typename Storage, typename T2>                                              \
+    requires std::is_arithmetic_v<T1> && std::is_arithmetic_v<T2>                                                     \
+    constexpr auto operator op(const Vector<T1, T_dim, Storage>& lhs, T2 rhs)                                         \
     {                                                                                                                 \
-        /* to avoid allocation side effects the result is always a vector                                             \
-         * with default policies                                                                                      \
-         */                                                                                                           \
-        Vector<resultScalarType, T_dim> result{};                                                                     \
-        for(uint32_t i = 0u; i < T_dim; i++)                                                                          \
-            result[i] = lhs[i] op rhs;                                                                                \
+        using ResultScalarType = PromotedType<T1, T2>;                                                                \
+        Vector<ResultScalarType, T_dim> result{};                                                                     \
+        for(uint32_t i = 0; i < T_dim; ++i)                                                                           \
+        {                                                                                                             \
+            result[i] = static_cast<ResultScalarType>(lhs[i]) op static_cast<ResultScalarType>(rhs);                  \
+        }                                                                                                             \
         return result;                                                                                                \
     }                                                                                                                 \
-    template<typename T_Type, uint32_t T_dim, typename T_Storage>                                                     \
-    constexpr auto operator op(                                                                                       \
-        typename Vector<T_Type, T_dim, T_Storage>::type lhs,                                                          \
-        const Vector<T_Type, T_dim, T_Storage>& rhs)                                                                  \
+                                                                                                                      \
+    /* Overload 3: scalar<T1> op Vector<T2> */                                                                        \
+    template<typename T1, typename T2, uint32_t T_dim, typename Storage>                                              \
+    requires std::is_arithmetic_v<T1> && std::is_arithmetic_v<T2>                                                     \
+    constexpr auto operator op(T1 lhs, const Vector<T2, T_dim, Storage>& rhs)                                         \
     {                                                                                                                 \
-        /* to avoid allocation side effects the result is always a vector                                             \
-         * with default policies                                                                                      \
-         */                                                                                                           \
-        Vector<resultScalarType, T_dim> result{};                                                                     \
-        for(uint32_t i = 0u; i < T_dim; i++)                                                                          \
-            result[i] = lhs op rhs[i];                                                                                \
+        using ResultScalarType = PromotedType<T1, T2>;                                                                \
+        Vector<ResultScalarType, T_dim> result{};                                                                     \
+        for(uint32_t i = 0; i < T_dim; ++i)                                                                           \
+        {                                                                                                             \
+            result[i] = static_cast<ResultScalarType>(lhs) op static_cast<ResultScalarType>(rhs[i]);                  \
+        }                                                                                                             \
         return result;                                                                                                \
     }
-        PMACC_VECTOR_BINARY_OP(T_Type, +)
-        PMACC_VECTOR_BINARY_OP(T_Type, -)
-        PMACC_VECTOR_BINARY_OP(T_Type, *)
-        PMACC_VECTOR_BINARY_OP(T_Type, /)
-        PMACC_VECTOR_BINARY_OP(bool, >=)
-        PMACC_VECTOR_BINARY_OP(bool, >)
-        PMACC_VECTOR_BINARY_OP(bool, <=)
-        PMACC_VECTOR_BINARY_OP(bool, <)
-        PMACC_VECTOR_BINARY_OP(T_Type, %)
 
-#undef PMACC_VECTOR_BINARY_OP
+        PMACC_VECTOR_ARITHMETIC_OP(+)
+        PMACC_VECTOR_ARITHMETIC_OP(-)
+        PMACC_VECTOR_ARITHMETIC_OP(*)
+        PMACC_VECTOR_ARITHMETIC_OP(/)
+#undef PMACC_VECTOR_ARITHMETIC_OP
 
-        /** @} */
+/**
+ * @brief Defines binary comparison operators for Vector types.
+ *
+ * This macro generates three overloads for a given comparison operator (op).
+ * The result is always a Vector<bool, T_dim>. The comparison is performed
+ * on the promoted type of the operands to ensure correctness.
+ */
+#define PMACC_VECTOR_COMPARISON_OP(op)                                                                                \
+    /* Overload 1: Vector<T1> op Vector<T2> */                                                                        \
+    template<typename T1, typename T2, uint32_t T_dim, typename Storage1, typename Storage2>                          \
+    requires std::is_arithmetic_v<T1> && std::is_arithmetic_v<T2>                                                     \
+    constexpr auto operator op(const Vector<T1, T_dim, Storage1>& lhs, const Vector<T2, T_dim, Storage2>& rhs)        \
+    {                                                                                                                 \
+        Vector<bool, T_dim> result{};                                                                                 \
+        using ComparisonType = PromotedType<T1, T2>;                                                                  \
+        for(uint32_t i = 0; i < T_dim; ++i)                                                                           \
+        {                                                                                                             \
+            result[i] = static_cast<ComparisonType>(lhs[i]) op static_cast<ComparisonType>(rhs[i]);                   \
+        }                                                                                                             \
+        return result;                                                                                                \
+    }                                                                                                                 \
+                                                                                                                      \
+    /* Overload 2: Vector<T1> op scalar<T2> */                                                                        \
+    template<typename T1, uint32_t T_dim, typename Storage, typename T2>                                              \
+    requires std::is_arithmetic_v<T1> && std::is_arithmetic_v<T2>                                                     \
+    constexpr auto operator op(const Vector<T1, T_dim, Storage>& lhs, T2 rhs)                                         \
+    {                                                                                                                 \
+        Vector<bool, T_dim> result{};                                                                                 \
+        using ComparisonType = PromotedType<T1, T2>;                                                                  \
+        for(uint32_t i = 0; i < T_dim; ++i)                                                                           \
+        {                                                                                                             \
+            result[i] = static_cast<ComparisonType>(lhs[i]) op static_cast<ComparisonType>(rhs);                      \
+        }                                                                                                             \
+        return result;                                                                                                \
+    }                                                                                                                 \
+                                                                                                                      \
+    /* Overload 3: scalar<T1> op Vector<T2> */                                                                        \
+    template<typename T1, typename T2, uint32_t T_dim, typename Storage>                                              \
+    requires std::is_arithmetic_v<T1> && std::is_arithmetic_v<T2>                                                     \
+    constexpr auto operator op(T1 lhs, const Vector<T2, T_dim, Storage>& rhs)                                         \
+    {                                                                                                                 \
+        Vector<bool, T_dim> result{};                                                                                 \
+        using ComparisonType = PromotedType<T1, T2>;                                                                  \
+        for(uint32_t i = 0; i < T_dim; ++i)                                                                           \
+        {                                                                                                             \
+            result[i] = static_cast<ComparisonType>(lhs) op static_cast<ComparisonType>(rhs[i]);                      \
+        }                                                                                                             \
+        return result;                                                                                                \
+    }
 
+        PMACC_VECTOR_COMPARISON_OP(>=)
+        PMACC_VECTOR_COMPARISON_OP(>)
+        PMACC_VECTOR_COMPARISON_OP(<=)
+        PMACC_VECTOR_COMPARISON_OP(<)
+        PMACC_VECTOR_COMPARISON_OP(==)
+        PMACC_VECTOR_COMPARISON_OP(!=)
+#undef PMACC_VECTOR_COMPARISON_OP
+
+/**
+ * @brief Defines binary operators for Vector types that are only valid for integers.
+ *
+ * This macro is identical to PMACC_VECTOR_ARITHMETIC_OP but adds a constraint
+ * to ensure both operand types (T1 and T2) are integral. This is necessary
+ * for operators like '%' which are not defined for floating-point types.
+ */
+#define PMACC_VECTOR_INTEGER_ONLY_OP(op)                                                                              \
+    /* Overload 1: Vector<T1> op Vector<T2> */                                                                        \
+    template<                                                                                                         \
+        typename T1,                                                                                                  \
+        typename T2,                                                                                                  \
+        uint32_t T_dim,                                                                                               \
+        typename Storage1,                                                                                            \
+        typename Storage2> /* THIS IS THE CRUCIAL ADDITION: Constrain to integral types only */                       \
+    requires std::is_integral_v<T1> && std::is_integral_v<T2>                                                         \
+    constexpr auto operator op(const Vector<T1, T_dim, Storage1>& lhs, const Vector<T2, T_dim, Storage2>& rhs)        \
+    {                                                                                                                 \
+        using ResultScalarType = PromotedType<T1, T2>;                                                                \
+        Vector<ResultScalarType, T_dim> result{};                                                                     \
+        for(uint32_t i = 0; i < T_dim; ++i)                                                                           \
+        {                                                                                                             \
+            result[i] = static_cast<ResultScalarType>(lhs[i]) op static_cast<ResultScalarType>(rhs[i]);               \
+        }                                                                                                             \
+        return result;                                                                                                \
+    }                                                                                                                 \
+                                                                                                                      \
+    /* Overload 2: Vector<T1> op scalar<T2> */                                                                        \
+    template<typename T1, uint32_t T_dim, typename Storage, typename T2>                                              \
+    requires std::is_integral_v<T1> && std::is_integral_v<T2>                                                         \
+    constexpr auto operator op(const Vector<T1, T_dim, Storage>& lhs, T2 rhs)                                         \
+    {                                                                                                                 \
+        using ResultScalarType = PromotedType<T1, T2>;                                                                \
+        Vector<ResultScalarType, T_dim> result{};                                                                     \
+        for(uint32_t i = 0; i < T_dim; ++i)                                                                           \
+        {                                                                                                             \
+            result[i] = static_cast<ResultScalarType>(lhs[i]) op static_cast<ResultScalarType>(rhs);                  \
+        }                                                                                                             \
+        return result;                                                                                                \
+    }                                                                                                                 \
+                                                                                                                      \
+    /* Overload 3: scalar<T1> op Vector<T2> */                                                                        \
+    template<typename T1, typename T2, uint32_t T_dim, typename Storage>                                              \
+    requires std::is_integral_v<T1> && std::is_integral_v<T2>                                                         \
+    constexpr auto operator op(T1 lhs, const Vector<T2, T_dim, Storage>& rhs)                                         \
+    {                                                                                                                 \
+        using ResultScalarType = PromotedType<T1, T2>;                                                                \
+        Vector<ResultScalarType, T_dim> result{};                                                                     \
+        for(uint32_t i = 0; i < T_dim; ++i)                                                                           \
+        {                                                                                                             \
+            result[i] = static_cast<ResultScalarType>(lhs) op static_cast<ResultScalarType>(rhs[i]);                  \
+        }                                                                                                             \
+        return result;                                                                                                \
+    }
+        // Use the new, constrained macro for integer-only operators
+        PMACC_VECTOR_INTEGER_ONLY_OP(%)
+#undef PMACC_VECTOR_INTEGER_ONLY_OP
 
         /** Give the linear index of an N-dimensional index within an N-dimensional index space.
          *
