@@ -126,7 +126,9 @@ namespace picongpu::particles::atomicPhysics::debug
             S_ChargeStateBox chargeStateHostBox = chargeStateBuffer->getHostDataBox();
             //      ionizationEnergy = 100 eV, screened charge = 5 e
             auto tupleChargeState_1 = std::make_tuple(u8(0u), 100._X, 5._X);
+            //      ionizationEnergy = 5 eV, screened charge = 5 e
             auto tupleChargeState_2 = std::make_tuple(u8(1u), 5._X, 5._X);
+            //      ionizationEnergy = 100 eV, screened charge = 5 e
             auto tupleChargeState_3 = std::make_tuple(u8(2u), 100._X, 5._X);
 
             chargeStateHostBox.store(u8(0u), tupleChargeState_1);
@@ -138,9 +140,9 @@ namespace picongpu::particles::atomicPhysics::debug
             /// atomic states, @attention caution all atomic state must differ in configNumber
             S_AtomicStateBox atomicStateHostBox = atomicStateBuffer->getHostDataBox();
 
-            // 1:(1,1,0,0,0,0,1,0,1,0) lowerStateBoundFree
+            // 1:(1,1,0,0,0,0,1,0,1,0) lowerStateBoundFree, exictationEnergy = 0 eV(ground state)
             auto tupleAtomicState_bf_1 = std::make_tuple(static_cast<uint64_t>(243754u), 0._X);
-            // 2:(1,1,0,0,0,0,1,0,0,0) upperStateBoundFree, excitationEnergyDifference = 5 eV
+            // 2:(1,1,0,0,0,0,1,0,0,0) upperStateBoundFree, excitationEnergy = 5 eV
             auto tupleAtomicState_bf_2 = std::make_tuple(static_cast<uint64_t>(9379u), 5._X);
             // 3:(1,1,0,0,0,0,0,0,0,0) upperStateBoundFree, excitationEnergyDifference = 5 eV
             auto tupleAtomicState_bf_3 = std::make_tuple(static_cast<uint64_t>(4u), 5._X);
@@ -406,10 +408,10 @@ namespace picongpu::particles::atomicPhysics::debug
         bool testADKIonizationRate() const
         {
             // unit: 1/s
-            float_64 const correctRate = 6.391666527e+9 * 1 / 3.3e-17;
+            float_64 const correctRate = 1.823335012e+10 * 1. / 3.3e-17;
 
             // unit: unit_eField
-            float_X const eFieldNorm = 0.0126 * sim.atomicUnit.eField() / sim.unit.eField();
+            float_X const eFieldNorm = 0.03 * sim.atomicUnit.eField() / sim.unit.eField();
 
             // unit: eV
             float_X const ipd = 0._X;

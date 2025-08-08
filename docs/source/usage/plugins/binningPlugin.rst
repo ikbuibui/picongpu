@@ -191,7 +191,7 @@ Species can be instances of a species type or a particle species name as a PMACC
 	auto electronsObj = PMACC_CSTRING("e"){};
 
 Optionally, users can specify a filter to be used with the species. This is a predicate functor, i.e. it is a functor with a signature as described above and which returns a boolean. If the filter returns true it means the particle is included in the binning.
-They can then create a FilteredSpecies object which contains the species and the filter.
+They can then create a ``FilteredSpecies`` object which contains the species and the filter.
 
 .. literalinclude:: ../../../../share/picongpu/tests/compile2/include/picongpu/param/binningSetup.param
    :language: c++
@@ -207,7 +207,12 @@ They can then create a FilteredSpecies object which contains the species and the
 Fields
 ------
 PIConGPU fields which should be used in field binning.
-Fields can be instances of a field type. For example,
+Fields must be instances of the ``FieldInfo`` type.
+
+.. doxygenclass:: picongpu::plugins::binning::FieldInfo
+	:members:
+
+For example,
 
 .. literalinclude:: ../../../../share/picongpu/tests/compile2/include/picongpu/param/binningSetup.param
    :language: c++
@@ -215,12 +220,23 @@ Fields can be instances of a field type. For example,
    :end-before: doc-include-end: fieldTuple
    :dedent:
 
-Fields are passed to addFieldBinner in the form of a tuple. This is just a collection of field objects and is of arbitrary size.
+Fields are passed to addFieldBinner in the form of a tuple. This is just a collection of ``FieldInfo`` and is of arbitrary size.
 Users can make a fields tuple by using the ``createTuple()`` function and passing in the objects as arguments.
+The functors receive the fields in the form of the field data box, which is the field data on the current GPU including the guard cells, in the order they are passed in the tuple.
+
+.. literalinclude:: ../../../../share/picongpu/tests/compile2/include/picongpu/param/binningSetup.param
+   :language: c++
+   :start-after: doc-include-start: fieldBox
+   :end-before: doc-include-end: fieldBox
+   :dedent:
 
 .. note::
 
 	It is possible to have an empty tuple for fields when doing field binning, in which case the functor will be called with no fields. This may be useful if you are passing in extra data and want field traversal over it.
+
+.. note::
+
+    It is possible to have field information available while doing particle binning as well. Users can simply pass in ``FieldInfo`` objects in the extra data tuple, and the functor will be called with the field information as well.
 
 Deposited Quantity
 ------------------

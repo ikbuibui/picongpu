@@ -20,12 +20,15 @@
 #pragma once
 
 #include "picongpu/defines.hpp"
+#include "picongpu/param/dimension.param"
+#include "picongpu/simulation/control/MovingWindow.hpp"
 #include "picongpu/simulation_types.hpp"
 
 #include <pmacc/dimensions/DataSpace.hpp>
 #include <pmacc/math/vector/Vector.hpp>
 #include <pmacc/particles/Identifier.hpp>
 
+#include <algorithm>
 #include <cstdint>
 
 namespace picongpu
@@ -54,6 +57,10 @@ namespace picongpu
             pmacc::DataSpace<simDim> localOffset;
             /** Offset of domain simulated by current block wrt the border */
             pmacc::DataSpace<simDim> blockCellOffset;
+            /** Size of the guard region around the local domain in cells */
+            pmacc::DataSpace<simDim> guardSize;
+            /** Moving window offset accurate to sub-cell position */
+            pmacc::math::Vector<float_64, simDim> windowOffset;
 
             /**
              * @param physicalSuperCellIdx supercell index relative to the border origin
@@ -62,10 +69,17 @@ namespace picongpu
                 uint32_t simStep,
                 pmacc::DataSpace<simDim> gOffset,
                 pmacc::DataSpace<simDim> lOffset,
-                pmacc::DataSpace<simDim> physicalSuperCellIdx)
+                pmacc::DataSpace<simDim> guardingSuperCells,
+                pmacc::math::Vector<float_64, simDim> wOffset)
                 : currentStep{simStep}
                 , globalOffset{gOffset}
                 , localOffset{lOffset}
+                , guardSize{guardingSuperCells * SuperCellSize::toRT()}
+                , windowOffset{wOffset}
+            {
+            }
+
+            DINLINE void fillDeviceData(pmacc::DataSpace<simDim> physicalSuperCellIdx)
             {
                 blockCellOffset = physicalSuperCellIdx * SuperCellSize::toRT();
             }
@@ -82,16 +96,22 @@ namespace picongpu
             // origin of the current sliding window, i.e. the currently simulated volume over all GPUs, no guards
             GLOBAL,
             // origin of the current ("my") GPU, no guards
-            LOCAL
+            LOCAL,
+            /** origin relative to the origin of the sliding window. This origin only starts moving with the sliding
+             *  window and is not discretized to the cell grid
+             */
+            MOVING_WINDOW,
+            // origin of the current ("my") GPU, including guards
+            LOCAL_WITH_GUARDS
         };
 
         enum class PositionPrecision
         {
             // Returns the cell index of the particle
-            Cell,
+            CELL,
             // Returns the position of the particle as the cell index + the position of the particle inside the cell
             // [0,1) This value is a floating point number of cells
-            SubCell
+            SUB_CELL
         };
 
         /**
@@ -115,7 +135,7 @@ namespace picongpu
              * @brief Returns the position as the number of cells.
              * Integral value if PositionPrecision is Cell and floating point if PositionPrecision is SubCell.
              */
-            Cell
+            CELL
         };
 
         template<>
@@ -128,20 +148,31 @@ namespace picongpu
                 uint32_t simStep,
                 pmacc::DataSpace<simDim> gOffset,
                 pmacc::DataSpace<simDim> lOffset,
+                pmacc::DataSpace<simDim> guardingSuperCells,
+                pmacc::math::Vector<float_64, simDim> windowOffset)
+                : DomainInfoBase(simStep, gOffset, lOffset, guardingSuperCells, windowOffset)
+            {
+            }
+
+            DINLINE void fillDeviceData(
                 pmacc::DataSpace<simDim> physicalSuperCellIdx,
                 pmacc::DataSpace<simDim> localCellIndex)
-                : DomainInfoBase(simStep, gOffset, lOffset, physicalSuperCellIdx)
-                , localCellIdx{localCellIndex}
             {
+                localCellIdx = localCellIndex;
+                DomainInfoBase::fillDeviceData(physicalSuperCellIdx);
             }
 
             // returns the cell index. To get the exact position of the fields, use the fieldPosition trait
             // passed Can also return in SI units if CellUnits::SI is specified
-            template<DomainOrigin T_Origin, PositionUnits T_Units = PositionUnits::Cell>
+            template<DomainOrigin T_Origin, PositionUnits T_Units = PositionUnits::CELL>
             ALPAKA_FN_ACC auto getCellIndex() const
             {
                 auto relative_cellpos = blockCellOffset;
 
+                if constexpr(T_Origin == DomainOrigin::LOCAL_WITH_GUARDS)
+                {
+                    relative_cellpos = relative_cellpos + guardSize;
+                }
                 if constexpr(T_Origin == DomainOrigin::GLOBAL)
                 {
                     relative_cellpos = relative_cellpos + localOffset;
@@ -153,18 +184,25 @@ namespace picongpu
 
                 auto pos = localCellIdx + relative_cellpos;
 
+                using DistanceReturnType = std::common_type_t<
+                    typename std::decay_t<decltype(sim.si.getCellSize())>::type,
+                    typename std::decay_t<decltype(pos)>::type>;
+
                 if constexpr(T_Units == PositionUnits::SI)
                 {
-                    return precisionCast<typename std::decay_t<decltype(sim.si.getCellSize())>::type>(pos)
-                           * sim.si.getCellSize().shrink<simDim>();
+                    return precisionCast<DistanceReturnType>(pos)
+                           * precisionCast<DistanceReturnType>(sim.si.getCellSize().shrink<simDim>());
                 }
-                if constexpr(T_Units == PositionUnits::PIC)
+                else if constexpr(T_Units == PositionUnits::PIC)
                 {
-                    return precisionCast<typename std::decay_t<decltype(sim.pic.getCellSize())>::type>(pos)
-                           * sim.pic.getCellSize().shrink<simDim>();
+                    return precisionCast<DistanceReturnType>(pos)
+                           * precisionCast<DistanceReturnType>(sim.pic.getCellSize().shrink<simDim>());
                 }
-
-                return pos;
+                // else T_Units == PositionUnits::Cell
+                else
+                {
+                    return pos;
+                }
             }
         };
 
@@ -176,11 +214,28 @@ namespace picongpu
                 uint32_t simStep,
                 pmacc::DataSpace<simDim> gOffset,
                 pmacc::DataSpace<simDim> lOffset,
-                pmacc::DataSpace<simDim> physicalSuperCellIdx)
-                : DomainInfoBase(simStep, gOffset, lOffset, physicalSuperCellIdx)
+                pmacc::DataSpace<simDim> guardingSuperCells,
+                pmacc::math::Vector<float_64, simDim> windowOffset)
+                : DomainInfoBase(simStep, gOffset, lOffset, guardingSuperCells, windowOffset)
             {
             }
+
+            DINLINE void fillDeviceData(pmacc::DataSpace<simDim> physicalSuperCellIdx)
+            {
+                DomainInfoBase::fillDeviceData(physicalSuperCellIdx);
+            }
         };
+
+        namespace concepts
+        {
+            template<auto V, auto... Vs>
+            concept OneOf = ((V == Vs) || ...);
+
+            template<DomainOrigin Origin, PositionPrecision Precision>
+            concept ValidPositionRequest
+                = OneOf<Origin, DomainOrigin::TOTAL, DomainOrigin::LOCAL, DomainOrigin::GLOBAL>
+                  || (Origin == DomainOrigin::MOVING_WINDOW && Precision == PositionPrecision::SUB_CELL);
+        } // namespace concepts
 
         /**
          * @brief Returns the particle position as a pmacc vector.
@@ -192,37 +247,32 @@ namespace picongpu
          * @warning Converting the particle positions to SI might be dangerous, especially with respect to the total
          * origin, as floating point numbers lose precision as the distance from the origin increases.
          *
+         * @warning The comoving frame defined by DomainOrigin::MOVING_WINDOW is only supported with SUBCELL precision.
+         *
          * @tparam T_Origin The origin reference for the position.
-         * @tparam T_Precision The precision of the position (cell index or sub-cell position).
-         * @tparam T_Units The units of the position (SI or cell).
+         * @tparam T_Precision The precision of the position (CELL index or SUBCELL position).
+         * @tparam T_Units The units of the position (SI, PIC or CELL).
          * @param domainInfo The domain information.
          * @param particle The particle whose position is to be determined.
          * @return The particle position as a pmacc vector.
          */
         template<
             DomainOrigin T_Origin,
-            PositionPrecision T_Precision = PositionPrecision::Cell,
-            PositionUnits T_Units = PositionUnits::Cell>
+            PositionPrecision T_Precision = PositionPrecision::CELL,
+            PositionUnits T_Units = PositionUnits::CELL>
+        requires concepts::ValidPositionRequest<T_Origin, T_Precision>
         ALPAKA_FN_ACC auto getParticlePosition(
             DomainInfo<BinningType::Particle> const& domainInfo,
             auto const& particle)
-            -> pmacc::math::Vector<
-                std::conditional_t<
-                    T_Units == PositionUnits::SI,
-                    typename std::decay_t<decltype(sim.si.getCellSize())>::type,
-                    std::conditional_t<
-                        T_Units == PositionUnits::PIC,
-                        typename std::decay_t<decltype(sim.pic.getCellSize())>::type,
-                        std::conditional_t<
-                            T_Precision == PositionPrecision::SubCell,
-                            typename std::decay_t<decltype(particle[position_])>::type,
-                            int>>>,
-                simDim>
         {
             int const linearCellIdx = particle[localCellIdx_];
             pmacc::DataSpace<simDim> const cellIdx = pmacc::math::mapToND(SuperCellSize::toRT(), linearCellIdx);
             auto relative_cellpos = domainInfo.blockCellOffset + cellIdx;
 
+            if constexpr(T_Origin == DomainOrigin::LOCAL_WITH_GUARDS)
+            {
+                relative_cellpos = relative_cellpos + domainInfo.guardSize;
+            }
             if constexpr(T_Origin == DomainOrigin::GLOBAL)
             {
                 relative_cellpos = relative_cellpos + domainInfo.localOffset;
@@ -231,37 +281,65 @@ namespace picongpu
             {
                 relative_cellpos = relative_cellpos + domainInfo.localOffset + domainInfo.globalOffset;
             }
-            if constexpr(T_Precision == PositionPrecision::SubCell)
+            // treat as total and in the sub cell calculation, subtract the origin location
+            if constexpr(T_Origin == DomainOrigin::MOVING_WINDOW)
             {
-                auto pos = precisionCast<typename std::decay_t<decltype(particle[position_])>::type>(relative_cellpos)
-                           + particle[position_];
+                relative_cellpos = relative_cellpos + domainInfo.localOffset + domainInfo.globalOffset;
+            }
+            if constexpr(T_Precision == PositionPrecision::SUB_CELL)
+            {
+                using DistanceReturnType = std::common_type_t<
+                    typename std::decay_t<decltype(sim.si.getCellSize())>::type,
+                    typename std::decay_t<decltype(particle[position_])>::type>;
+
+                auto pos = precisionCast<DistanceReturnType>(relative_cellpos)
+                           + precisionCast<DistanceReturnType>(particle[position_]);
+
+                if constexpr(T_Origin == DomainOrigin::MOVING_WINDOW)
+                {
+                    pos = pos - precisionCast<DistanceReturnType>(domainInfo.windowOffset);
+                }
+
                 if constexpr(T_Units == PositionUnits::SI)
                 {
                     auto cellSize = sim.si.getCellSize().shrink<simDim>();
-                    return precisionCast<typename std::decay_t<decltype(cellSize)>::type>(pos) * cellSize;
+                    return precisionCast<DistanceReturnType>(pos) * precisionCast<DistanceReturnType>(cellSize);
                 }
                 else if constexpr(T_Units == PositionUnits::PIC)
                 {
                     auto cellSize = sim.pic.getCellSize().shrink<simDim>();
-                    return precisionCast<typename std::decay_t<decltype(cellSize)>::type>(pos) * cellSize;
+                    return precisionCast<DistanceReturnType>(pos) * precisionCast<DistanceReturnType>(cellSize);
                 }
-
-                return pos;
+                // else T_Units == PositionUnits::Cell
+                else
+                {
+                    return pos;
+                }
             }
+            // T_Precision == PositionPrecision::Cell
             else
             {
+                using DistanceReturnType = std::common_type_t<
+                    typename std::decay_t<decltype(sim.si.getCellSize())>::type,
+                    typename std::decay_t<decltype(relative_cellpos)>::type>;
+
                 if constexpr(T_Units == PositionUnits::SI)
                 {
                     auto cellSize = sim.si.getCellSize().shrink<simDim>();
-                    return precisionCast<typename std::decay_t<decltype(cellSize)>::type>(relative_cellpos) * cellSize;
+                    return precisionCast<DistanceReturnType>(relative_cellpos)
+                           * precisionCast<DistanceReturnType>(cellSize);
                 }
-                if constexpr(T_Units == PositionUnits::PIC)
+                else if constexpr(T_Units == PositionUnits::PIC)
                 {
                     auto cellSize = sim.pic.getCellSize().shrink<simDim>();
-                    return precisionCast<typename std::decay_t<decltype(cellSize)>::type>(relative_cellpos) * cellSize;
+                    return precisionCast<DistanceReturnType>(relative_cellpos)
+                           * precisionCast<DistanceReturnType>(cellSize);
                 }
-
-                return relative_cellpos;
+                // else T_Units == PositionUnits::Cell
+                else
+                {
+                    return relative_cellpos;
+                }
             }
         }
     } // namespace plugins::binning

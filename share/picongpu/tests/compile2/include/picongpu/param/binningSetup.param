@@ -199,7 +199,7 @@ namespace picongpu
                 = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& field1, auto const& field2)
                 -> float_X
             {
-                auto fieldValue = field1(domainInfo.template getCellIndex<DomainOrigin::TOTAL>());
+                auto fieldValue = field1(domainInfo.template getCellIndex<DomainOrigin::LOCAL_WITH_GUARDS>());
                 auto squaredSum = fieldValue.x() * fieldValue.x() + fieldValue.y() * fieldValue.y()
                                   + fieldValue.z() * fieldValue.z();
                 return squaredSum;
@@ -233,18 +233,18 @@ namespace picongpu
 
             // doc-include-start: fieldTuple
             // Bring the fields together in a tuple
-            DataConnector& dc = Environment<>::get().DataConnector();
-            auto fieldsTuple = createTuple(
-                dc.get<FieldB>(FieldB::getName())->getDeviceDataBox(),
-                dc.get<FieldTmp>(FieldTmp::getUniqueId(0))->getDeviceDataBox());
+            auto fieldsTuple
+                = createTuple(FieldInfo<FieldB>(FieldB::getName()), FieldInfo<FieldTmp>(FieldTmp::getUniqueId(0)));
             // doc-include-end: fieldTuple
 
             /**
              * Define deposited quantity here
              */
+            // doc-include-start: fieldBox
             auto getFieldX
                 = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& field1, auto const& field2)
-                -> float_X { return field1(domainInfo.localCellIdx).x(); };
+                -> float_X { return field1(domainInfo.template getCellIndex<DomainOrigin::LOCAL_WITH_GUARDS>()).x(); };
+            // doc-include-end: fieldBox
 
             std::array<double, numUnits> depositedUnits{}; // Tell user the 7 dimensional format
             depositedUnits[SIBaseUnits::length] = -3.0;
@@ -261,7 +261,7 @@ namespace picongpu
 
             };
 
-            binningCreator.addFieldBinner("chargeDensityBinning", axisTuple, fieldsTuple, fieldX)
+            binningCreator.addFieldBinner("fieldBinning", axisTuple, fieldsTuple, fieldX)
                 .setNotifyPeriod("1:500")
                 .setHostSideHook(fillFieldsHook);
         }

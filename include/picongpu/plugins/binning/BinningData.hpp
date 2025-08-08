@@ -117,51 +117,51 @@ namespace picongpu
             /** @brief Time average the accumulated data when doing the dump. Defaults to true. */
             Child& setTimeAveraging(bool timeAv)
             {
-                this->timeAveraging = timeAv;
+                timeAveraging = timeAv;
                 return interpretAsChild();
             }
 
             /** @brief The periodicity of the output. Defaults to 1 */
             Child& setNotifyPeriod(std::string notify)
             {
-                this->notifyPeriod = std::move(notify);
+                notifyPeriod = std::move(notify);
                 return interpretAsChild();
             }
 
             /** @brief The number of notify steps to accumulate over. Dump at the end. Defaults to 1. */
             Child& setDumpPeriod(uint32_t dumpXNotifys)
             {
-                this->dumpPeriod = dumpXNotifys;
+                dumpPeriod = dumpXNotifys;
                 return interpretAsChild();
             }
 
-            /** @brief The periodicity of the output. Defaults to 1 */
+            /** @brief Set the file extension for the openPMD output */
             Child& setOpenPMDExtension(std::string extension)
             {
-                this->openPMDExtension = std::move(extension);
+                openPMDExtension = std::move(extension);
                 return interpretAsChild();
             }
 
-            /** @brief The periodicity of the output. Defaults to 1 */
+            /** @brief Set the infix for file names in openPMD output */
             Child& setOpenPMDInfix(std::string infix)
             {
-                this->openPMDInfix = std::move(infix);
+                openPMDInfix = std::move(infix);
                 return interpretAsChild();
             }
 
-            /** @brief The periodicity of the output. Defaults to 1 */
+            /** @brief Call a functor to add custom data to openPMD output */
             Child& setOpenPMDWriteFunctor(
                 std::function<void(::openPMD::Series& series, ::openPMD::Iteration& iteration, ::openPMD::Mesh& mesh)>
-                    writeOpenPMDFunctor)
+                    functor)
             {
-                this->writeOpenPMDFunctor = std::move(writeOpenPMDFunctor);
+                writeOpenPMDFunctor = std::move(functor);
                 return interpretAsChild();
             }
 
-            /** @brief The periodicity of the output. Defaults to 1 */
+            /** @brief Set miscellaneous configuration options for openPMD output */
             Child& setOpenPMDJsonCfg(std::string cfg)
             {
-                this->openPMDJsonCfg = std::move(cfg);
+                openPMDJsonCfg = std::move(cfg);
                 return interpretAsChild();
             }
 
@@ -170,7 +170,7 @@ namespace picongpu
              */
             Child& setHostSideHook(std::function<void()> hookFunc)
             {
-                this->hostHook = std::move(hookFunc);
+                hostHook = std::move(hookFunc);
                 return interpretAsChild();
             }
         };

@@ -195,7 +195,7 @@ namespace picongpu::particles::atomicPhysics::ionizationPotentialDepression::ker
                 float_X const eFieldNormCell = pmacc::math::l2norm(eFieldCache(localCellIndex));
 
                 float_X const eFieldNormAU = sim.pic.conv().eField2auEField(eFieldNormCell);
-                float_X const screenedCharge = chargeStateBox.screenedCharge(currentChargeState) - 1._X;
+                float_X const screenedCharge = chargeStateBox.screenedCharge(currentChargeState);
 
                 // eV
                 ipd += BarrierSupressionIonization::getIPD(screenedCharge, eFieldNormAU);

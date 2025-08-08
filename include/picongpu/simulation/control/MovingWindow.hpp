@@ -21,6 +21,7 @@
 
 #include "picongpu/defines.hpp"
 #include "picongpu/simulation/control/Window.hpp"
+#include "picongpu/unitless/precision.unitless"
 
 #include <pmacc/types.hpp>
 
@@ -41,6 +42,7 @@ namespace picongpu
 
         struct ComputedConstants
         {
+            float_64 moveRatio;
             uint32_t gpuNumberOfCellsInMoveDirection;
             float_64 cellSizeInMoveDirection;
             float_64 deltaWayPerStep;
@@ -50,18 +52,20 @@ namespace picongpu
 
             ComputedConstants(float_64 movePoint)
             {
+                moveRatio = movePoint;
+
                 SubGrid<simDim> const& subGrid = Environment<simDim>::get().SubGrid();
 
                 /* speed of the moving window */
                 auto const windowMovingSpeed = static_cast<float_64>(sim.pic.getSpeedOfLight());
 
+                gpuNumberOfCellsInMoveDirection = subGrid.getLocalDomain().size[moveDirection];
+
                 /* the moving window is smaller than the global domain by exactly one
                  * GPU (local domain size)
                  */
                 uint32_t const globalWindowSizeInMoveDirection
-                    = subGrid.getGlobalDomain().size[moveDirection] - subGrid.getLocalDomain().size[moveDirection];
-
-                gpuNumberOfCellsInMoveDirection = subGrid.getLocalDomain().size[moveDirection];
+                    = subGrid.getGlobalDomain().size[moveDirection] - gpuNumberOfCellsInMoveDirection;
 
                 /* unit PIConGPU length */
                 cellSizeInMoveDirection = static_cast<float_64>(sim.pic.getCellSize()[moveDirection]);
@@ -250,6 +254,10 @@ namespace picongpu
         //! time step where the sliding window is stopped
         uint32_t endSlidingOnStep = 0u;
 
+        // Not RAII because these are only required if moving window is enabled
+        std::optional<ComputedConstants> computedConstants;
+
+    public:
         /* defines in which direction the window moves
          *
          * 0 == x,  1 == y , 2 == z direction
@@ -258,10 +266,6 @@ namespace picongpu
          */
         static constexpr uint32_t moveDirection = 1;
 
-        // Not RAII because these are only required if moving window is enabled
-        std::optional<ComputedConstants> computedConstants;
-
-    public:
         /** Set window move point which defines when to start sliding the window
          *
          * See declaration of movePoint for a detailed explanation.
@@ -376,6 +380,43 @@ namespace picongpu
         }
 
         /**
+         * Get the moving window origin position in cell, not discretized to the cell grid
+         *
+         * @param currentStep current simulation step
+         * @return moving window origin position relative to total origin in cells
+         */
+        pmacc::math::Vector<float_64, simDim> getMovingWindowOriginPositionCells(uint32_t currentStep)
+        {
+            auto offsets = pmacc::math::Vector<float_64, simDim>::create(0);
+
+            if(!slidingWindowEnabled)
+                return offsets;
+
+            auto const& constants = getOrComputeConstants();
+
+            // Clamp currentStep if sliding has ended
+            if(currentStep > endSlidingOnStep)
+                currentStep = endSlidingOnStep;
+
+            if(constants.firstMoveStep <= static_cast<int32_t>(currentStep))
+            {
+                auto cellsPerStep = constants.deltaWayPerStep / constants.cellSizeInMoveDirection;
+
+                SubGrid<simDim> const& subGrid = Environment<simDim>::get().SubGrid();
+                float_64 const virtualParticleCellsPassed = cellsPerStep * static_cast<float_64>(currentStep);
+                float_64 const moveLocationInCells
+                    = constants.moveRatio
+                      * (subGrid.getGlobalDomain().size[moveDirection] - constants.gpuNumberOfCellsInMoveDirection);
+
+                offsets[moveDirection] = virtualParticleCellsPassed - moveLocationInCells;
+
+                return offsets;
+            }
+
+            return offsets;
+        }
+
+        /**
          * Returns an instance of MovingWindow
          *
          * @return an instance
@@ -407,6 +448,7 @@ namespace picongpu
             Window window;
             window.localDimensions = subGrid.getLocalDomain();
             window.globalDimensions = Selection<simDim>(subGrid.getGlobalDomain().size);
+            auto const& constants = getOrComputeConstants();
 
             /* moving window can only slide in y direction */
             if(slidingWindowEnabled)
@@ -414,7 +456,7 @@ namespace picongpu
                 /* the moving window is smaller than the global domain by exactly one
                  * GPU (local domain size) in moving (y) direction
                  */
-                window.globalDimensions.size[moveDirection] -= subGrid.getLocalDomain().size[moveDirection];
+                window.globalDimensions.size[moveDirection] -= constants.gpuNumberOfCellsInMoveDirection;
 
                 float_64 offsetFirstGPU = 0.0;
                 getCurrentSlideInfo(currentStep, nullptr, &offsetFirstGPU);

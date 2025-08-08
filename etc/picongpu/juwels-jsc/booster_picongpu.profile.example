@@ -33,36 +33,33 @@ fi
 # General modules #############################################################
 #
 module purge
-module load Stages/2024
-module load GCC/12.3.0
+module load Stages/2025
+module load GCC/13.3.0
 module load CUDA/12
 module load CMake
-module load ParaStationMPI/5.9.2-1
-module load Python/3.11.3
-module load ADIOS2/2.9.2
-module load HDF5/1.14.2
-module load Boost/1.82.0
+module load ParaStationMPI/5.10.0-1
+module load Python/3.12.3
+module load Blosc2/2.15.2
+module load ADIOS2/2.10.2
+module load HDF5/1.14.5
+module load Boost/1.86.0
 module load FFTW.MPI/3.3.10
 
 # necessary for evaluations (NumPy, SciPy, Matplotlib, SymPy, Pandas, IPython)
-module load SciPy-bundle/2023.07
-module load h5py/3.9.0
+module load SciPy-bundle/2024.05
+module load h5py/3.12.1
 
 # Self-Build Software #########################################################
 #
 # needs to be compiled by the user
 # Check the install script at
-# https://gist.github.com/steindev/5a2ab0c4957a1e57ed671ac198b491c6
+# https://gist.github.com/ikbuibui/21402262223b8897616434cc7e63164d
 #
-export PIC_LIBS=$PROJECT/share/lib
-export PNG_ROOT=$PIC_LIBS/libpng
+export PIC_LIBS=$PROJECT/share25/lib
 export PNG_WRITER=$PIC_LIBS/pngwriter
-export BLOSC_ROOT=$PIC_LIBS/c-blosc
 export OPENPMD_ROOT=$PIC_LIBS/openPMD-api
 
-export CMAKE_PREFIX_PATH=$PNG_ROOT:$CMAKE_PREFIX_PATH
 export CMAKE_PREFIX_PATH=$PNG_WRITER:$CMAKE_PREFIX_PATH
-export CMAKE_PREFIX_PATH=$BLOSC_ROOT:$CMAKE_PREFIX_PATH
 export CMAKE_PREFIX_PATH=$OPENPMD_ROOT:$CMAKE_PREFIX_PATH
 
 export PATH=$OPENPMD_ROOT/bin:$PATH

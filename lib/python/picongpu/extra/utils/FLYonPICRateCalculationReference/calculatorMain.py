@@ -37,14 +37,14 @@ if __name__ == "__main__":
     upperStateLevelVectorBoundFree = (1, 1, 0, 0, 0, 0, 1, 0, 0, 0)
 
     # bound-free field transition data
-    #   screened Charge lower state - 1
-    screenedCharge = 4
+    #   screened Charge lower state
+    screenedCharge = 5
     # in eV
     Hartree = 27.211386245981
     # in Hartree
     ionizationEnergy_ADK = 5.0 / Hartree
     # in atomic_unit["electric field"] ~ 5.1422e11 V/m
-    fieldStrength = 0.0126
+    fieldStrength = 0.03
 
     # bound-bound transition data
     # eV

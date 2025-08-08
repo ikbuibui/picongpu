@@ -76,7 +76,7 @@ namespace picongpu
             constexpr auto tupleMapHelper(
                 std::index_sequence<Is...>,
                 std::tuple<Args...> const& tuple,
-                Functor&& functor) noexcept
+                Functor&& functor)
             {
                 return pmacc::memory::tuple::make_tuple(std::forward<Functor>(functor)(std::get<Is>(tuple))...);
             }
@@ -86,7 +86,7 @@ namespace picongpu
          * @brief create a new tuple from the return value of a functor applied on all arguments of a tuple
          */
         template<typename... Args, typename Functor>
-        constexpr auto tupleMap(std::tuple<Args...> const& tuple, Functor&& functor) noexcept
+        constexpr auto tupleMap(std::tuple<Args...> const& tuple, Functor&& functor)
         {
             return detail::tupleMapHelper(
                 std::make_index_sequence<sizeof...(Args)>{},
@@ -95,7 +95,7 @@ namespace picongpu
         }
 
         template<typename... Args>
-        constexpr auto createTuple(Args&&... args) noexcept
+        constexpr auto createTuple(Args&&... args)
         {
             return std::make_tuple(std::forward<Args>(args)...);
         }
@@ -106,7 +106,6 @@ namespace picongpu
             auto ptr = new TypeTemplate(std::forward<Args>(args)...);
             return std::unique_ptr<std::remove_cvref_t<decltype(*ptr)>>(ptr);
         }
-
 
     } // namespace plugins::binning
 } // namespace picongpu

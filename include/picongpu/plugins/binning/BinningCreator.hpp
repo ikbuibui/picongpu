@@ -110,7 +110,7 @@ namespace picongpu
              *         This can be used to further configure the binning setup if needed.
              */
             template<typename T_AccumulateOp = alpaka::AtomicAdd, typename T_Extras = std::tuple<>>
-            auto addFieldBinner(
+            auto& addFieldBinner(
                 std::string const& binnerOutputName,
                 auto const& axisTupleObject,
                 auto const& fieldsTupleObject,

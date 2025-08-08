@@ -117,7 +117,7 @@ namespace picongpu::particles::atomicPhysics::rateCalculation
             using S_ConfigNumber = typename T_AtomicStateDataBox::ConfigNumber;
             uint8_t const lowerStateChargeState = S_ConfigNumber::getChargeState(lowerStateConfigNumber);
 
-            return chargeStateDataBox.screenedCharge(lowerStateChargeState) - 1._X;
+            return chargeStateDataBox.screenedCharge(lowerStateChargeState);
         }
 
         /** actual rate rateFormula

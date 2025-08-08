@@ -1,6 +1,5 @@
 # Name and Path of this Script ############################### (DO NOT change!)
-export PIC_PROFILE=$(cd $(dirname $BASH_SOURCE) && pwd)"/"$(basename $BASH_SOURCE)
-
+export PIC_PROFILE=$(cd $(dirname ${BASH_SOURCE:-$0}) && pwd)/$(basename ${BASH_SOURCE:-$0}) # for compatibility with both zsh and bash
 # User Information ################################# (edit the following lines)
 #   - automatically add your name and contact to output file meta data
 #   - send me a mail on batch system jobs: NONE, BEGIN, END, FAIL, REQUEUE, ALL,

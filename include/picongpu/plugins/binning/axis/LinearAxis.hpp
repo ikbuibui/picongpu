@@ -114,7 +114,12 @@ namespace picongpu
                                 if constexpr(std::is_integral_v<T_Attribute>)
                                 {
                                     // using only integer operations
-                                    binIdx = ((val - picRange.min) * scaling) / picRange.getRange();
+                                    using PromotedType
+                                        = std::conditional_t<std::is_signed_v<T_Attribute>, int64_t, uint64_t>;
+
+                                    PromotedType const diff = val - picRange.min;
+                                    PromotedType const scaled_diff = diff * scaling;
+                                    binIdx = scaled_diff / picRange.getRange();
                                 }
                                 else
                                 {
