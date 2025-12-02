@@ -69,6 +69,25 @@ set(CMAKE_CXX_STANDARD 20)
 
 find_package(PMacc REQUIRED CONFIG PATHS "${CMAKE_CURRENT_SOURCE_DIR}/../../../../include/pmacc")
 
+################################################################################
+# Find MPI
+################################################################################
+
+find_package(MPI REQUIRED)
+list(PREPEND HOST_LIBS MPI::MPI_CXX)
+
+################################################################################
+# Find Boost
+################################################################################
+
+find_package(Boost 1.74.0 REQUIRED COMPONENTS program_options)
+if(TARGET Boost::boost)
+    list(PREPEND HOST_LIBS Boost::boost Boost::program_options)
+else()
+    include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
+    list(PREPEND HOST_LIBS ${Boost_LIBRARIES})
+endif()
+
 # ################################################################################
 # # Build type (debug, release)
 # ################################################################################
@@ -109,12 +128,24 @@ endif()
 
 include_directories(include)
 
-file(GLOB SRCFILES "*.cpp")
+# files with accelerator code (kernel and API calls)
+file(GLOB_RECURSE ACCSRCFILES "*.x.cpp")
+
+# host-only sources
+file(GLOB_RECURSE SRCFILES "*.cpp")
+list(REMOVE_ITEM SRCFILES ${ACCSRCFILES})
+
+add_library(sph-hostonly STATIC ${SRCFILES})
+target_link_libraries(sph-hostonly PUBLIC ${HOST_LIBS})
+# Some host compiled libraries depend on std::filesystem,
+# compatibility to std::experimental::filesystem is handled in pmacc.
+target_link_libraries(sph-hostonly PRIVATE pmacc::filesystem)
 
 alpaka_add_executable(sph
-    ${SRCFILES}
+     ${ACCSRCFILES}
 )
 
+target_link_libraries(sph PUBLIC ${HOST_LIBS} sph-hostonly)
 target_link_libraries(sph PRIVATE pmacc::pmacc)
 
 ################################################################################

@@ -1,0 +1,10 @@
+#pragma once
+
+#include <pmacc/dimensions/Definition.hpp>
+
+#include <cstdint>
+
+namespace sph
+{
+    constexpr uint32_t simDim = DIM2;
+} // namespace sph
