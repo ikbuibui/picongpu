@@ -1,9 +1,12 @@
 #pragma once
 
 #include "sph/DeviceHeap.hpp"
+#include "sph/ParticleDefinition.hpp"
 #include "sph/control/DomainAdjuster.hpp"
 #include "sph/param/dimension.param"
 #include "sph/param/memory.param"
+#include "spmacc/AABB.hpp"
+#include "spmacc/ParticleSystem.hpp"
 
 #include <pmacc/debug/PMaccVerbose.hpp>
 #include <pmacc/particles/memory/buffers/MallocMCBuffer.hpp>
@@ -232,19 +235,25 @@ namespace sph
          */
         uint32_t fillSimulation() override
         {
-            // Load initial conditions
-            // Setup particle distributions
-            // Initialize fields
+            // set up boundary (and initial) conditions
+
+            // load density description from param file. How is this independent from the domain size?
+            //
             auto grid = pmacc::MemSpace<sph::simDim>::create(10);
 
             std::cout << "hello SPH! grid size is " << grid.x() << "\t" << grid.y() << std::endl;
 
+            pmacc::sph::ParticleSystem<
+                pmacc::sph::AABB<uint32_t, sph::simDim>,
+                pmacc::sph::FrameList<sph::FrameType, sph::DeviceHeap>>
+                boundedParticles{sph::DeviceHeap{}};
 
             // auto blockCfg = pmacc::lockstep::makeBlockCfg<64>();
             pmacc::lockstep::exec::kernel([] ALPAKA_FN_ACC(auto const& acc) -> void { printf("Hello World.\n"); })
                 .config<32>(128)();
 
-            return 0u; // Start from step 0
+            // boundedParticles.getParticles();
+            return 0u;
         }
 
         void resetAll(uint32_t currentStep) override

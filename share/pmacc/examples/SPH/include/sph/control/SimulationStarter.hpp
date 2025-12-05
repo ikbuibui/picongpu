@@ -21,6 +21,7 @@
 
 #include "sph/ArgsParser.hpp"
 #include "sph/control/Simulation.hpp"
+#include "sph/plugins/PluginController.hpp"
 
 #include <pmacc/debug/PMaccVerbose.hpp>
 #include <pmacc/dimensions/DataSpace.hpp>
@@ -42,6 +43,7 @@ namespace sph
     private:
         using BoostOptionsList = std::list<boost::program_options::options_description>;
         Simulation simulationClass{};
+        PluginController pluginClass{};
 
     public:
         SimulationStarter() = default;
@@ -55,6 +57,7 @@ namespace sph
         {
             pmacc::PluginConnector& pluginConnector = pmacc::Environment<>::get().PluginConnector();
             pluginConnector.loadPlugins();
+            // pmacc::log<pmacc::PMaccVerbose::SIMULATION_STATE>("Startup");
             simulationClass.startSimulation();
         }
 
@@ -76,6 +79,18 @@ namespace sph
             po::options_description simDesc(simulationClass.pluginGetName());
             simulationClass.pluginRegisterHelp(simDesc);
             ap.addOptions(simDesc);
+
+            po::options_description pluginDesc(pluginClass.pluginGetName());
+            pluginClass.pluginRegisterHelp(pluginDesc);
+            ap.addOptions(pluginDesc);
+
+            // setup all boost::program_options and add to ArgsParser
+            BoostOptionsList options = pluginConnector.registerHelp();
+
+            for(auto iter = options.cbegin(); iter != options.cend(); ++iter)
+            {
+                ap.addOptions(*iter);
+            }
 
             // parse environment variables, config files and command line
             return ap.parse(argc, argv);
@@ -100,8 +115,9 @@ namespace sph
 
         void pluginUnload() override
         {
-            pmacc::PluginConnector& pluginConnector = pmacc::Environment<>::get().PluginConnector();
+            auto& pluginConnector = pmacc::Environment<>::get().PluginConnector();
             pluginConnector.unloadPlugins();
+            pluginClass.unload();
             simulationClass.unload();
         }
 
