@@ -56,6 +56,46 @@ if(NOT DEFINED alpaka_CXX_STANDARD)
 endif()
 
 ################################################################################
+# compute backend selection
+################################################################################
+# A backend bundles an alpaka API + device kind (which device the code runs on) with an executor
+# (how the parallelism on that device is organised). Exactly one backend is active per build.
+#
+# Selecting a backend:
+#   - enables the alpaka dependency required by the backend (CUDA/HIP/oneAPI/TBB/OpenMP),
+#   - defines the C++ macro PMACC_BACKEND_<name> consumed by pmacc/alpakaHelper/acc.hpp.
+#
+# These options have to be set before alpaka is added (add_subdirectory / find_package) below.
+set(PMACC_BACKEND "CpuSerial" CACHE STRING "Compute backend (alpaka API + executor) PMacc is built for")
+set(_PMACC_BACKENDS "CpuSerial;CpuOmpBlocks;CpuTbbBlocks;GpuCuda;GpuHip;OneApi")
+set_property(CACHE PMACC_BACKEND PROPERTY STRINGS "${_PMACC_BACKENDS}")
+
+if(NOT PMACC_BACKEND IN_LIST _PMACC_BACKENDS)
+    message(FATAL_ERROR "PMACC_BACKEND=\"${PMACC_BACKEND}\" is invalid. Valid backends: ${_PMACC_BACKENDS}")
+endif()
+
+# map the selected backend to its alpaka executor option name and required alpaka dependency
+# (the alpaka executor option for the TBB blocks executor is named alpaka_EXEC_TbbBlocks)
+if(PMACC_BACKEND STREQUAL "CpuSerial")
+    set(_PMACC_BACKEND_EXEC "CpuSerial")
+elseif(PMACC_BACKEND STREQUAL "CpuOmpBlocks")
+    set(_PMACC_BACKEND_EXEC "CpuOmpBlocks")
+    set(alpaka_DEP_OMP ON CACHE BOOL "" FORCE)
+elseif(PMACC_BACKEND STREQUAL "CpuTbbBlocks")
+    set(_PMACC_BACKEND_EXEC "TbbBlocks")
+    set(alpaka_DEP_TBB ON CACHE BOOL "" FORCE)
+elseif(PMACC_BACKEND STREQUAL "GpuCuda")
+    set(_PMACC_BACKEND_EXEC "GpuCuda")
+    set(alpaka_DEP_CUDA ON CACHE BOOL "" FORCE)
+elseif(PMACC_BACKEND STREQUAL "GpuHip")
+    set(_PMACC_BACKEND_EXEC "GpuHip")
+    set(alpaka_DEP_HIP ON CACHE BOOL "" FORCE)
+elseif(PMACC_BACKEND STREQUAL "OneApi")
+    set(_PMACC_BACKEND_EXEC "OneApi")
+    set(alpaka_DEP_ONEAPI ON CACHE BOOL "" FORCE)
+endif()
+
+################################################################################
 # setup alpaka
 ################################################################################
 
@@ -343,6 +383,10 @@ endif()
 ################################################################################
 # PMacc options
 ################################################################################
+
+# tell acc.hpp which compute backend (alpaka API + executor) to build for
+message(STATUS "PMacc compute backend: ${PMACC_BACKEND}")
+target_compile_definitions(pmacc PUBLIC "PMACC_BACKEND_${PMACC_BACKEND}=1")
 
 option(PMACC_ASYNC_QUEUES "Enable asynchronous alpaka queues" ON)
 if(PMACC_ASYNC_QUEUES)
