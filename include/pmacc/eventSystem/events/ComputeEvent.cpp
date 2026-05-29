@@ -79,7 +79,7 @@ namespace pmacc
         assert(!this->stream.has_value());
         finished = false;
         this->stream = stream;
-        alpaka::enqueue(*this->stream, event);
+        this->stream->enqueue(event);
     }
 
 } // namespace pmacc
