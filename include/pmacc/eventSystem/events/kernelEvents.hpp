@@ -122,29 +122,6 @@ namespace pmacc::exec
     }
 } // namespace pmacc::exec
 
-namespace alpaka
-{
-    namespace trait
-    {
-        /** alpaka trait specialization to define dynamic shared memory for a kernel.
-         *
-         * All PMacc kernel with dynamic shared memory usage are wrapped by KernelWithDynSharedMem where the required
-         * amount of shared memory is available as member variable.
-         */
-        template<typename T_UserKernel, typename T_Acc>
-        struct BlockSharedMemDynSizeBytes<::pmacc::exec::detail::KernelWithDynSharedMem<T_UserKernel>, T_Acc>
-        {
-            template<typename... TArgs>
-            ALPAKA_FN_HOST_ACC static auto getBlockSharedMemDynSizeBytes(
-                ::pmacc::exec::detail::KernelWithDynSharedMem<T_UserKernel> const& userKernel,
-                TArgs&&...) -> ::alpaka::Idx<T_Acc>
-            {
-                return userKernel.m_dynSharedMemBytes;
-            }
-        };
-    } // namespace trait
-} // namespace alpaka
-
 /** Create a kernel object out of a functor instance.
  *
  * This macro add the current filename and line number to the kernel object.
