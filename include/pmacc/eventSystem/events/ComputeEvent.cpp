@@ -39,7 +39,7 @@ namespace pmacc
     {
         PMACC_ASSERT(refCounter == 0u);
         log(ggLog::CUDA_RT() + ggLog::EVENT(), "sync and delete event");
-        alpaka::wait(event);
+        alpaka::onHost::wait(event);
     }
 
     void ComputeEvent::registerHandle()

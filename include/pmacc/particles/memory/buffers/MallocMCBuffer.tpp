@@ -71,7 +71,7 @@ namespace pmacc
             alpakaBufferSize);
         auto alpakaStream = pmacc::eventSystem::getComputeDeviceQueue(ITask::TASK_DEVICE)->getAlpakaQueue();
         alpaka::memcpy(alpakaStream, *hostBuffer, devView, alpakaBufferSize);
-        alpaka::wait(alpakaStream);
+        alpaka::onHost::wait(alpakaStream);
     }
 
 } // namespace pmacc

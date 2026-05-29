@@ -235,7 +235,7 @@ namespace pmacc
             {
                 eventSystem::waitForAllTasks();
                 // Required by scorep for flushing the buffers
-                alpaka::wait(manager::Device<ComputeDevice>::get().current());
+                manager::Device<ComputeDevice>::get().current().wait();
                 m_isMpiInitialized = false;
                 /* Free the MPI context.
                  * The gpu context is freed by the `QueueController`, because
