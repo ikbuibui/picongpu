@@ -148,7 +148,7 @@ namespace gol
                     blockCell + pmacc::math::mapToND(SuperCellSize::toRT(), static_cast<int>(worker.workerIdx())));
 
                 // create a random number state and generator
-                using RngMethod = random::methods::XorMin<typename T_Worker::Acc>;
+                using RngMethod = random::methods::AlpakaRand<typename T_Worker::Acc>;
                 using State = typename RngMethod::StateType;
                 State state;
                 RngMethod method;
