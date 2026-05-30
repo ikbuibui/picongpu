@@ -36,13 +36,13 @@ namespace pmacc
         template<typename T_Worker>
         HDINLINE uint64_t fetchInc(T_Worker const& worker)
         {
-            return kernel::atomicAllInc(worker, nextId, ::alpaka::hierarchy::Grids());
+            return kernel::atomicAllInc(worker, nextId, ::alpaka::onAcc::scope::Device{});
         }
 
         template<typename T_Worker>
         HDINLINE uint64_t fetch(T_Worker const& worker)
         {
-            return alpaka::atomicCas(worker.getAcc(), nextId, uint64_t{0u}, uint64_t{0u});
+            return alpaka::onAcc::atomicCas(worker.getAcc(), nextId, uint64_t{0u}, uint64_t{0u});
         }
 
         uint64_t* nextId;
