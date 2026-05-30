@@ -38,11 +38,9 @@ namespace picongpu
          *
          * It is not allowed to change the method and restart an already existing checkpoint.
          *
-         *  - pmacc::random::methods::XorMin
-         *  - pmacc::random::methods::MRG32k3aMin
          *  - pmacc::random::methods::AlpakaRand
          */
-        using Generator = pmacc::random::methods::XorMin<>;
+        using Generator = pmacc::random::methods::AlpakaRand<>;
 
         /** random number start seed
          *
