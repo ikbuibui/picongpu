@@ -23,9 +23,9 @@
 
 
 #include "pmacc/Environment.hpp"
-#include "pmacc/dimensions/DataSpace.hpp"
+#include "pmacc/eventSystem/tasks/TaskKernel.hpp"
 #include "pmacc/exec/KernelLauncher.hpp"
-#include "pmacc/traits/GetNComponents.hpp"
+#include "pmacc/math/vector/Vector.hpp"
 #include "pmacc/types.hpp"
 
 #include <string>
