@@ -22,11 +22,9 @@
 #pragma once
 
 
-#include "pmacc/Environment.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/exec/KernelLauncher.hpp"
 #include "pmacc/exec/KernelWithDynSharedMem.hpp"
-#include "pmacc/traits/GetNComponents.hpp"
 #include "pmacc/types.hpp"
 
 #include <string>
