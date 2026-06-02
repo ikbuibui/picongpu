@@ -176,7 +176,7 @@ namespace pmacc
                 constexpr uint32_t xChunkSize = 256;
 
                 // number of blocks in x direction
-                gridSize.x() = alpaka::core::divCeil(gridSize.x(), static_cast<size_t>(xChunkSize));
+                gridSize.x() = alpaka::divCeil(gridSize.x(), static_cast<size_t>(xChunkSize));
                 auto blockCfg = lockstep::makeBlockCfg<xChunkSize>();
                 auto destBox = this->destination->getDataBox();
                 auto blockSize = DataSpace<dim>::create(1);

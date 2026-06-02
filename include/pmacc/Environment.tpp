@@ -317,7 +317,7 @@ namespace pmacc
                      */
                     try
                     {
-                        auto testStream = ComputeDeviceQueue(manager::Device<ComputeDevice>::get().current());
+                        auto testStream = manager::Device<ComputeDevice>::get().current().makeQueue();
                     }
                     catch(std::system_error const& e)
                     {

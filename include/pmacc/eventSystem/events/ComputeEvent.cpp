@@ -30,7 +30,7 @@
 
 namespace pmacc
 {
-    ComputeEvent::ComputeEvent() : event(ComputeDeviceEvent(manager::Device<ComputeDevice>::get().current()))
+    ComputeEvent::ComputeEvent() : event(manager::Device<ComputeDevice>::get().current().makeEvent())
     {
         log(ggLog::CUDA_RT() + ggLog::EVENT(), "create event");
     }
@@ -68,7 +68,7 @@ namespace pmacc
         if(!finished)
         {
             assert(stream.has_value());
-            finished = alpaka::isComplete(event);
+            finished = event.isComplete();
         }
         return finished;
     }
