@@ -24,8 +24,7 @@
 #include "pmacc/alpakaHelper/acc.hpp"
 #include "pmacc/types.hpp"
 
-#include <type_traits>
-#include <utility>
+#include <algorithm>
 
 namespace pmacc
 {
@@ -33,22 +32,14 @@ namespace pmacc
     {
         namespace detail
         {
-            /** Device kind of the build's compute device (e.g. deviceKind::Cpu / NvidiaGpu / AmdGpu). */
-            using ComputeDeviceKind = ALPAKA_TYPEOF(std::declval<ComputeDevice>().getDeviceKind());
-
-            /** Whether an AnyExecutor launch on this build resolves to a seq executor.
+            /** Compile-time safe upper bound on workers for the build's executor.
              *
-             * For every alpaka host (CPU) device, the executor alpaka::onHost::Queue selects for an
-             * AnyExecutor launch is a seq executor (CpuSerial / CpuOmpBlocks / CpuTbbBlocks), all of
-             * which launch with a block-thread extent of 1; GPU device kinds resolve to non-seq
-             * executors. So the device kind is an exact compile-time proxy for "the resolved executor
-             * is a seq executor" (alpaka::exec::isSeqExecutor_v). We key on the device kind rather than
-             * the resolved executor type only because ComputeDevice::DeviceHandle (needed to call
-             * alpaka::onHost::supportedExecutors at compile time) is private.
+             * Delegates to alpaka::onHost::getMaxThreadsPerBlock, which returns the minimum guaranteed
+             * threads-per-block for the build's API/device-kind/executor combination. The runtime device may
+             * support more, but this is just a compile-time safety net for the ThreadSpec-based launch path.
              */
-            inline constexpr bool clampWorkersToOne
-                = std::is_same_v<ComputeDeviceKind, ::alpaka::deviceKind::Cpu>
-                  || std::is_same_v<ComputeDeviceKind, ::alpaka::deviceKind::NumaCpu>;
+            inline constexpr uint32_t currentMaxWorkers
+                = ::alpaka::onHost::getMaxThreadsPerBlock(computeApi, computeDeviceKind, computeExec);
         } // namespace detail
 
         /** Get number of workers
@@ -56,28 +47,18 @@ namespace pmacc
          * the number of workers for a kernel depending on the used accelerator
          *
          * @tparam T_maxWorkers the maximum number of workers
-         * @return @p ::value number of workers
+         * @return @p ::value number of workers, clamped to the backend's compile-time maximum
          *
-         * @warning This is a stopgap and is intentionally brittle. It collapses to exactly
-         *          1 worker for *any* seq executor and derives that executor from the global
-         *          pmacc::ComputeDevice (i.e. it only models the AnyExecutor launch path).
-         *          This breaks as soon as either of the following becomes true:
-         *            - a CPU/host alpaka executor is selected that runs more than one thread
-         *              per block: the real worker count is then that thread count, not 1, and
-         *              hard-coding 1 leaves the other threads idle (under-subscription); or
-         *            - the lockstep launch gains the planned per-kernel-launch executor
-         *              option (a compile-time T_Executor): this trait ignores that per-launch
-         *              executor and keeps clamping based on ComputeDevice, so a launch with an
-         *              executor whose real worker count differs from both 1 and blockDomSize
-         *              will be wrong.
-         *          The correct fix is to key the worker count on the *actual* executor used
-         *          for the launch and on that executor's real threads-per-block, instead of
-         *          this global seq/non-seq catch-all. See @ref detail::clampWorkersToOne.
+         * @warning This keys on the build's global pmacc::ComputeExec, so it is only correct while
+         *          every launch uses that executor. This trait would ignore per-launch executors if/when they are
+         *          possible in the future and keep deciding based on ComputeExec, so a launch with a different
+         *          executor would be wrong. The fix is then to key the worker count on the *actual* executor used
+         *          for the launch.
          */
         template<uint32_t T_maxWorkers>
         struct GetNumWorkers
         {
-            static constexpr uint32_t value = detail::clampWorkersToOne ? 1u : T_maxWorkers;
+            static constexpr uint32_t value = std::min(T_maxWorkers, detail::currentMaxWorkers);
         };
     } // namespace traits
 } // namespace pmacc
