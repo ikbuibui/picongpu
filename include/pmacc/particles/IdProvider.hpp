@@ -48,6 +48,18 @@ namespace pmacc
         uint64_t* nextId;
     };
 
+    namespace detail
+    {
+        struct FetchIncKernel
+        {
+            template<typename T_Worker>
+            HDINLINE void operator()(T_Worker const& worker, IdGenerator idGenerator, uint64_t* nextId) const
+            {
+                *nextId = idGenerator.fetchInc(worker);
+            }
+        };
+    } // namespace detail
+
     class IdProvider : public ISimulationData
     {
     public:
@@ -89,9 +101,8 @@ namespace pmacc
         {
             HostDeviceBuffer<uint64_t, 1> newIdBuf(DataSpace<1>(1));
 
-            auto kernel = [] ALPAKA_FN_ACC(auto const& worker, auto idGenerator, uint64_t* nextId) -> void
-            { *nextId = idGenerator.fetchInc(worker); };
-            PMACC_LOCKSTEP_KERNEL(kernel).config<1>(1)(getDeviceGenerator(), newIdBuf.getDeviceBuffer().data());
+            PMACC_LOCKSTEP_KERNEL(detail::FetchIncKernel{})
+                .config<1>(1)(getDeviceGenerator(), newIdBuf.getDeviceBuffer().data());
             newIdBuf.deviceToHost();
             return *newIdBuf.getHostBuffer().data();
         }
