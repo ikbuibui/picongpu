@@ -1,0 +1,99 @@
+/* Copyright 2024 René Widera
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
+#pragma once
+
+#include "alpaka/api/host/IdxLayer.hpp"
+#include "alpaka/api/host/block/mem/SingleThreadStaticShared.hpp"
+#include "alpaka/api/host/block/sync/NoOp.hpp"
+#include "alpaka/api/host/hwloc/utility.hpp"
+#include "alpaka/core/Dict.hpp"
+#include "alpaka/meta/NdLoop.hpp"
+#include "alpaka/onAcc/Acc.hpp"
+#include "alpaka/onHost/ThreadSpec.hpp"
+#include "alpaka/tag.hpp"
+
+#include <cassert>
+#include <tuple>
+#include <type_traits>
+
+namespace alpaka::onHost
+{
+    namespace cpu
+    {
+        template<onHost::concepts::ThreadSpec T_ThreadSpec>
+        struct Serial
+        {
+            using NumThreadsVecType = typename T_ThreadSpec::NumThreadsVecType;
+
+            constexpr Serial(T_ThreadSpec threadBlocking, uint32_t numaIdx, bool setThreadAffinity)
+                : m_threadBlocking{std::move(threadBlocking)}
+                , m_numaIdx{numaIdx}
+                , m_setThreadAffinity{setThreadAffinity}
+            {
+                if(m_threadBlocking.getNumThreads().product() != 1u)
+                {
+                    throw std::runtime_error("Thread block extent must be 1.");
+                }
+            }
+
+            void operator()(auto const& kernelBundle, auto const& dict) const
+            {
+                if(m_setThreadAffinity)
+                    internal::hwloc::setThreadAffinity(m_numaIdx);
+                // copy from num blocks to derive correct index type
+                auto blockIdx = m_threadBlocking.getNumBlocks();
+                constexpr uint32_t simdWidth
+                    = alpaka::getArchSimdWidth<uint8_t>(api::host, ALPAKA_TYPEOF(dict[object::deviceKind]){});
+                auto blockSharedMem = onAcc::cpu::SingleThreadStaticShared<simdWidth>{};
+
+                auto const blockLayerEntry = DictEntry{
+                    layer::block,
+                    onAcc::cpu::GenericLayer{std::cref(blockIdx), std::cref(m_threadBlocking.getNumBlocks())}};
+                auto const threadLayerEntry = DictEntry{layer::thread, onAcc::cpu::OneLayer<NumThreadsVecType>{}};
+                auto const blockSharedMemEntry = DictEntry{layer::shared, std::ref(blockSharedMem)};
+                auto const blockSyncEntry = DictEntry{action::threadBlockSync, onAcc::cpu::NoOp{}};
+
+                // dynamic shared mem
+                uint32_t blockDynSharedMemBytes = onHost::getDynSharedMemBytes(m_threadBlocking, kernelBundle);
+                auto const blockDynSharedMemEntry = DictEntry{layer::dynShared, std::ref(blockSharedMem)};
+                auto const blockDynSharedMemBytesEntry
+                    = DictEntry{object::dynSharedMemBytes, std::ref(blockDynSharedMemBytes)};
+
+                /* Only add dynamic shared memory objects if defined by the user, if not we will get a clean static
+                 * assert if the kernel tries to access dynamic shared memory */
+                auto additionalDict = conditionalAppendDict<
+                    trait::HasUserDefinedDynSharedMemBytes<T_ThreadSpec, ALPAKA_TYPEOF(kernelBundle)>::value>(
+                    dict,
+                    Dict{blockDynSharedMemEntry, blockDynSharedMemBytesEntry});
+
+                auto const warpSizeEntry = DictEntry{object::warpSize, std::integral_constant<uint32_t, 1u>{}};
+
+                auto acc = onAcc::Acc(joinDict(
+                    Dict{blockLayerEntry, threadLayerEntry, blockSharedMemEntry, blockSyncEntry, warpSizeEntry},
+                    additionalDict));
+                meta::ndLoopIncIdx(
+                    blockIdx,
+                    m_threadBlocking.getNumBlocks(),
+                    [&](auto const&)
+                    {
+                        kernelBundle(acc);
+                        acc[layer::shared].reset();
+                    });
+            }
+
+            T_ThreadSpec m_threadBlocking;
+            uint32_t m_numaIdx;
+            bool m_setThreadAffinity;
+        };
+    } // namespace cpu
+
+    inline auto makeAcc(
+        alpaka::onHost::concepts::ThreadSpec auto const& threadSpec,
+        uint32_t numaIdx,
+        bool setThreadAffinity) requires std::same_as<ALPAKA_TYPEOF(threadSpec.getExecutor()), exec::CpuSerial>
+    {
+        return cpu::Serial(threadSpec, numaIdx, setThreadAffinity);
+    }
+} // namespace alpaka::onHost

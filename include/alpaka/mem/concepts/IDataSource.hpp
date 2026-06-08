@@ -1,0 +1,92 @@
+/* Copyright 2025 Simeon Ehrig
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
+#pragma once
+
+#include "alpaka/Vec.hpp"
+#include "alpaka/mem/Alignment.hpp"
+#include "alpaka/mem/concepts/AssignableFrom.hpp"
+#include "alpaka/mem/concepts/ExpectedValueType.hpp"
+#include "alpaka/trait.hpp"
+
+#include <concepts>
+
+namespace alpaka::concepts
+{
+    namespace impl
+    {
+        /** @brief Interface concept for objects describing a multidimensional data source.
+         *
+         * @details
+         *
+         * An object that implements the interface returns a value for a multidimensional index. Therefore, it behaves
+         * like multidimensional memory that can only be read. It is not permitted to write a new value to an index
+         * position. An `IDataSource` object has an immutable, fixed multidimensional size. The `IDataSource` object is
+         * not required to reference the storage. It may create or calculate the data instead of reading it from
+         * memory.
+         *
+         * The immutable extent is required for algorithms such as `alpaka::onHost::transform`.
+         *
+         * @param t Object that implements the `IDataSource` interface. May or may not have a const modifier.
+         * @param vec Vector with the same number of elements as the dimension of the `IDataSource` like object.
+         * Used to call the access operator.
+         *
+         *
+         * @section membertypes Member types
+         * - <b>T::value_type</b>: The element type. May or may not be const.
+         * - <b>T::index_type</b>: The index type of the pitch.
+         *
+         * @note The access operator [] with an integral as an argument is only available if the dimension is one.
+         **/
+        template<typename T>
+        concept IDataSource = requires(T t, alpaka::Vec<typename T::index_type, T::dim()> vec) {
+            typename T::value_type;
+            typename T::index_type;
+
+            /* Non const data sources must be assignable.
+             * You can NOT assign const data sources to non const dta sources because this will remove the const-ness.
+             */
+            requires concepts::AssignableFrom<std::decay_t<T>, std::decay_t<T>>;
+
+            // only the non-const type is moveable
+            requires std::movable<std::remove_const_t<T>>;
+
+            /// The bool operator returns true if the access operator returns valid values. For example, memory
+            /// access may be invalid after moving the DataSource.
+            static_cast<bool>(t);
+
+            { T::dim() } -> std::same_as<uint32_t>;
+
+            /* check multi-dimensional access operator
+             if T has no reference type, the access operator needs to return a copy
+             `|| requires { typename T::reference; }` is only required, that the statement becomes true in any case
+            */
+            requires (!requires { typename T::reference; } &&
+                requires { { t[vec] } -> std::same_as<typename T::value_type>;})
+                || requires { typename T::reference; };
+
+            /* check 1-dimensional access operator
+            checking for (T::dim() != 1u) disables the access operator requirement for multidimensional
+            IDataSources */
+            requires
+                      (T::dim() != 1u) ||
+                      (T::dim() == 1u && !requires { typename T::reference; } &&
+                          requires {{ t[0] } -> std::same_as<typename T::value_type>; })
+                      || requires { typename T::reference; };
+
+            // typically the alignment of the value_type.
+            { t.getAlignment() } -> alpaka::concepts::Alignment;
+            /// @todo implement concept alpaka::concepts::Extents and use it as return value
+            t.getExtents();
+            /// @todo implement concept alpaka::concepts::Pitches and use it as return value
+            t.getPitches();
+        };
+    } // namespace impl
+
+    template<typename T, typename T_ValueType = alpaka::NotRequired>
+    concept IDataSource = requires {
+        requires impl::IDataSource<std::remove_reference_t<T>>;
+        requires ExpectedValueType<trait::GetValueType_t<std::decay_t<T>>, T_ValueType>;
+    };
+} // namespace alpaka::concepts
