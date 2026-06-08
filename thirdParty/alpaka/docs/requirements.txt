@@ -1,0 +1,15 @@
+docutils
+markupsafe
+myst-parser
+pygments
+sphinx_rtd_theme
+breathe
+sphinx
+sphinxcontrib.programoutput
+sphinxcontrib-napoleon
+sphinx-autoapi
+typeguard
+# generate plots
+matplotlib
+scipy
+numpy

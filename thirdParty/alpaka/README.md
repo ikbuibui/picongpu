@@ -1,0 +1,49 @@
+**alpaka** - Abstraction Library for Parallel Kernel Acceleration
+=================================================================
+
+[![License](https://img.shields.io/badge/license-MPL--2.0-6c757d.svg)](https://www.mozilla.org/en-US/MPL/2.0/)
+[![CI](https://github.com/alpaka-group/alpaka3/actions/workflows/ci.yml/badge.svg?branch=dev&event=push)](https://github.com/alpaka-group/alpaka3/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-Read%20the%20Docs-0f766e.svg)](https://alpaka3.readthedocs.io)
+[![User API](https://img.shields.io/badge/User%20API-Doxygen-2563eb.svg)](https://alpaka3.readthedocs.io/en/latest/doxygen/namespaces.html)
+[![Dev API](https://img.shields.io/badge/Dev%20API-Doxygen-7c3aed.svg)](https://alpaka3.readthedocs.io/en/latest/doxygen_dev/namespaces.html)
+[![C++20](https://img.shields.io/badge/C%2B%2B-20-ea580c.svg)](https://isocpp.org/std/the-standard)
+[![Platforms](https://img.shields.io/badge/platform-linux-4b5563.svg)](https://github.com/alpaka-group/alpaka3)
+[![Architectures](https://img.shields.io/badge/architectures-x86%20%7C%20ARM%20%7C%20RISC--V-0284c7.svg)](#)
+[![Accelerators](https://img.shields.io/badge/accelerators-NVIDIA%20GPU%20%7C%20AMD%20GPU%20%7C%20Intel%20GPU-0891b2.svg)](#)
+
+![alpaka](docs/logo/alpaka_401x135.png)
+
+The **alpaka** library is a header-only C++20 abstraction library for accelerator development.
+
+Its aim is to provide performance portability across accelerators by abstracting the underlying levels of parallelism.
+
+The library is platform-independent and supports the concurrent and cooperative use of multiple devices, including host CPUs (x86, ARM, RISC-V, and Power8+) and GPUs from different vendors (NVIDIA, AMD, and Intel).
+A variety of accelerator backends—CUDA, HIP, SYCL, OpenMP, and serial execution—are available and can be selected based on the target device.
+Only a single implementation of a user kernel is required, expressed as a function object with a standardized interface.
+This eliminates the need to write specialized CUDA, HIP, SYCL, OpenMP, or threading code.
+Moreover, multiple accelerator backends can be combined to target different vendor hardware within a single system and even within a single application.
+
+The abstraction is based on a virtual index domain decomposed into equally sized chunks called frames.
+alpaka provides a uniform abstraction to traverse these frames, independent of the underlying hardware.
+Algorithms to be parallelized map the chunked index domain and native worker threads onto the data, expressing the computation as kernels that are executed in parallel threads (SIMT), thereby also leveraging SIMD units.
+Unlike native parallelism models such as CUDA, HIP, and SYCL, alpaka kernels are not restricted to three dimensions.
+Explicit caching of data within a frame via shared memory allows developers to fully unleash the performance of the compute device.
+Additionally, alpaka offers primitive functions such as iota, transform, transform-reduce, reduce, and concurrent, simplifying the development of portable high-performance applications.
+Host, device, mapped, and managed multi-dimensional views provide a natural way to operate on data.
+
+This repository separates the development of [mainline alpaka](https://github.com/alpaka-group/alpaka) from the upcoming major release, which introduces breaking changes compared to previous versions.
+
+Software License
+----------------
+
+**alpaka** is licensed under **MPL-2.0**.
+
+Documentation
+-------------
+
+The documentation is available at: https://alpaka3.readthedocs.io
+
+Citation
+--------
+
+If you use **alpaka** in research, please cite it using the metadata in [CITATION.cff](CITATION.cff).
