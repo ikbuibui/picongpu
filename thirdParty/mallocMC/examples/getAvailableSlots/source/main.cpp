@@ -10,12 +10,12 @@
 #include <mallocMC/alignmentPolicies/Shrink.hpp>
 #include <mallocMC/allocator.hpp>
 #include <mallocMC/creationPolicies/FlatterScatter.hpp>
+#include <mallocMC/creationPolicies/GallatinCuda.hpp>
 #include <mallocMC/distributionPolicies/Noop.hpp>
 #include <mallocMC/oOMPolicies/ReturnNull.hpp>
 #include <mallocMC/reservePoolPolicies/AlpakaBuf.hpp>
 #include <mallocMC/reservePoolPolicies/Noop.hpp>
 
-#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -45,28 +45,35 @@ struct AlignmentConfig
     static constexpr auto dataAlignment = 16;
 };
 
-template<typename TExecutor>
-auto makeWorkDiv(auto const& devAcc, std::uint32_t numWorkers)
+struct GetAvailableSlotsKernel
 {
-    auto threads = std::max<Idx>(
-        1u,
-        std::min<Idx>(static_cast<Idx>(numWorkers), devAcc.getDeviceProperties().maxThreadsPerBlock));
-    auto blocks = std::max<Idx>(1u, static_cast<Idx>((numWorkers + threads - 1u) / threads));
-    if constexpr(
-        std::is_same_v<TExecutor, alpaka::exec::CpuSerial>
-#ifndef ALPAKA_DISABLE_EXEC_CpuOmpBlocks
-        || std::is_same_v<TExecutor, alpaka::exec::CpuOmpBlocks>
-#endif
-#ifndef ALPAKA_DISABLE_EXEC_CpuTbbBlocks
-        || std::is_same_v<TExecutor, alpaka::exec::CpuTbbBlocks>
-#endif
-    )
+    template<typename TAcc, typename TAllocHandle, typename TSharedPtr>
+    ALPAKA_FN_ACC void operator()(TAcc const& acc, TAllocHandle allocHandle, TSharedPtr sharedPtr, std::uint32_t count)
+        const
     {
-        blocks *= threads;
-        threads = 1u;
+        auto const [nativeId] = acc.getIdxWithin(alpaka::onAcc::origin::grid, alpaka::onAcc::unit::threads);
+        if(nativeId == 0U)
+            sharedPtr[0] = static_cast<int*>(allocHandle.malloc(acc, sizeof(int) * count));
+        alpaka::onAcc::syncBlockThreads(acc);
+
+        auto const slots = allocHandle.getAvailableSlots(acc, 1U);
+        for(auto [id] : alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{count}))
+        {
+            if(sharedPtr[0] != nullptr)
+            {
+                sharedPtr[0][id] = static_cast<int>(id);
+                printf("id: %u array: %d slots %u\n", id, sharedPtr[0][id], slots);
+            }
+            else
+            {
+                printf("error: device size allocation failed");
+            }
+        }
+        alpaka::onAcc::syncBlockThreads(acc);
+        if(nativeId == 0U && sharedPtr[0] != nullptr)
+            allocHandle.free(acc, sharedPtr[0]);
     }
-    return alpaka::onHost::ThreadSpec{alpaka::Vec{blocks}, alpaka::Vec{threads}, TExecutor{}};
-}
+};
 
 template<
     typename TExecutor,
@@ -90,35 +97,17 @@ auto runExample(auto const& deviceSpec, TExecutor exec) -> int
     auto devAcc = devSelector.makeDevice(0);
     auto queue = devAcc.makeQueue(alpaka::queueKind::blocking);
     Allocator alloc(devAcc, queue, 64U * 1024U * 1024U);
-
-    auto resultAcc = alpaka::onHost::alloc<int>(devAcc, alpaka::Vec{Idx{32}});
-    auto resultHost = alpaka::onHost::allocHostLike(resultAcc);
-
-    auto workDiv = makeWorkDiv<TExecutor>(devAcc, 32U);
-    auto kernel = [] ALPAKA_FN_ACC(auto const& acc, auto allocHandle, auto out)
-    {
-        auto id = static_cast<std::uint32_t>(
-            acc.getIdxWithin(alpaka::onAcc::origin::grid, alpaka::onAcc::unit::threads)[0]);
-        auto ptr = static_cast<int*>(allocHandle.malloc(acc, sizeof(int)));
-        out[id] = (ptr != nullptr) ? static_cast<int>(id) : -1;
-        if(ptr != nullptr)
-            allocHandle.free(acc, ptr);
-    };
-
-    auto const before = alloc.getAvailableSlots(devAcc, queue, 1U);
-    queue.enqueue(workDiv, alpaka::KernelBundle{kernel, alloc.getAllocatorHandle(), resultAcc});
-    alpaka::onHost::memcpy(queue, resultHost, resultAcc);
-    alpaka::onHost::wait(queue);
-    auto const after = alloc.getAvailableSlots(devAcc, queue, 1U);
+    auto sharedPtrAcc = alpaka::onHost::alloc<int*>(devAcc, alpaka::Vec{Idx{1}});
 
     std::cout << "Using " << deviceSpec.getName() << " with " << alpaka::onHost::demangledName(exec) << '\n';
-    std::cout << "slots before=" << before << " after=" << after << '\n';
+    constexpr auto numWorkers = 32U;
 
-    for(Idx i = 0; i < 32u; ++i)
-    {
-        if(resultHost[i] < 0)
-            return EXIT_FAILURE;
-    }
+    auto frameSpec = alpaka::onHost::FrameSpec{alpaka::Vec{Idx{1}}, alpaka::Vec{Idx{numWorkers}}, exec};
+    queue.enqueue(
+        frameSpec,
+        alpaka::KernelBundle{GetAvailableSlotsKernel{}, alloc.getAllocatorHandle(), sharedPtrAcc, numWorkers});
+    alpaka::onHost::wait(queue);
+    std::cout << "Slots from Host: " << alloc.getAvailableSlots(devAcc, queue, 1U) << '\n';
     return EXIT_SUCCESS;
 }
 
@@ -134,25 +123,35 @@ auto main() -> int
             if(result != EXIT_SUCCESS)
                 return;
 
+            std::cout << alpaka::onHost::demangledName<FlatterScatter<FlatterScatterHeapConfig>>() << ":\n";
             result = runExample<
                 Executor,
                 FlatterScatter<FlatterScatterHeapConfig>,
                 mallocMC::ReservePoolPolicies::AlpakaBuf>(deviceSpec, exec);
             if(result != EXIT_SUCCESS)
                 return;
+            std::cout << alpaka::onHost::demangledName<Scatter<FlatterScatterHeapConfig>>() << ":\n";
             result = runExample<Executor, Scatter<FlatterScatterHeapConfig>, mallocMC::ReservePoolPolicies::AlpakaBuf>(
                 deviceSpec,
                 exec);
-#ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
+#if ALPAKA_LANG_CUDA
 #    ifdef mallocMC_HAS_Gallatin_AVAILABLE
             if(result == EXIT_SUCCESS)
             {
-                result = EXIT_SUCCESS;
+                std::cout << alpaka::onHost::demangledName<mallocMC::CreationPolicies::GallatinCuda<>>() << ":\n";
+                result = runExample<
+                    Executor,
+                    mallocMC::CreationPolicies::GallatinCuda<>,
+                    mallocMC::ReservePoolPolicies::Noop,
+                    mallocMC::AlignmentPolicies::Noop>(deviceSpec, exec);
             }
 #    endif
 #endif
             if(result == EXIT_SUCCESS)
+            {
+                std::cout << alpaka::onHost::demangledName<OldMalloc>() << ":\n";
                 result = runExample<Executor, OldMalloc, mallocMC::ReservePoolPolicies::Noop>(deviceSpec, exec);
+            }
         },
         alpaka::onHost::allBackends(alpaka::onHost::enabledDeviceSpecs, alpaka::exec::enabledExecutors));
     return result;
