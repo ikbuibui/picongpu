@@ -40,11 +40,6 @@ using mallocMC::CreationPolicies::FlatterScatterAlloc::BitMask;
 using mallocMC::CreationPolicies::FlatterScatterAlloc::BitMaskSize;
 using namespace std::chrono_literals;
 
-// The following test is a particular regression test which (in its current form) requires to be able to stop a
-// thread from the outside. This is not possible through the alpaka interface. Thus, we resort to running this with
-// `std::jthread` but we have to ensure that the alpaka atomics work. Thus, the ifdef.
-#ifdef ALPAKA_ACC_CPU_B_SEQ_T_THREADS_ENABLED
-
 TEST_CASE("Threaded BitMask")
 {
     BitMask mask{};
@@ -81,10 +76,3 @@ TEST_CASE("Threaded BitMask")
         noiseThread.request_stop();
     }
 }
-#else
-TEST_CASE("Threaded BitMask", "[!shouldfail]")
-{
-    FAIL("The Threaded BitMask regression test could not run because it is only available with the std::threads "
-         "backend enabled.");
-}
-#endif // ALPAKA_ACC_CPU_B_SEQ_T_THREADS_ENABLED

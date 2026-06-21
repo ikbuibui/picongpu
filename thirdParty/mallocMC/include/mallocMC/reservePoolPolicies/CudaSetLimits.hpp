@@ -28,7 +28,7 @@
 
 #pragma once
 
-#ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
+#if ALPAKA_LANG_CUDA
 
 #    include "CudaSetLimits.hpp"
 
