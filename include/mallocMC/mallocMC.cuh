@@ -27,7 +27,7 @@
 */
 
 #include "mallocMC/alignmentPolicies/Shrink.hpp"
-#include "mallocMC/creationPolicies/FlatterScatter.hpp"
+#include "mallocMC/creationPolicies/OldMalloc.hpp"
 #include "mallocMC/reservePoolPolicies/AlpakaBuf.hpp"
 
 #include <mallocMC/mallocMC.hpp>
@@ -46,11 +46,15 @@ namespace mallocMC
         using CudaExecutor = alpaka::exec::GpuCuda;
         using CudaAlpakaBuf = ReservePoolPolicies::AlpakaBuf;
 
+        struct CudaKernelContext
+        {
+        };
+
         /**
          * @brief Allocator template with hidden alpaka-specifics.
          */
         template<
-            typename T_CreationPolicy = CreationPolicies::FlatterScatter<>,
+            typename T_CreationPolicy = CreationPolicies::OldMalloc,
             typename T_DistributionPolicy = DistributionPolicies::Noop,
             typename T_OOMPolicy = OOMPolicies::ReturnNull,
             typename T_ReservePoolPolicy = CudaAlpakaBuf,
@@ -70,7 +74,7 @@ namespace mallocMC
          * everything on the device side, so you can get started allocating stuff.
          */
         template<
-            typename T_CreationPolicy = CreationPolicies::FlatterScatter<>,
+            typename T_CreationPolicy = CreationPolicies::OldMalloc,
             typename T_DistributionPolicy = DistributionPolicies::Noop,
             typename T_OOMPolicy = OOMPolicies::ReturnNull,
             typename T_ReservePoolPolicy = ReservePoolPolicies::AlpakaBuf,
@@ -107,7 +111,7 @@ namespace mallocMC
          * adding an accelerator internally before forwarding malloc/free calls to mallocMC.
          */
         template<
-            typename T_CreationPolicy = CreationPolicies::FlatterScatter<>,
+            typename T_CreationPolicy = CreationPolicies::OldMalloc,
             typename T_DistributionPolicy = DistributionPolicies::Noop,
             typename T_OOMPolicy = OOMPolicies::ReturnNull,
             typename T_ReservePoolPolicy = ReservePoolPolicies::AlpakaBuf,
@@ -139,7 +143,7 @@ namespace mallocMC
              */
             __device__ __forceinline__ void* malloc(size_t size)
             {
-                return deviceHandle.malloc(alpaka::onAcc::Acc{}, size);
+                return deviceHandle.malloc(CudaKernelContext{}, size);
             }
 
             /**
@@ -149,7 +153,7 @@ namespace mallocMC
              */
             __device__ __forceinline__ void free(void* ptr)
             {
-                deviceHandle.free(alpaka::onAcc::Acc{}, ptr);
+                deviceHandle.free(CudaKernelContext{}, ptr);
             }
 
             /**

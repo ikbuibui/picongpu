@@ -81,18 +81,13 @@ namespace mallocMC::CreationPolicies::FlatterScatterAlloc
         ALPAKA_FN_INLINE ALPAKA_FN_ACC static auto init(auto const& acc, void* accessBlocksPointer, auto heapSize)
             -> void
         {
-            auto const threadsInGrid = acc.getExtentsOf(alpaka::onAcc::origin::grid, alpaka::onAcc::unit::threads);
-            auto const numThreads = threadsInGrid.product();
-            auto const idx = static_cast<uint32_t>(alpaka::linearize(
-                threadsInGrid,
-                acc.getIdxWithin(alpaka::onAcc::origin::grid, alpaka::onAcc::unit::threads)));
             auto* accessBlocks = static_cast<MyAccessBlock*>(accessBlocksPointer);
 
-            for(uint32_t i = idx; i < numBlocks(heapSize) * MyAccessBlock::numPages(); i += numThreads)
+            for(auto [blockIdx, pageIdx] : alpaka::onAcc::makeIdxMap(
+                    acc,
+                    alpaka::onAcc::worker::threadsInGrid,
+                    alpaka::IdxRange{alpaka::Vec{numBlocks(heapSize), MyAccessBlock::numPages()}}))
             {
-                auto blockIdx = i / MyAccessBlock::numPages();
-                auto pageIdx = i % MyAccessBlock::numPages();
-
                 accessBlocks[blockIdx].init(acc, pageIdx);
             }
         }
@@ -343,7 +338,6 @@ namespace mallocMC::CreationPolicies::FlatterScatterAlloc
             Heap<T_HeapConfig, T_HashConfig, T_AlignmentPolicy>::init(acc, m_heapmem, m_memsize);
         }
     };
-
 } // namespace mallocMC::CreationPolicies::FlatterScatterAlloc
 
 namespace mallocMC::CreationPolicies
@@ -421,9 +415,11 @@ namespace mallocMC::CreationPolicies
                 return;
             }
             auto numPagesPerBlock = MyHeap::MyAccessBlock::numPages();
-            queue.enqueue(
-                alpaka::onHost::FrameSpec{alpaka::Vec{numBlocks}, alpaka::Vec{numPagesPerBlock}, TExecutor{}},
-                alpaka::KernelBundle{FlatterScatterAlloc::InitKernel{}, heap, pool, memsize});
+            auto frameSpec = alpaka::onHost::getFrameSpec<uint32_t>(
+                queue.getDevice(),
+                TExecutor{},
+                alpaka::Vec{numBlocks, numPagesPerBlock});
+            queue.enqueue(frameSpec, alpaka::KernelBundle{FlatterScatterAlloc::InitKernel{}, heap, pool, memsize});
             alpaka::onHost::wait(queue);
         }
 
@@ -479,6 +475,4 @@ namespace mallocMC::CreationPolicies
             using HashConfig = T_HashConfig;
         };
     };
-
-
 } // namespace mallocMC::CreationPolicies
