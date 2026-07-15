@@ -84,9 +84,11 @@ namespace pmacc::exec::detail
          *
          * @tparam T_Args types of the arguments
          * @param args arguments for the kernel functor
+         * @return the EventTask for the TaskKernel that was enqueued, so the caller can synchronise on it specifically
+         *         rather than waiting for all tasks globally.
          */
         template<typename... T_Args>
-        HINLINE void operator()(T_Args&&... args) const
+        HINLINE auto operator()(T_Args&&... args) const -> pmacc::EventTask
         {
             std::string const kernelName = typeid(m_kernel).name();
             std::string const kernelInfo = kernelName + std::string(" [") + m_file + std::string(":")
@@ -118,6 +120,9 @@ namespace pmacc::exec::detail
             PMACC_CHECK_KERNEL_MSG(
                 alpaka::wait(manager::Device<ComputeDevice>::get().current());
                 , std::string("Crash after kernel activation") + kernelInfo);
+            // Id-based handle: safe to query/wait on even after the Manager deletes the finished task,
+            // unlike the raw TaskKernel pointer.
+            return pmacc::EventTask{taskKernel->getId()};
         }
     };
 
