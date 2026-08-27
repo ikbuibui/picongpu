@@ -112,6 +112,13 @@ foreach(dim 2 3)
             NAME "${testCase}-${dim}D"
             COMMAND mpiexec ${MPI_RUNTIME_FLAGS} -n 1 ./${testExe}
         )
+        if(testCase STREQUAL "CommunicatorMPI")
+            add_test(
+                NAME "${testCase}-${dim}D-4-ranks"
+                COMMAND mpiexec ${MPI_RUNTIME_FLAGS} -n 4 ./${testExe}
+            )
+            set_tests_properties("${testCase}-${dim}D-4-ranks" PROPERTIES PROCESSORS 4 TIMEOUT 30)
+        endif()
     endforeach()
     string(REPLACE "-DTEST_DIM=${dim}" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 endforeach()

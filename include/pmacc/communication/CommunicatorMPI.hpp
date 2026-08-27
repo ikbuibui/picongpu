@@ -30,6 +30,7 @@
 
 #include <utility>
 
+#include <caravan/mpi.hpp>
 #include <mpi.h>
 
 namespace pmacc
@@ -89,6 +90,14 @@ namespace pmacc
          */
         void init(DataSpace<DIM3> numberProcesses, DataSpace<DIM3> periodic);
 
+        /** initialize from MPI-thread-owned immutable topology data */
+        void init(caravan::MpiExecutor& mpiExecutor, DataSpace<DIM3> numberProcesses, DataSpace<DIM3> periodic);
+
+        caravan::CommunicatorId getCommunicatorId() const
+        {
+            return communicatorId;
+        }
+
         /*! returns a rank number (0-n) for each host
          *
          * E.g. if 8 GPUs are on 2 Hosts (4 GPUs each), the GPUs on each host will get hostrank 0 to 3
@@ -123,6 +132,22 @@ namespace pmacc
         //! description in ICommunicator
         MPI_Request* startReceive(uint32_t ex, char* recv_data, size_t recv_data_max, uint32_t tag) override;
 
+        caravan::Future<caravan::SendResult> startSendAsync(
+            uint32_t ex,
+            char const* sendData,
+            size_t sendBytes,
+            uint32_t tag) override;
+
+        caravan::Future<caravan::ReceiveResult> startReceiveAsync(
+            uint32_t ex,
+            char* receiveData,
+            size_t receiveBytes,
+            uint32_t tag) override;
+
+        bool usesMpiExecutor() const override
+        {
+            return mpiExecutor != nullptr;
+        }
 
         //! description in ICommunicator
         bool slide() override;
@@ -154,12 +179,16 @@ namespace pmacc
     private:
         //! coordinates in GPU-Grid [0:cx-1,0:cy-1,0:cz-1]
         DataSpace<DIM> coordinates;
+        DataSpace<DIM> baseCoordinates;
 
         DataSpace<DIM3> periodic;
         //! MPI communicator (currently MPI_COMM_WORLD)
-        MPI_Comm topology;
+        MPI_Comm topology{MPI_COMM_NULL};
         //! Communicator to handle signals
-        MPI_Comm commSignal;
+        MPI_Comm commSignal{MPI_COMM_NULL};
+        //! Opaque communicator owned by the Caravan MPI thread.
+        caravan::CommunicatorId communicatorId{caravan::worldCommunicator};
+        caravan::MpiExecutor* mpiExecutor{nullptr};
         //! array for exchangetype-to-rank conversion @see ExchangeTypeToRank
         int ranks[27];
         //! size of pmacc [cx,cy,cz]

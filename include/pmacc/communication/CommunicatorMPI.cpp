@@ -107,6 +107,37 @@ namespace pmacc
     }
 
     template<unsigned DIM>
+    void CommunicatorMPI<DIM>::init(
+        caravan::MpiExecutor& executor,
+        DataSpace<DIM3> numberProcesses,
+        DataSpace<DIM3> periodic)
+    {
+        this->periodic = periodic;
+        mpiExecutor = &executor;
+        yoffset = 0;
+        for(unsigned dimension = 0; dimension < DIM3; ++dimension)
+            dims[dimension] = numberProcesses[dimension];
+
+        std::vector<int> dimensions(DIM);
+        std::vector<bool> periods(DIM);
+        for(unsigned dimension = 0; dimension < DIM; ++dimension)
+        {
+            dimensions[dimension] = numberProcesses[dimension];
+            periods[dimension] = periodic[dimension] != 0;
+        }
+
+        auto const snapshot
+            = executor.createCartesian(caravan::readyEvent(), std::move(dimensions), std::move(periods)).result();
+        communicatorId = snapshot.communicator;
+        mpiRank = snapshot.rank;
+        mpiSize = snapshot.size;
+        hostRank = snapshot.hostLocalRank;
+        for(unsigned dimension = 0; dimension < DIM; ++dimension)
+            baseCoordinates[dimension] = snapshot.coordinates[dimension];
+        updateCoordinates();
+    }
+
+    template<unsigned DIM>
     MPI_Request* CommunicatorMPI<DIM>::startSend(
         uint32_t ex,
         char const* send_data,
@@ -144,6 +175,44 @@ namespace pmacc
             request));
 
         return request;
+    }
+
+    template<unsigned DIM>
+    caravan::Future<caravan::SendResult> CommunicatorMPI<DIM>::startSendAsync(
+        uint32_t ex,
+        char const* sendData,
+        size_t sendBytes,
+        uint32_t tag)
+    {
+        if(!mpiExecutor)
+            throw std::logic_error("CommunicatorMPI is not attached to Caravan");
+        // ponytail: Exchange owns this allocation until its legacy task completes; use allocation leases in Phase 4.
+        auto lease = std::shared_ptr<void>{const_cast<char*>(sendData), [](void*) {}};
+        return mpiExecutor->send(
+            caravan::readyEvent(),
+            caravan::BufferLease{std::move(lease), const_cast<char*>(sendData), sendBytes},
+            caravan::Peer{ExchangeTypeToRank(ex)},
+            caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
+            communicatorId);
+    }
+
+    template<unsigned DIM>
+    caravan::Future<caravan::ReceiveResult> CommunicatorMPI<DIM>::startReceiveAsync(
+        uint32_t ex,
+        char* receiveData,
+        size_t receiveBytes,
+        uint32_t tag)
+    {
+        if(!mpiExecutor)
+            throw std::logic_error("CommunicatorMPI is not attached to Caravan");
+        // ponytail: Exchange owns this allocation until its legacy task completes; use allocation leases in Phase 4.
+        auto lease = std::shared_ptr<void>{receiveData, [](void*) {}};
+        return mpiExecutor->receive(
+            caravan::readyEvent(),
+            caravan::BufferLease{std::move(lease), receiveData, receiveBytes},
+            caravan::Peer{ExchangeTypeToRank(ex)},
+            caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
+            communicatorId);
     }
 
     // description in ICommunicator
@@ -203,10 +272,18 @@ namespace pmacc
     {
         // get own coordinates
         int coords[DIM];
-        int rank;
+        int rank = mpiRank;
 
-        MPI_CHECK(MPI_Comm_rank(topology, &rank));
-        MPI_CHECK(MPI_Cart_coords(topology, rank, DIM, coords));
+        if(mpiExecutor)
+        {
+            for(unsigned dimension = 0; dimension < DIM; ++dimension)
+                coords[dimension] = baseCoordinates[dimension];
+        }
+        else
+        {
+            MPI_CHECK(MPI_Comm_rank(topology, &rank));
+            MPI_CHECK(MPI_Cart_coords(topology, rank, DIM, coords));
+        }
 
         if(DIM >= DIM2)
         {
@@ -265,7 +342,19 @@ namespace pmacc
                 if(dims[1] > 1)
                     mcoords[1] = (mcoords[1] - yoffset) % dims[1];
 
-                MPI_CHECK(MPI_Cart_rank(topology, mcoords, &ranks[i]));
+                if(mpiExecutor)
+                {
+                    ranks[i] = 0;
+                    for(unsigned dimension = 0; dimension < DIM; ++dimension)
+                    {
+                        int coordinate = mcoords[dimension] % dims[dimension];
+                        if(coordinate < 0)
+                            coordinate += dims[dimension];
+                        ranks[i] = ranks[i] * dims[dimension] + coordinate;
+                    }
+                }
+                else
+                    MPI_CHECK(MPI_Cart_rank(topology, mcoords, &ranks[i]));
                 communicationMask = communicationMask + Mask(i);
             }
             else

@@ -8,8 +8,12 @@ recorded in `docs/CARAVAN_PHASE0.md`; target GPU measurements remain open.
 Phase 2 has started with the dedicated `MpiRuntime`, nonblocking barrier and
 all-reduce progress, point-to-point futures, receive metadata, buffer leases,
 and MPI-owned Cartesian communicators with immutable topology snapshots. PMacc
-startup migration is next; target-GPU validation is deferred as described in
-the migration gate below.
+can now attach its environment to the runtime and initialize `CommunicatorMPI`
+from an immutable snapshot without application-thread topology calls. Legacy
+`TaskSendMPI` and `TaskReceiveMPI` can poll Caravan point-to-point futures while
+unchanged PMacc startup remains available during migration. Migrating the
+example entry points and remaining MPI operations is next; target-GPU validation
+is deferred as described in the migration gate below.
 
 This plan targets the PMacc event system.
 Breaking PMacc and PIConGPU interfaces is allowed during the migration.
