@@ -71,6 +71,24 @@ namespace caravan
         std::size_t m_bytes;
     };
 
+    enum class ScalarType : std::uint8_t
+    {
+        int32,
+        uint32,
+        int64,
+        uint64,
+        float32,
+        float64
+    };
+
+    enum class ReduceOperation : std::uint8_t
+    {
+        sum,
+        minimum,
+        maximum,
+        product
+    };
+
     struct SendResult
     {
         std::size_t bytes;
@@ -81,6 +99,11 @@ namespace caravan
         Peer source;
         MessageTag tag;
         std::size_t bytes;
+    };
+
+    struct AllReduceResult
+    {
+        std::size_t elements;
     };
 
     struct TopologySnapshot
@@ -110,6 +133,14 @@ namespace caravan
             BufferLease buffer,
             Peer source,
             MessageTag tag,
+            CommunicatorId communicator = worldCommunicator);
+
+        Future<AllReduceResult> allReduce(
+            Event dataReady,
+            BufferLease input,
+            BufferLease output,
+            ScalarType type,
+            ReduceOperation operation,
             CommunicatorId communicator = worldCommunicator);
 
         Event barrier(Event predecessor, CommunicatorId communicator = worldCommunicator);

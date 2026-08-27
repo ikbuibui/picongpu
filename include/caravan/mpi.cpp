@@ -99,6 +99,32 @@ namespace caravan
             return result;
         }
 
+        Future<AllReduceResult> allReduce(
+            Event predecessor,
+            BufferLease input,
+            BufferLease output,
+            ScalarType type,
+            ReduceOperation operation,
+            CommunicatorId communicator)
+        {
+            Promise<AllReduceResult> completion;
+            auto result = completion.future();
+            auto const elementBytes = scalarSize(type);
+            if(elementBytes == 0u || !validBuffer(input) || !validBuffer(output) || input.bytes() % elementBytes != 0u
+               || output.bytes() < input.bytes() || communicator != worldCommunicator)
+            {
+                completion.setFailed(std::make_exception_ptr(std::invalid_argument("Invalid Caravan MPI all-reduce")));
+                return result;
+            }
+            submitAfter(
+                std::move(predecessor),
+                completion,
+                [this, input = std::move(input), output = std::move(output), type, operation](
+                    Promise<AllReduceResult> result) mutable
+                { startAllReduce(std::move(result), std::move(input), std::move(output), type, operation); });
+            return result;
+        }
+
         Event barrier(Event predecessor, CommunicatorId communicator)
         {
             EventSource completion;
@@ -177,17 +203,41 @@ namespace caravan
             Promise<ReceiveResult> output;
         };
 
-        using ActiveCompletion = std::variant<BarrierCompletion, SendCompletion, ReceiveCompletion>;
+        struct AllReduceCompletion
+        {
+            Promise<AllReduceResult> output;
+            std::size_t elements;
+        };
+
+        using ActiveCompletion
+            = std::variant<BarrierCompletion, SendCompletion, ReceiveCompletion, AllReduceCompletion>;
 
         struct ActiveOperation
         {
             ActiveCompletion completion;
-            std::optional<BufferLease> buffer;
+            std::optional<BufferLease> firstBuffer;
+            std::optional<BufferLease> secondBuffer;
         };
 
         static bool validBuffer(BufferLease const& buffer)
         {
             return buffer.valid() && buffer.bytes() <= static_cast<std::size_t>(INT_MAX);
+        }
+
+        static std::size_t scalarSize(ScalarType type)
+        {
+            switch(type)
+            {
+            case ScalarType::int32:
+            case ScalarType::uint32:
+            case ScalarType::float32:
+                return 4u;
+            case ScalarType::int64:
+            case ScalarType::uint64:
+            case ScalarType::float64:
+                return 8u;
+            }
+            return 0u;
         }
 
         template<typename T_Output, typename T_Start>
@@ -278,7 +328,7 @@ namespace caravan
                 return;
             }
             m_requests.emplace_back(request);
-            m_active.emplace_back(BarrierCompletion{std::move(completion)}, std::nullopt);
+            m_active.emplace_back(BarrierCompletion{std::move(completion)}, std::nullopt, std::nullopt);
         }
 
         void startSend(Promise<SendResult> completion, BufferLease buffer, Peer destination, MessageTag tag)
@@ -302,7 +352,7 @@ namespace caravan
             }
             auto const bytes = buffer.bytes();
             m_requests.emplace_back(request);
-            m_active.emplace_back(SendCompletion{std::move(completion), bytes}, std::move(buffer));
+            m_active.emplace_back(SendCompletion{std::move(completion), bytes}, std::move(buffer), std::nullopt);
         }
 
         void startReceive(Promise<ReceiveResult> completion, BufferLease buffer, Peer source, MessageTag tag)
@@ -325,7 +375,76 @@ namespace caravan
                 return;
             }
             m_requests.emplace_back(request);
-            m_active.emplace_back(ReceiveCompletion{std::move(completion)}, std::move(buffer));
+            m_active.emplace_back(ReceiveCompletion{std::move(completion)}, std::move(buffer), std::nullopt);
+        }
+
+        static MPI_Datatype nativeType(ScalarType type)
+        {
+            switch(type)
+            {
+            case ScalarType::int32:
+                return MPI_INT32_T;
+            case ScalarType::uint32:
+                return MPI_UINT32_T;
+            case ScalarType::int64:
+                return MPI_INT64_T;
+            case ScalarType::uint64:
+                return MPI_UINT64_T;
+            case ScalarType::float32:
+                return MPI_FLOAT;
+            case ScalarType::float64:
+                return MPI_DOUBLE;
+            }
+            throw std::invalid_argument("Unknown Caravan scalar type");
+        }
+
+        static MPI_Op nativeOperation(ReduceOperation operation)
+        {
+            switch(operation)
+            {
+            case ReduceOperation::sum:
+                return MPI_SUM;
+            case ReduceOperation::minimum:
+                return MPI_MIN;
+            case ReduceOperation::maximum:
+                return MPI_MAX;
+            case ReduceOperation::product:
+                return MPI_PROD;
+            }
+            throw std::invalid_argument("Unknown Caravan reduce operation");
+        }
+
+        void startAllReduce(
+            Promise<AllReduceResult> completion,
+            BufferLease input,
+            BufferLease output,
+            ScalarType type,
+            ReduceOperation operation)
+        {
+            assertOwner();
+            prepareActive();
+            auto const elements = input.bytes() / scalarSize(type);
+            MPI_Request request = MPI_REQUEST_NULL;
+            void* const sendBuffer = input.data() == output.data() ? MPI_IN_PLACE : input.data();
+            int const error = MPI_Iallreduce(
+                sendBuffer,
+                output.data(),
+                static_cast<int>(elements),
+                nativeType(type),
+                nativeOperation(operation),
+                MPI_COMM_WORLD,
+                &request);
+            if(error != MPI_SUCCESS)
+            {
+                completion.setFailed(std::make_exception_ptr(mpiError("MPI_Iallreduce", error)));
+                finishOperation();
+                return;
+            }
+            m_requests.emplace_back(request);
+            m_active.emplace_back(
+                AllReduceCompletion{std::move(completion), elements},
+                std::move(input),
+                std::move(output));
         }
 
         void failActive(ActiveOperation& active, std::exception_ptr failure)
@@ -344,7 +463,7 @@ namespace caravan
                         completion.output.setReady();
                     else if constexpr(std::is_same_v<Completion, SendCompletion>)
                         completion.output.setValue(SendResult{completion.bytes});
-                    else
+                    else if constexpr(std::is_same_v<Completion, ReceiveCompletion>)
                     {
                         int bytes = 0;
                         int const error = MPI_Get_count(&status, MPI_BYTE, &bytes);
@@ -360,6 +479,8 @@ namespace caravan
                                     MessageTag{status.MPI_TAG},
                                     static_cast<std::size_t>(bytes)});
                     }
+                    else
+                        completion.output.setValue(AllReduceResult{completion.elements});
                 },
                 active.completion);
             finishOperation();
@@ -468,6 +589,18 @@ namespace caravan
         CommunicatorId communicator)
     {
         return m_implementation->receive(std::move(bufferAvailable), std::move(buffer), source, tag, communicator);
+    }
+
+    Future<AllReduceResult> MpiExecutor::allReduce(
+        Event dataReady,
+        BufferLease input,
+        BufferLease output,
+        ScalarType type,
+        ReduceOperation operation,
+        CommunicatorId communicator)
+    {
+        return m_implementation
+            ->allReduce(std::move(dataReady), std::move(input), std::move(output), type, operation, communicator);
     }
 
     Event MpiExecutor::barrier(Event predecessor, CommunicatorId communicator)
