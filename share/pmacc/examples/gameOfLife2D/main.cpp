@@ -101,7 +101,6 @@ int main(int argc, char** argv)
     if(gridSize.size() != DIM2)
     {
         std::cerr << "Invalid or missing grid size.\nuse -g width height" << std::endl;
-        MPI_CHECK(MPI_Finalize());
         return 0;
     }
 
