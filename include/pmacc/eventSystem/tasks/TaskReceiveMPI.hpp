@@ -47,12 +47,23 @@ namespace pmacc
         void init() override
         {
             auto cPtr = exchange->getCPtrCapacity();
-
-            this->request = Environment<DIM>::get().EnvironmentController().getCommunicator().startReceive(
-                exchange->getExchangeType(),
-                cPtr.asCharPtr(),
-                cPtr.sizeInBytes(),
-                exchange->getCommunicationTag());
+            auto& communicator = Environment<DIM>::get().EnvironmentController().getCommunicator();
+            if(communicator.usesMpiExecutor())
+            {
+                future = communicator.startReceiveAsync(
+                    exchange->getExchangeType(),
+                    cPtr.asCharPtr(),
+                    cPtr.sizeInBytes(),
+                    exchange->getCommunicationTag());
+            }
+            else
+            {
+                request = communicator.startReceive(
+                    exchange->getExchangeType(),
+                    cPtr.asCharPtr(),
+                    cPtr.sizeInBytes(),
+                    exchange->getCommunicationTag());
+            }
         }
 
         bool executeIntern() override
@@ -60,16 +71,25 @@ namespace pmacc
             if(this->isFinished())
                 return true;
 
-            if(this->request == nullptr)
+            if(future.valid())
+            {
+                if(future.state() == caravan::CompletionState::pending)
+                    return false;
+                receivedBytes = static_cast<int>(future.result().bytes);
+                setFinished();
+                return true;
+            }
+
+            if(request == nullptr)
                 throw std::runtime_error("request was nullptr (call executeIntern after freed");
 
             int flag = 0;
-            MPI_CHECK(MPI_Test(this->request, &flag, &(this->status)));
+            MPI_CHECK(MPI_Test(request, &flag, &status));
 
             if(flag) // finished
             {
-                delete this->request;
-                this->request = nullptr;
+                delete request;
+                request = nullptr;
                 setFinished();
                 return true;
             }
@@ -79,11 +99,10 @@ namespace pmacc
         ~TaskReceiveMPI() override
         {
             //! \todo this make problems because we send bytes and not combined types
-            int recv_data_count;
-            MPI_CHECK_NO_EXCEPT(MPI_Get_count(&(this->status), MPI_CHAR, &recv_data_count));
+            if(!future.valid())
+                MPI_CHECK_NO_EXCEPT(MPI_Get_count(&status, MPI_CHAR, &receivedBytes));
 
-
-            std::unique_ptr<IEventData> edata = std::make_unique<EventDataReceive>(nullptr, recv_data_count);
+            std::unique_ptr<IEventData> edata = std::make_unique<EventDataReceive>(nullptr, receivedBytes);
 
             notify(this->myId, RECVFINISHED, edata.get()); /*add notify her*/
         }
@@ -99,8 +118,10 @@ namespace pmacc
 
     private:
         Exchange<TYPE, DIM>* exchange;
-        MPI_Request* request;
+        caravan::Future<caravan::ReceiveResult> future;
+        MPI_Request* request{nullptr};
         MPI_Status status;
+        int receivedBytes{0};
     };
 
 } // namespace pmacc

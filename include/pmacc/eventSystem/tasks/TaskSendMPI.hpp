@@ -44,12 +44,23 @@ namespace pmacc
         void init() override
         {
             auto cPtr = exchange->getCPtrCurrentSize();
-
-            this->request = Environment<DIM>::get().EnvironmentController().getCommunicator().startSend(
-                exchange->getExchangeType(),
-                cPtr.asCharPtr(),
-                cPtr.sizeInBytes(),
-                exchange->getCommunicationTag());
+            auto& communicator = Environment<DIM>::get().EnvironmentController().getCommunicator();
+            if(communicator.usesMpiExecutor())
+            {
+                future = communicator.startSendAsync(
+                    exchange->getExchangeType(),
+                    cPtr.asCharPtr(),
+                    cPtr.sizeInBytes(),
+                    exchange->getCommunicationTag());
+            }
+            else
+            {
+                request = communicator.startSend(
+                    exchange->getExchangeType(),
+                    cPtr.asCharPtr(),
+                    cPtr.sizeInBytes(),
+                    exchange->getCommunicationTag());
+            }
         }
 
         bool executeIntern() override
@@ -57,17 +68,26 @@ namespace pmacc
             if(this->isFinished())
                 return true;
 
-            if(this->request == nullptr)
+            if(future.valid())
+            {
+                if(future.state() == caravan::CompletionState::pending)
+                    return false;
+                static_cast<void>(future.result());
+                setFinished();
+                return true;
+            }
+
+            if(request == nullptr)
                 throw std::runtime_error("request was nullptr (call executeIntern after freed");
 
             int flag = 0;
-            MPI_CHECK(MPI_Test(this->request, &flag, &(this->status)));
+            MPI_CHECK(MPI_Test(request, &flag, &status));
 
             if(flag) // finished
             {
-                delete this->request;
-                this->request = nullptr;
-                this->setFinished();
+                delete request;
+                request = nullptr;
+                setFinished();
                 return true;
             }
             return false;
@@ -89,7 +109,8 @@ namespace pmacc
 
     private:
         Exchange<TYPE, DIM>* exchange;
-        MPI_Request* request;
+        caravan::Future<caravan::SendResult> future;
+        MPI_Request* request{nullptr};
         MPI_Status status;
     };
 
