@@ -25,6 +25,7 @@
 #include "pmacc/memory/dataTypes/Mask.hpp"
 #include "pmacc/types.hpp"
 
+#include <caravan/mpi.hpp>
 #include <mpi.h>
 
 namespace pmacc
@@ -78,6 +79,23 @@ namespace pmacc
          * already finished
          */
         virtual MPI_Request* startReceive(uint32_t ex, char* recv_data, size_t recv_data_max, uint32_t tag) = 0;
+
+        /** Temporary adapters used while legacy PMacc MPI tasks are migrated. */
+        virtual caravan::Future<caravan::SendResult> startSendAsync(
+            uint32_t ex,
+            char const* sendData,
+            size_t sendBytes,
+            uint32_t tag)
+            = 0;
+
+        virtual caravan::Future<caravan::ReceiveResult> startReceiveAsync(
+            uint32_t ex,
+            char* receiveData,
+            size_t receiveBytes,
+            uint32_t tag)
+            = 0;
+
+        virtual bool usesMpiExecutor() const = 0;
 
         virtual int getRank() = 0;
 
