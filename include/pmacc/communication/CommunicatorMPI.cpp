@@ -129,6 +129,7 @@ namespace pmacc
         auto const snapshot
             = executor.createCartesian(caravan::readyEvent(), std::move(dimensions), std::move(periods)).result();
         communicatorId = snapshot.communicator;
+        signalCommunicatorId = executor.duplicateCommunicator(caravan::readyEvent(), communicatorId).result();
         mpiRank = snapshot.rank;
         mpiSize = snapshot.size;
         hostRank = snapshot.hostLocalRank;
@@ -213,6 +214,28 @@ namespace pmacc
             caravan::Peer{ExchangeTypeToRank(ex)},
             caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
             communicatorId);
+    }
+
+    template<unsigned DIM>
+    caravan::Future<caravan::AllReduceResult> CommunicatorMPI<DIM>::startSignalAllReduce(
+        void const* input,
+        void* output,
+        size_t bytes,
+        caravan::ScalarType type,
+        caravan::ReduceOperation operation)
+    {
+        if(!mpiExecutor)
+            throw std::logic_error("CommunicatorMPI is not attached to Caravan");
+        // ponytail: Signal owns these buffers until its legacy task completes; use allocation leases in Phase 4.
+        auto inputLease = std::shared_ptr<void>{const_cast<void*>(input), [](void*) {}};
+        auto outputLease = std::shared_ptr<void>{output, [](void*) {}};
+        return mpiExecutor->allReduce(
+            caravan::readyEvent(),
+            caravan::BufferLease{std::move(inputLease), const_cast<void*>(input), bytes},
+            caravan::BufferLease{std::move(outputLease), output, bytes},
+            type,
+            operation,
+            signalCommunicatorId);
     }
 
     // description in ICommunicator
