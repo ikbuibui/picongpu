@@ -153,20 +153,29 @@ namespace caravan
             return m_adopt(m_implementation, communicator);
         }
 
+        /** Destroy a communicator previously adopted by Caravan. */
+        void destroyCommunicator(CommunicatorId communicator) const
+        {
+            m_destroy(m_implementation, communicator);
+        }
+
     private:
         using Resolve = MPI_Comm (*)(void*, CommunicatorId);
         using Adopt = CommunicatorId (*)(void*, MPI_Comm);
+        using Destroy = void (*)(void*, CommunicatorId);
 
-        NativeMpiContext(void* implementation, Resolve resolve, Adopt adopt)
+        NativeMpiContext(void* implementation, Resolve resolve, Adopt adopt, Destroy destroy)
             : m_implementation(implementation)
             , m_resolve(resolve)
             , m_adopt(adopt)
+            , m_destroy(destroy)
         {
         }
 
         void* m_implementation;
         Resolve m_resolve;
         Adopt m_adopt;
+        Destroy m_destroy;
 
         friend struct detail::NativeContextFactory;
     };
@@ -178,9 +187,10 @@ namespace caravan
             static NativeMpiContext create(
                 void* implementation,
                 NativeMpiContext::Resolve resolve,
-                NativeMpiContext::Adopt adopt)
+                NativeMpiContext::Adopt adopt,
+                NativeMpiContext::Destroy destroy)
             {
-                return NativeMpiContext{implementation, resolve, adopt};
+                return NativeMpiContext{implementation, resolve, adopt, destroy};
             }
         };
     } // namespace detail

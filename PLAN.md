@@ -14,10 +14,10 @@ from an immutable snapshot without application-thread topology calls. Legacy
 unchanged PMacc startup remains available during migration. The general native
 extension API now transfers arbitrary nonblocking requests and lifetimes to the
 executor, and exclusive blocking submissions wait for active requests before
-running. Reimplementing Caravan's existing convenience operations on this
-single native progress path is next, followed by the remaining PMacc MPI
-migration; target-GPU validation is deferred as described in the migration gate
-below.
+running. Caravan's point-to-point, collective, barrier, and communicator
+conveniences now use this single native progress path. The remaining PMacc MPI
+migration is next; target-GPU validation is deferred as described in the
+migration gate below.
 
 This plan targets the PMacc event system.
 Breaking PMacc and PIConGPU interfaces is allowed during the migration.
@@ -49,16 +49,17 @@ Breaking PMacc and PIConGPU interfaces is allowed during the migration.
 
 ### One MPI thread, using `MPI_THREAD_FUNNELED`
 
-The process main thread becomes the MPI executor thread. It calls
-`MPI_Init_thread(..., MPI_THREAD_FUNNELED, ...)`, starts the simulation on a
-separate application thread, and then runs the MPI progress loop until
-shutdown.
+Caravan creates a dedicated MPI worker thread. That worker calls
+`MPI_Init_thread(..., MPI_THREAD_FUNNELED, ...)`, runs the MPI progress loop,
+and calls `MPI_Finalize()`. The process main thread remains the application
+thread.
 
 `MPI_THREAD_FUNNELED` is the minimum correct level for this process model:
 the process is multithreaded, but only the thread that initialized MPI calls
-MPI. `MPI_THREAD_SINGLE` is not sufficient for a multithreaded process, and
-`MPI_THREAD_SERIALIZED` is unnecessary because MPI calls never move between
-threads.
+MPI. MPI defines that initializer as its main thread even when it is not the
+process entry thread. `MPI_THREAD_SINGLE` is not sufficient for a multithreaded
+process, and `MPI_THREAD_SERIALIZED` is unnecessary because MPI calls never
+move between threads.
 
 The MPI executor thread owns all MPI operations, including:
 
@@ -92,17 +93,16 @@ int main(int argc, char** argv)
 `MpiRuntime::run()` performs this sequence:
 
 ```text
-process main / MPI thread             application thread
--------------------------             ------------------
-MPI_Init_thread(FUNNELED)
-start application thread       -----> initialize simulation
-run MPI executor loop          <----- submit MPI commands
-progress active requests       <----> create GPU/MPI work
-receive shutdown request       <----- application returns
-finish or fail active work
-free MPI-owned resources
-join application thread
-MPI_Finalize
+process main / application            Caravan MPI worker
+--------------------------            ------------------
+start MPI worker                -----> MPI_Init_thread(FUNNELED)
+wait for runtime readiness      <----- publish immutable topology
+initialize and run simulation   -----> submit MPI commands
+create GPU/MPI work             <----> progress active requests
+application returns             -----> receive shutdown request
+join MPI worker                 <----- finish or fail active work
+                                      free MPI-owned resources
+                                      MPI_Finalize
 return application result
 ```
 
@@ -724,9 +724,9 @@ transition is exactly once, and `whenAll()` uses one node rather than a tree.
 
 ### Phase 2: Dedicated MPI runtime
 
-1. Refactor PMacc example startup so process main owns MPI and the simulation
-   runs on an application thread.
-2. Request and require `MPI_THREAD_FUNNELED`.
+1. Keep the simulation on the process main thread and create a dedicated
+   Caravan worker that owns the complete MPI lifecycle.
+2. Request and require `MPI_THREAD_FUNNELED` from the MPI worker.
 3. Implement the MPI submission queue, executor loop, contiguous active request
    storage, and `MPI_Testsome` progress in `caravan::mpi`.
 4. Move MPI initialization, topology setup, communicator management, and
@@ -749,8 +749,8 @@ transition is exactly once, and `whenAll()` uses one node rather than a tree.
     Phase 7 and receives no compatibility exemption.
 
 Exit criterion: no PMacc example, PMacc task, or PMacc helper thread calls MPI;
-the process main thread continues progressing requests while the application
-thread sleeps or computes.
+the dedicated Caravan worker continues progressing requests while the process
+main application thread sleeps or computes.
 
 ### Phase 3: Device executor
 
@@ -815,8 +815,8 @@ Phase 6 PMacc migration step still needs them, never for PIConGPU compatibility.
 
 Exit criterion and PIConGPU entry gate: PMacc and both target examples use the
 new runtime without manager polling or global transaction state, all PMacc
-tests pass, MPI progress is owned by the process main thread, and the legacy
-runtime has been deleted. No PIConGPU source has been changed, and PIConGPU may
+tests pass, MPI progress is owned by the dedicated Caravan worker, and the
+legacy runtime has been deleted. No PIConGPU source has been changed, and PIConGPU may
 be broken by the removed PMacc interfaces. Only then may Phase 7 begin.
 
 ### Phase 7: PIConGPU inventory and migration
@@ -948,11 +948,12 @@ and CPU backend where supported.
 
 ## Main risks and mitigations
 
-### MPI must remain on the process main thread
+### MPI initialization runs on a Caravan worker
 
-Mitigation: the process main thread is the MPI executor, and the existing
-simulation entry point moves to an application thread. Test startup and
-shutdown on Open MPI, MPICH, and target system MPI implementations.
+Mitigation: the dedicated worker performs the complete MPI lifecycle, including
+`MPI_Init_thread` and `MPI_Finalize`, while the process main thread waits for
+startup before entering the application. Test this conforming FUNNELED model on
+Open MPI, MPICH, and target system MPI implementations.
 
 ### Dedicated progress consumes a CPU core
 
@@ -991,7 +992,8 @@ simulation stages.
 
 The replacement is complete when:
 
-- process main is the sole MPI-calling thread under `MPI_THREAD_FUNNELED`;
+- one Caravan worker initializes MPI and is the sole MPI-calling thread under
+  `MPI_THREAD_FUNNELED`;
 - no other source file can call MPI directly;
 - MPI progresses independently of simulation-thread polling;
 - task submission is safe from multiple threads;
