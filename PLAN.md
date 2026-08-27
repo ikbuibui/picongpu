@@ -273,12 +273,22 @@ supports native device dependencies.
 
 ### `Flow`
 
-`Flow` replaces the useful part of transactions: a local current frontier.
+`Flow` replaces the useful part of transactions: a local cursor into the
+explicit dependency graph. It is not a structured-concurrency nursery: it does
+not own forked work, automatically join children, cancel siblings, or wait when
+destroyed.
 
 ```cpp
 class Flow
 {
 public:
+    explicit Flow(Event start = readyEvent());
+
+    Flow(Flow const&) = delete;
+    Flow& operator=(Flow const&) = delete;
+    Flow(Flow&&) = default;
+    Flow& operator=(Flow&&) = default;
+
     Flow fork() const;
     void join(Event event);
     Event done() const;
@@ -294,9 +304,17 @@ private:
 Rules:
 
 - `Flow` is a local value and is not shared concurrently;
-- `fork()` copies the current frontier;
-- `join()` uses `whenAll()`;
-- `then()` explicitly submits an operation after the current frontier;
+- ordinary copying is disabled so a branch is created only by an explicit
+  `fork()`;
+- `fork()` creates an independent cursor at the current frontier but does not
+  register that cursor with its parent;
+- `join()` uses `whenAll()` and is required for forked work on which the parent
+  depends;
+- `done()` returns a snapshot of the current frontier; work appended to the
+  `Flow` later is not represented by an earlier snapshot;
+- `then()` explicitly submits an operation after the current frontier and
+  advances it;
+- destroying a `Flow` neither blocks nor cancels work;
 - low-level code may pass `Event` dependencies directly without using `Flow`;
 - no global or thread-local transaction stack exists.
 
@@ -313,6 +331,20 @@ main.then(device, updateCore);
 main.join(communication.done());
 main.then(device, updateBorder);
 ```
+
+The Caravan runtime, rather than `Flow`, is the root supervision boundary: it
+accounts for all submitted operations during failure and shutdown even when a
+local `Flow` is no longer available. Buffer and native-resource lifetimes remain
+attached to submitted commands until native completion.
+
+Do not initially add a nursery or task-group abstraction. If migration shows
+that omitted joins are a recurring defect, add one callback-based `parallel()`
+or `forkJoin()` composition helper that registers every branch and advances the
+parent to `whenAll()` of the sealed branch tails. Such a helper structures graph
+construction without blocking at callback exit or promising cancellation of
+already-submitted native work. Branches must not escape the callback, and an
+exception during graph construction must still leave already-submitted work
+under runtime shutdown and error accounting.
 
 ## MPI executor
 
@@ -614,7 +646,16 @@ than introduce another scheduler.
 ## Error handling and shutdown
 
 Executor operations complete as ready, failed, or cancelled. Dependent work
-propagates predecessor failure by default and does not execute.
+propagates predecessor failure by default and does not execute. Failure in one
+`Flow` branch does not implicitly mutate sibling branches; an explicit join
+remains pending until all inputs are terminal and then reports the retained
+failure.
+
+Cancellation initially means rejecting or skipping work that has not started
+where the executor can do so. Already-submitted GPU work and active MPI
+operations are allowed to reach a terminal state; Caravan does not promise that
+MPI collectives or native device commands can be revoked. Prompt fatal-error
+notification is separate from the quiescent completion event.
 
 Rules:
 
@@ -883,7 +924,8 @@ communication improvements over the Phase 0 baseline.
 - executor shutdown with queued commands;
 - buffer lease lifetime;
 - invalid wait from owner executor thread;
-- Flow fork and join semantics.
+- Flow move-only, explicit fork/join, and `done()` snapshot semantics;
+- runtime shutdown accounting for submitted work from an unjoined Flow branch.
 
 ### MPI integration tests
 
