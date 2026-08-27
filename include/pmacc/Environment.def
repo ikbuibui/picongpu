@@ -24,6 +24,8 @@
 #include "pmacc/eventSystem/transactions/TransactionManager.hpp"
 #include "pmacc/types.hpp"
 
+#include <caravan/mpi.hpp>
+
 namespace pmacc
 {
     template<uint32_t T_dim = DIM1>
@@ -60,6 +62,9 @@ namespace pmacc
 
             /** state shows if MPI direct is activated */
             bool m_isMpiDirectEnabled{false};
+
+            /** Caravan MPI executor, owned by the process main thread. */
+            caravan::MpiExecutor* m_mpiExecutor{nullptr};
 
             /** get the singleton EnvironmentContext
              *
@@ -103,6 +108,9 @@ namespace pmacc
              * After this call it is allowed to use MPI.
              */
             HINLINE void init();
+
+            /** attach to MPI initialized and owned by Caravan */
+            HINLINE void init(caravan::MpiExecutor& mpiExecutor);
 
             /** cleanup the environment */
             HINLINE void finalize();

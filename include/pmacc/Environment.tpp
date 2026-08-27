@@ -144,20 +144,31 @@ namespace pmacc
     template<uint32_t T_dim>
     void Environment<T_dim>::initDevices(DataSpace<T_dim> devices, DataSpace<T_dim> periodic)
     {
-        // initialize the MPI context
         detail::EnvironmentContext::getInstance().init();
+        initDevicesImpl(devices, periodic, nullptr);
+    }
 
-        // create singleton instances
-        GridController().init(devices, periodic);
+    template<uint32_t T_dim>
+    void Environment<T_dim>::initDevices(
+        caravan::MpiExecutor& mpiExecutor,
+        DataSpace<T_dim> devices,
+        DataSpace<T_dim> periodic)
+    {
+        detail::EnvironmentContext::getInstance().init(mpiExecutor);
+        initDevicesImpl(devices, periodic, &mpiExecutor);
+    }
 
+    template<uint32_t T_dim>
+    void Environment<T_dim>::initDevicesImpl(
+        DataSpace<T_dim> devices,
+        DataSpace<T_dim> periodic,
+        caravan::MpiExecutor* mpiExecutor)
+    {
+        GridController().init(devices, periodic, mpiExecutor);
         EnvironmentController();
-
         detail::EnvironmentContext::getInstance().setDevice(static_cast<int>(GridController().getHostRank()));
-
         QueueController().activate();
-
         MemoryInfo();
-
         SimulationDescription();
     }
 
@@ -229,6 +240,12 @@ namespace pmacc
             }
         }
 
+        void EnvironmentContext::init(caravan::MpiExecutor& mpiExecutor)
+        {
+            m_mpiExecutor = &mpiExecutor;
+            m_isMpiInitialized = true;
+        }
+
         void EnvironmentContext::finalize()
         {
             if(m_isMpiInitialized)
@@ -237,11 +254,12 @@ namespace pmacc
                 // Required by scorep for flushing the buffers
                 alpaka::wait(manager::Device<ComputeDevice>::get().current());
                 m_isMpiInitialized = false;
-                /* Free the MPI context.
-                 * The gpu context is freed by the `QueueController`, because
-                 * MPI and CUDA are independent.
-                 */
-                MPI_CHECK(MPI_Finalize());
+                /* The gpu context is freed by the QueueController. Caravan owns
+                 * MPI finalization when a dedicated executor is attached. */
+                if(m_mpiExecutor)
+                    m_mpiExecutor = nullptr;
+                else
+                    MPI_CHECK(MPI_Finalize());
             }
         }
 

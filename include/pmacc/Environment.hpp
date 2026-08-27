@@ -156,6 +156,12 @@ namespace pmacc
          */
         HINLINE void initDevices(DataSpace<T_dim> devices, DataSpace<T_dim> periodic);
 
+        /** initialize PMacc under the dedicated Caravan MPI runtime */
+        HINLINE void initDevices(
+            caravan::MpiExecutor& mpiExecutor,
+            DataSpace<T_dim> devices,
+            DataSpace<T_dim> periodic);
+
         /** initialize the computing domain information of PMacc
          *
          * @param globalDomainSize size of the global simulation domain [cells]
@@ -172,6 +178,11 @@ namespace pmacc
         Environment& operator=(Environment const&) = delete;
 
     private:
+        HINLINE void initDevicesImpl(
+            DataSpace<T_dim> devices,
+            DataSpace<T_dim> periodic,
+            caravan::MpiExecutor* mpiExecutor);
+
         Environment() = default;
 
         ~Environment() = default;
