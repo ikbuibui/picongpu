@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -23,12 +24,93 @@ namespace caravan
 
     inline constexpr CommunicatorId worldCommunicator{0u};
 
+    struct Peer
+    {
+        int value;
+        bool any = false;
+    };
+
+    inline constexpr Peer anyPeer{0, true};
+
+    struct MessageTag
+    {
+        int value;
+        bool any = false;
+    };
+
+    inline constexpr MessageTag anyMessageTag{0, true};
+
+    class BufferLease
+    {
+    public:
+        BufferLease(std::shared_ptr<void> allocation, void* data, std::size_t bytes)
+            : m_allocation(std::move(allocation))
+            , m_data(data)
+            , m_bytes(bytes)
+        {
+        }
+
+        void* data() const noexcept
+        {
+            return m_data;
+        }
+
+        std::size_t bytes() const noexcept
+        {
+            return m_bytes;
+        }
+
+        bool valid() const noexcept
+        {
+            return m_bytes == 0u || (m_allocation && m_data != nullptr);
+        }
+
+    private:
+        std::shared_ptr<void> m_allocation;
+        void* m_data;
+        std::size_t m_bytes;
+    };
+
+    struct SendResult
+    {
+        std::size_t bytes;
+    };
+
+    struct ReceiveResult
+    {
+        Peer source;
+        MessageTag tag;
+        std::size_t bytes;
+    };
+
+    struct TopologySnapshot
+    {
+        int rank;
+        int size;
+    };
+
     class MpiExecutor
     {
     public:
         MpiExecutor(MpiExecutor const&) = delete;
         MpiExecutor& operator=(MpiExecutor const&) = delete;
         ~MpiExecutor();
+
+        TopologySnapshot topology() const;
+
+        Future<SendResult> send(
+            Event dataReady,
+            BufferLease buffer,
+            Peer destination,
+            MessageTag tag,
+            CommunicatorId communicator = worldCommunicator);
+
+        Future<ReceiveResult> receive(
+            Event bufferAvailable,
+            BufferLease buffer,
+            Peer source,
+            MessageTag tag,
+            CommunicatorId communicator = worldCommunicator);
 
         Event barrier(Event predecessor, CommunicatorId communicator = worldCommunicator);
 
