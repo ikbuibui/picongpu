@@ -157,7 +157,8 @@ time. The final progress line was `100 % = 1`.
 
 ## Remaining target-system baseline work
 
-Before Phase 2 changes PMacc startup, CI or a target cluster must record:
+Before the Phase 6 exit gate, CI or a target cluster must record these results
+from the baseline revision:
 
 - CUDA runtime behavior and GPU-aware MPI exchange;
 - current host submission cost and manager CPU time;
