@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed architecture and migration plan. No implementation has started.
+Implementation is in progress. The Caravan completion core (Phase 1) is
+implemented and tested. The Phase 0 local inventory and CPU baseline are
+recorded in `docs/CARAVAN_PHASE0.md`; target GPU measurements remain open.
 
 This plan targets the PMacc event system.
 Breaking PMacc and PIConGPU interfaces is allowed during the migration.
