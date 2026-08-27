@@ -22,6 +22,12 @@
 
 #pragma once
 
+#include "pmacc/communication/CommunicatorMPI.hpp"
+#include "pmacc/eventSystem/Manager.hpp"
+
+#include <functional>
+#include <utility>
+
 #include <mpi.h>
 
 namespace pmacc::eventSystem
@@ -37,5 +43,27 @@ namespace pmacc::eventSystem
      *
      * @param communicator communicator used for the barrier operation
      */
-    void mpiBlocking(MPI_Comm communicator);
+    void mpiBlocking(MPI_Comm communicator, std::function<void()> progress = {});
+
+    /** Temporary bridge that keeps legacy event progress while Caravan owns MPI progress. */
+    template<unsigned DIM, typename T_Progress = std::function<void()>>
+    void mpiBlocking(CommunicatorMPI<DIM>& communicator, T_Progress progress = [] {})
+    {
+        if(!communicator.usesMpiExecutor())
+        {
+            mpiBlocking(communicator.getMPIComm(), std::move(progress));
+            return;
+        }
+
+        auto barrier = communicator.startBarrierAsync();
+        Manager::getInstance().waitFor(
+            [&]()
+            {
+                std::invoke(progress);
+                if(barrier.state() == caravan::CompletionState::pending)
+                    return false;
+                barrier.wait();
+                return true;
+            });
+    }
 } // namespace pmacc::eventSystem

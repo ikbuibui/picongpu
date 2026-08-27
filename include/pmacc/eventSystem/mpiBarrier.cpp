@@ -27,7 +27,7 @@
 
 namespace pmacc::eventSystem
 {
-    void mpiBlocking(MPI_Comm communicator)
+    void mpiBlocking(MPI_Comm communicator, std::function<void()> progress)
     {
         MPI_Request ioBarrierMPI = MPI_REQUEST_NULL;
         MPI_CHECK(MPI_Ibarrier(communicator, &ioBarrierMPI));
@@ -35,6 +35,8 @@ namespace pmacc::eventSystem
         Manager::getInstance().waitFor(
             [&]() -> bool
             {
+                if(progress)
+                    progress();
                 MPI_Status mpiBarrierStatus;
                 int flag = 0;
                 MPI_CHECK(MPI_Test(&ioBarrierMPI, &flag, &mpiBarrierStatus));
