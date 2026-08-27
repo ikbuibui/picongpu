@@ -52,7 +52,10 @@ namespace pmacc
          * @param nodes number of GPU nodes in each dimension
          * @param periodic specifying whether the grid is periodic (1) or not (0) in each dimension
          */
-        void init(DataSpace<DIM> nodes, DataSpace<DIM> periodic = DataSpace<DIM>())
+        void init(
+            DataSpace<DIM> nodes,
+            DataSpace<DIM> periodic = DataSpace<DIM>(),
+            caravan::MpiExecutor* mpiExecutor = nullptr)
         {
             static bool commIsInit = false;
             if(!commIsInit)
@@ -85,7 +88,10 @@ namespace pmacc
                     periodicTmp[2] = periodic[2];
                 }
 
-                comm.init(tmp, periodicTmp);
+                if(mpiExecutor)
+                    comm.init(*mpiExecutor, tmp, periodicTmp);
+                else
+                    comm.init(tmp, periodicTmp);
                 commIsInit = true;
 
                 Environment<DIM>::get().EnvironmentController().setCommunicator(comm);
