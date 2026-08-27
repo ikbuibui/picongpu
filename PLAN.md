@@ -11,9 +11,13 @@ and MPI-owned Cartesian communicators with immutable topology snapshots. PMacc
 can now attach its environment to the runtime and initialize `CommunicatorMPI`
 from an immutable snapshot without application-thread topology calls. Legacy
 `TaskSendMPI` and `TaskReceiveMPI` can poll Caravan point-to-point futures while
-unchanged PMacc startup remains available during migration. Migrating the
-example entry points and remaining MPI operations is next; target-GPU validation
-is deferred as described in the migration gate below.
+unchanged PMacc startup remains available during migration. The general native
+extension API now transfers arbitrary nonblocking requests and lifetimes to the
+executor, and exclusive blocking submissions wait for active requests before
+running. Reimplementing Caravan's existing convenience operations on this
+single native progress path is next, followed by the remaining PMacc MPI
+migration; target-GPU validation is deferred as described in the migration gate
+below.
 
 This plan targets the PMacc event system.
 Breaking PMacc and PIConGPU interfaces is allowed during the migration.
@@ -135,13 +139,29 @@ The replacement library is named **Caravan**. It uses the C++ namespace
 
 ```text
 caravan::core              Event, Future<T>, whenAll(), Flow, shutdown
-    +-- caravan::mpi       MpiRuntime and MpiExecutor; depends on MPI
+    +-- caravan::mpi       MPI owner/progress/resource core
+    |      +-- native      opt-in expert request and blocking-call extension
+    |      `-- portable    send, receive, collectives, communicators
     `-- caravan::alpaka    DeviceExecutor; depends on alpaka
              ^
            PMacc           buffers, topology, fields, particles, exchanges
              ^
          PIConGPU
 ```
+
+The native extension is the implementation substrate for Caravan's portable
+MPI operations, not a parallel execution path. Generic send, receive, barrier,
+collective, and communicator conveniences remain in Caravan and are implemented
+through the same native request and quiescent-call machinery. Only MPI
+initialization/finalization, request progress, owner-thread enforcement, and
+native resource registries bypass that extension because they implement it.
+
+PMacc contains only domain adapters and composition: exchange-direction and tag
+mapping, PMacc buffer leases, topology adaptation, signals, fields, particles,
+and simulation flows. It must not reimplement generic MPI operations merely to
+keep Caravan superficially small. Keep the native and portable layers in the
+single `caravan::mpi` target initially; split targets only when a real consumer
+needs the native core without the portable conveniences.
 
 The runtime targets must not include PMacc or PIConGPU headers. Their public
 interfaces use generic lifetime tokens, pointers, extents, and opaque native
@@ -291,9 +311,15 @@ main.then(device, updateBorder);
 
 ### Public API
 
-Application code uses opaque communicator, peer, tag, and datatype
-descriptors. Raw `MPI_Comm`, `MPI_Request`, `MPI_Status`, and `MPI_Datatype`
-do not leave the MPI implementation layer.
+The portable API uses opaque communicator, peer, tag, and datatype descriptors.
+Its generic operations are thin adapters over the native extension, so all
+requests use one ownership, progress, lifetime, error, and completion path.
+Raw MPI types appear only in the opt-in expert header `caravan/mpi_native.hpp`
+and are valid only inside MPI-owner-thread start, completion, or quiescent-call
+hooks. They never become producer-thread resources. This native extension is
+the escape hatch for operations not covered by Caravan's convenience API and
+prevents the convenience layer from growing into a function-for-function MPI
+wrapper.
 
 Representative API:
 
@@ -359,7 +385,9 @@ repeat
 ```
 
 Completion only publishes event state and posts ready successor commands. It
-does not run simulation code on the MPI thread.
+does not run simulation code on the MPI thread. Opt-in native extension hooks
+are the exception: their bounded start and status-decoding hooks execute on the
+MPI owner thread and must not run application work.
 
 The progress policy is configurable:
 
@@ -395,16 +423,26 @@ executor preserves FIFO submission order per communicator and adds debug
 sequence checks, but it cannot make inconsistent collective control flow
 between ranks correct.
 
-### MPI-enabled third-party libraries
+### Native extension and MPI-enabled third-party libraries
+
+`caravan/mpi_native.hpp` provides the general extension boundary. A managed
+native asynchronous operation still obeys Caravan's dependency, lifetime,
+error, shutdown, and completion contracts: a bounded owner-thread hook starts
+one or more requests, transfers them to the executor, and a bounded completion
+hook converts copied statuses into an Event or Future result. Native
+communicators created by an extension are adopted into the executor's resource
+registry and returned as opaque `CommunicatorId` values.
 
 Inventory openPMD, ADIOS, HDF5, and other libraries that may call MPI
-internally. Any MPI-enabled entry point must execute on the MPI thread.
-
-A temporary internal `invokeOnMpiThread` migration facility may run a bounded
-callable on the MPI thread. It is not a public general task API. Long blocking
-library operations stall progress, so they are permitted only at an explicit
-MPI quiescence point where no simulation request is active. Replace temporary
-uses with asynchronous executor operations where practical.
+internally. Any MPI-enabled entry point must execute on the MPI thread. Calls
+that cannot expose nonblocking requests use an exclusive quiescent submission:
+the marker waits for requests already active ahead of it, prevents later MPI
+commands from starting, invokes the blocking call on the MPI thread, and then
+releases queued work. Submission itself returns an Event or Future immediately;
+it does not block the producer thread. Shutdown, invalid resources, and invalid
+recursive use fail the returned completion rather than crashing. Once entered,
+an arbitrary blocking call is not cancellable and inconsistent collective
+control flow remains a fatal application error.
 
 ### Enforcement
 
@@ -696,12 +734,18 @@ transition is exactly once, and `whenAll()` uses one node rather than a tree.
 5. Expose immutable topology snapshots and opaque communicator IDs.
 6. Implement point-to-point futures and receive results.
 7. Implement nonblocking collective and barrier futures.
-8. Route PMacc signal handling through the MPI executor.
-9. Temporarily adapt legacy `TaskSendMPI` and `TaskReceiveMPI` to submit to the
-   MPI executor and poll only the returned future.
-10. Route remaining direct MPI operations in PMacc and its examples through
-    migration wrappers on the MPI thread.
-11. Add a PMacc-scoped CI direct-MPI allowlist. PIConGPU is out of scope until
+8. Implement the opt-in native extension for managed request batches, adopted
+   communicators, typed completion, and exclusive quiescent blocking calls.
+9. Reimplement Caravan's generic point-to-point, barrier, collective, and
+   communicator conveniences on that extension, deleting their duplicate
+   request-storage and completion paths. Keep bootstrap, progress, and resource
+   registries in the core.
+10. Route PMacc signal handling through the MPI executor.
+11. Temporarily adapt legacy `TaskSendMPI` and `TaskReceiveMPI` to submit to the
+    MPI executor and poll only the returned future.
+12. Route remaining direct MPI operations in PMacc and its examples through
+    Caravan conveniences or narrowly scoped native extensions on the MPI thread.
+13. Add a PMacc-scoped CI direct-MPI allowlist. PIConGPU is out of scope until
     Phase 7 and receives no compatibility exemption.
 
 Exit criterion: no PMacc example, PMacc task, or PMacc helper thread calls MPI;
@@ -848,7 +892,10 @@ Run with at least one, two, and four ranks:
 - new submissions while requests are active;
 - shutdown with requests in flight;
 - propagated MPI failure where practical;
-- repeated communicator creation/destruction on the MPI thread.
+- repeated communicator creation/destruction on the MPI thread;
+- native multi-request submission and copied completion statuses;
+- native-start exception cleanup after a request has started;
+- exclusive blocking invocation behind active requests and recursive-submission rejection.
 
 ### Device integration tests
 

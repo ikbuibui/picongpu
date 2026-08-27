@@ -16,6 +16,13 @@
 
 namespace caravan
 {
+    namespace detail
+    {
+        struct NativeAccess;
+        struct NativeBlockingSubmission;
+        struct NativeSubmission;
+    } // namespace detail
+
     struct CommunicatorId
     {
         std::uint32_t value;
@@ -166,10 +173,13 @@ namespace caravan
 
         void run();
         void requestShutdown();
+        void submitNative(Event predecessor, detail::NativeSubmission submission);
+        void invokeBlocking(Event predecessor, detail::NativeBlockingSubmission submission);
 
         std::unique_ptr<Impl> m_implementation;
 
         friend class MpiRuntime;
+        friend struct detail::NativeAccess;
     };
 
     class MpiRuntime
