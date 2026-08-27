@@ -47,6 +47,7 @@ TEST_CASE("CommunicatorMPI consumes Caravan topology snapshots")
                || signalOutput[0] != static_cast<std::uint32_t>(topology.size * (topology.size + 1) / 2)
                || signalOutput[1] != static_cast<std::uint32_t>(topology.size))
                 throw std::runtime_error("Signal all-reduce adapter failed");
+            communicator.startBarrierAsync().wait();
 
             for(int exchange = 1; exchange < -12 * TEST_DIM + 6 * TEST_DIM * TEST_DIM + 9; ++exchange)
             {

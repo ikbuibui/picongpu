@@ -238,6 +238,14 @@ namespace pmacc
             signalCommunicatorId);
     }
 
+    template<unsigned DIM>
+    caravan::Event CommunicatorMPI<DIM>::startBarrierAsync()
+    {
+        if(!mpiExecutor)
+            throw std::logic_error("CommunicatorMPI is not attached to Caravan");
+        return mpiExecutor->barrier(caravan::readyEvent(), communicatorId);
+    }
+
     // description in ICommunicator
 
     template<unsigned DIM>

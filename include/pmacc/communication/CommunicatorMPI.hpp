@@ -156,6 +156,8 @@ namespace pmacc
             caravan::ScalarType type,
             caravan::ReduceOperation operation);
 
+        caravan::Event startBarrierAsync();
+
         bool usesMpiExecutor() const override
         {
             return mpiExecutor != nullptr;
