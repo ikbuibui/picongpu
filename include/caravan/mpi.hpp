@@ -10,6 +10,7 @@
 #include <memory>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <caravan/core.hpp>
 
@@ -110,6 +111,13 @@ namespace caravan
     {
         int rank;
         int size;
+        int hostLocalRank;
+        CommunicatorId communicator;
+        std::vector<int> dimensions;
+        std::vector<int> coordinates;
+        std::vector<bool> periodic;
+        // Negative then positive neighbor for each dimension; -1 means no neighbor.
+        std::vector<int> neighbors;
     };
 
     class MpiExecutor
@@ -120,6 +128,13 @@ namespace caravan
         ~MpiExecutor();
 
         TopologySnapshot topology() const;
+
+        Future<TopologySnapshot> createCartesian(
+            Event predecessor,
+            std::vector<int> dimensions,
+            std::vector<bool> periodic);
+
+        Event destroyCommunicator(Event predecessor, CommunicatorId communicator);
 
         Future<SendResult> send(
             Event dataReady,
