@@ -17,11 +17,13 @@
 
 int main(int argc, char** argv)
 {
+    auto const processMain = std::this_thread::get_id();
     return caravan::MpiRuntime::run(
         argc,
         argv,
-        [](caravan::MpiExecutor& mpi)
+        [processMain](caravan::MpiExecutor& mpi)
         {
+            assert(std::this_thread::get_id() == processMain);
             auto const topology = mpi.topology();
             assert(topology.size > 0);
             assert(topology.rank >= 0 && topology.rank < topology.size);
@@ -149,7 +151,11 @@ int main(int argc, char** argv)
             auto nativeImmediate = caravan::nativeEvent(
                 mpi,
                 caravan::readyEvent(),
-                [](caravan::NativeMpiContext&) { return caravan::NativeRequestBatch{}; },
+                [processMain](caravan::NativeMpiContext&)
+                {
+                    assert(std::this_thread::get_id() != processMain);
+                    return caravan::NativeRequestBatch{};
+                },
                 [](std::span<MPI_Status const> statuses) { assert(statuses.empty()); });
             nativeImmediate.wait();
 

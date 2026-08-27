@@ -9,15 +9,14 @@
 #include <deque>
 #include <exception>
 #include <functional>
+#include <future>
 #include <limits>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
-#include <type_traits>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include <caravan/mpi_native.hpp>
@@ -34,6 +33,63 @@ namespace caravan
             MPI_Error_string(errorCode, message, &length);
             return std::runtime_error(
                 std::string{operation} + ": " + std::string{message, static_cast<std::size_t>(length)});
+        }
+
+        bool validBuffer(BufferLease const& buffer)
+        {
+            return buffer.valid() && buffer.bytes() <= static_cast<std::size_t>(INT_MAX);
+        }
+
+        std::size_t scalarSize(ScalarType type)
+        {
+            switch(type)
+            {
+            case ScalarType::int32:
+            case ScalarType::uint32:
+            case ScalarType::float32:
+                return 4u;
+            case ScalarType::int64:
+            case ScalarType::uint64:
+            case ScalarType::float64:
+                return 8u;
+            }
+            return 0u;
+        }
+
+        MPI_Datatype nativeType(ScalarType type)
+        {
+            switch(type)
+            {
+            case ScalarType::int32:
+                return MPI_INT32_T;
+            case ScalarType::uint32:
+                return MPI_UINT32_T;
+            case ScalarType::int64:
+                return MPI_INT64_T;
+            case ScalarType::uint64:
+                return MPI_UINT64_T;
+            case ScalarType::float32:
+                return MPI_FLOAT;
+            case ScalarType::float64:
+                return MPI_DOUBLE;
+            }
+            throw std::invalid_argument("Unknown Caravan scalar type");
+        }
+
+        MPI_Op nativeOperation(ReduceOperation operation)
+        {
+            switch(operation)
+            {
+            case ReduceOperation::sum:
+                return MPI_SUM;
+            case ReduceOperation::minimum:
+                return MPI_MIN;
+            case ReduceOperation::maximum:
+                return MPI_MAX;
+            case ReduceOperation::product:
+                return MPI_PROD;
+            }
+            throw std::invalid_argument("Unknown Caravan reduce operation");
         }
     } // namespace
 
@@ -66,147 +122,6 @@ namespace caravan
         TopologySnapshot topology() const
         {
             return m_topology;
-        }
-
-        Future<TopologySnapshot> createCartesian(
-            Event predecessor,
-            std::vector<int> dimensions,
-            std::vector<bool> periodic)
-        {
-            Promise<TopologySnapshot> completion;
-            auto result = completion.future();
-            std::size_t ranks = 1u;
-            for(int dimension : dimensions)
-            {
-                if(dimension <= 0 || ranks > static_cast<std::size_t>(m_topology.size) / dimension)
-                {
-                    completion.setFailed(
-                        std::make_exception_ptr(std::invalid_argument("Invalid Cartesian topology dimensions")));
-                    return result;
-                }
-                ranks *= static_cast<std::size_t>(dimension);
-            }
-            if(dimensions.empty() || dimensions.size() != periodic.size()
-               || ranks != static_cast<std::size_t>(m_topology.size))
-            {
-                completion.setFailed(
-                    std::make_exception_ptr(std::invalid_argument("Invalid Cartesian topology dimensions")));
-                return result;
-            }
-            submitAfter(
-                std::move(predecessor),
-                completion,
-                [this, dimensions = std::move(dimensions), periodic = std::move(periodic)](
-                    Promise<TopologySnapshot> output) mutable
-                { startCreateCartesian(std::move(output), std::move(dimensions), std::move(periodic)); });
-            return result;
-        }
-
-        Event destroyCommunicator(Event predecessor, CommunicatorId communicator)
-        {
-            EventSource completion;
-            auto result = completion.event();
-            if(communicator == worldCommunicator)
-            {
-                completion.setFailed(
-                    std::make_exception_ptr(std::invalid_argument("The world communicator cannot be destroyed")));
-                return result;
-            }
-            submitAfter(
-                std::move(predecessor),
-                completion,
-                [this, communicator](EventSource output)
-                { startDestroyCommunicator(std::move(output), communicator); });
-            return result;
-        }
-
-        Future<SendResult> send(
-            Event predecessor,
-            BufferLease buffer,
-            Peer destination,
-            MessageTag tag,
-            CommunicatorId communicator)
-        {
-            Promise<SendResult> completion;
-            auto result = completion.future();
-            if(!validBuffer(buffer) || destination.any || destination.value < 0 || tag.any || tag.value < 0)
-            {
-                completion.setFailed(std::make_exception_ptr(std::invalid_argument("Invalid Caravan MPI send")));
-                return result;
-            }
-            submitAfter(
-                std::move(predecessor),
-                completion,
-                [this, buffer = std::move(buffer), destination, tag, communicator](Promise<SendResult> output) mutable
-                { startSend(std::move(output), std::move(buffer), destination, tag, communicator); });
-            return result;
-        }
-
-        Future<ReceiveResult> receive(
-            Event predecessor,
-            BufferLease buffer,
-            Peer source,
-            MessageTag tag,
-            CommunicatorId communicator)
-        {
-            Promise<ReceiveResult> completion;
-            auto result = completion.future();
-            if(!validBuffer(buffer) || (!source.any && source.value < 0) || (!tag.any && tag.value < 0))
-            {
-                completion.setFailed(std::make_exception_ptr(std::invalid_argument("Invalid Caravan MPI receive")));
-                return result;
-            }
-            submitAfter(
-                std::move(predecessor),
-                completion,
-                [this, buffer = std::move(buffer), source, tag, communicator](Promise<ReceiveResult> output) mutable
-                { startReceive(std::move(output), std::move(buffer), source, tag, communicator); });
-            return result;
-        }
-
-        Future<AllReduceResult> allReduce(
-            Event predecessor,
-            BufferLease input,
-            BufferLease output,
-            ScalarType type,
-            ReduceOperation operation,
-            CommunicatorId communicator)
-        {
-            Promise<AllReduceResult> completion;
-            auto result = completion.future();
-            auto const elementBytes = scalarSize(type);
-            if(elementBytes == 0u || !validBuffer(input) || !validBuffer(output) || input.bytes() % elementBytes != 0u
-               || output.bytes() < input.bytes())
-            {
-                completion.setFailed(std::make_exception_ptr(std::invalid_argument("Invalid Caravan MPI all-reduce")));
-                return result;
-            }
-            submitAfter(
-                std::move(predecessor),
-                completion,
-                [this, input = std::move(input), output = std::move(output), type, operation, communicator](
-                    Promise<AllReduceResult> result) mutable
-                {
-                    startAllReduce(
-                        std::move(result),
-                        std::move(input),
-                        std::move(output),
-                        type,
-                        operation,
-                        communicator);
-                });
-            return result;
-        }
-
-        Event barrier(Event predecessor, CommunicatorId communicator)
-        {
-            EventSource completion;
-            auto result = completion.event();
-            submitAfter(
-                std::move(predecessor),
-                completion,
-                [this, communicator](EventSource output) { startBarrier(std::move(output), communicator); });
-            return result;
         }
 
         void submitNative(Event predecessor, detail::NativeSubmission submission)
@@ -289,28 +204,6 @@ namespace caravan
             Impl& m_owner;
         };
 
-        struct BarrierCompletion
-        {
-            EventSource output;
-        };
-
-        struct SendCompletion
-        {
-            Promise<SendResult> output;
-            std::size_t bytes;
-        };
-
-        struct ReceiveCompletion
-        {
-            Promise<ReceiveResult> output;
-        };
-
-        struct AllReduceCompletion
-        {
-            Promise<AllReduceResult> output;
-            std::size_t elements;
-        };
-
         struct NativeGroup
         {
             detail::NativeSubmission output;
@@ -353,41 +246,6 @@ namespace caravan
             std::shared_ptr<NativeGroup> group;
             std::size_t index;
         };
-
-        using Barrier = BarrierCompletion;
-        using Send = SendCompletion;
-        using Receive = ReceiveCompletion;
-        using AllReduce = AllReduceCompletion;
-        using Native = NativeCompletion;
-        using ActiveCompletion = std::variant<Barrier, Send, Receive, AllReduce, Native>;
-
-        struct ActiveOperation
-        {
-            ActiveCompletion completion;
-            std::optional<BufferLease> firstBuffer;
-            std::optional<BufferLease> secondBuffer;
-        };
-
-        static bool validBuffer(BufferLease const& buffer)
-        {
-            return buffer.valid() && buffer.bytes() <= static_cast<std::size_t>(INT_MAX);
-        }
-
-        static std::size_t scalarSize(ScalarType type)
-        {
-            switch(type)
-            {
-            case ScalarType::int32:
-            case ScalarType::uint32:
-            case ScalarType::float32:
-                return 4u;
-            case ScalarType::int64:
-            case ScalarType::uint64:
-            case ScalarType::float64:
-                return 8u;
-            }
-            return 0u;
-        }
 
         template<typename T_Output, typename T_Start>
         void submitAfter(Event predecessor, T_Output output, T_Start&& start)
@@ -462,13 +320,6 @@ namespace caravan
             }
         }
 
-        void prepareActive()
-        {
-            auto const capacity = m_requests.size() + 1u;
-            m_requests.reserve(capacity);
-            m_active.reserve(capacity);
-        }
-
         MPI_Comm communicator(CommunicatorId id) const
         {
             if(id.value >= m_communicators.size() || m_communicators[id.value] == MPI_COMM_NULL)
@@ -495,6 +346,17 @@ namespace caravan
             return id;
         }
 
+        void destroyCommunicator(CommunicatorId id)
+        {
+            assertOwner();
+            if(id == worldCommunicator || id.value >= m_communicators.size()
+               || m_communicators[id.value] == MPI_COMM_NULL)
+                throw std::invalid_argument("Unknown or immutable Caravan communicator");
+            int const error = MPI_Comm_free(&m_communicators[id.value]);
+            if(error != MPI_SUCCESS)
+                throw mpiError("MPI_Comm_free", error);
+        }
+
         NativeMpiContext nativeContext()
         {
             return detail::NativeContextFactory::create(
@@ -502,7 +364,9 @@ namespace caravan
                 [](void* implementation, CommunicatorId id)
                 { return static_cast<Impl*>(implementation)->communicator(id); },
                 [](void* implementation, MPI_Comm native)
-                { return static_cast<Impl*>(implementation)->adoptCommunicator(native); });
+                { return static_cast<Impl*>(implementation)->adoptCommunicator(native); },
+                [](void* implementation, CommunicatorId id)
+                { static_cast<Impl*>(implementation)->destroyCommunicator(id); });
         }
 
         void startNative(detail::NativeSubmission output)
@@ -510,6 +374,7 @@ namespace caravan
             assertOwner();
             auto context = nativeContext();
             auto batch = output.start(context);
+            output.start = {};
             auto const activeRequests = static_cast<std::size_t>(std::count_if(
                 batch.requests.begin(),
                 batch.requests.end(),
@@ -539,7 +404,7 @@ namespace caravan
                     continue;
                 }
                 m_requests.emplace_back(batch.requests[index]);
-                m_active.emplace_back(NativeCompletion{group, index}, std::nullopt, std::nullopt);
+                m_active.emplace_back(group, index);
             }
             detail::NativeAccess::release(batch);
         }
@@ -571,110 +436,6 @@ namespace caravan
             finishOperation();
         }
 
-        void startCreateCartesian(
-            Promise<TopologySnapshot> completion,
-            std::vector<int> dimensions,
-            std::vector<bool> periodic)
-        {
-            assertOwner();
-            if(!m_requests.empty())
-            {
-                completion.setFailed(
-                    std::make_exception_ptr(std::runtime_error("Communicator creation requires MPI quiescence")));
-                finishOperation();
-                return;
-            }
-
-            m_communicators.reserve(m_communicators.size() + 1u);
-            std::vector<int> periods;
-            periods.reserve(periodic.size());
-            for(bool value : periodic)
-                periods.emplace_back(value ? 1 : 0);
-
-            MPI_Comm cartesian = MPI_COMM_NULL;
-            int const createError = MPI_Cart_create(
-                MPI_COMM_WORLD,
-                static_cast<int>(dimensions.size()),
-                dimensions.data(),
-                periods.data(),
-                0,
-                &cartesian);
-            if(createError != MPI_SUCCESS || cartesian == MPI_COMM_NULL)
-            {
-                completion.setFailed(
-                    std::make_exception_ptr(
-                        createError == MPI_SUCCESS ? std::runtime_error("MPI_Cart_create returned MPI_COMM_NULL")
-                                                   : mpiError("MPI_Cart_create", createError)));
-                finishOperation();
-                return;
-            }
-
-            TopologySnapshot snapshot;
-            snapshot.hostLocalRank = m_topology.hostLocalRank;
-            snapshot.communicator = CommunicatorId{static_cast<std::uint32_t>(m_communicators.size())};
-            snapshot.dimensions = std::move(dimensions);
-            snapshot.periodic = std::move(periodic);
-            snapshot.coordinates.resize(snapshot.dimensions.size());
-            snapshot.neighbors.reserve(snapshot.dimensions.size() * 2u);
-
-            int error = MPI_Comm_rank(cartesian, &snapshot.rank);
-            if(error == MPI_SUCCESS)
-                error = MPI_Comm_size(cartesian, &snapshot.size);
-            if(error == MPI_SUCCESS)
-                error = MPI_Cart_coords(
-                    cartesian,
-                    snapshot.rank,
-                    static_cast<int>(snapshot.coordinates.size()),
-                    snapshot.coordinates.data());
-            for(int dimension = 0; error == MPI_SUCCESS && dimension < static_cast<int>(snapshot.dimensions.size());
-                ++dimension)
-            {
-                int negative = MPI_PROC_NULL;
-                int positive = MPI_PROC_NULL;
-                error = MPI_Cart_shift(cartesian, dimension, 1, &negative, &positive);
-                snapshot.neighbors.emplace_back(negative == MPI_PROC_NULL ? -1 : negative);
-                snapshot.neighbors.emplace_back(positive == MPI_PROC_NULL ? -1 : positive);
-            }
-            if(error != MPI_SUCCESS)
-            {
-                MPI_Comm_free(&cartesian);
-                completion.setFailed(std::make_exception_ptr(mpiError("MPI Cartesian topology query", error)));
-                finishOperation();
-                return;
-            }
-
-            m_communicators.emplace_back(cartesian);
-            completion.setValue(std::move(snapshot));
-            finishOperation();
-        }
-
-        void startDestroyCommunicator(EventSource completion, CommunicatorId id)
-        {
-            assertOwner();
-            if(!m_requests.empty())
-            {
-                completion.setFailed(
-                    std::make_exception_ptr(std::runtime_error("Communicator destruction requires MPI quiescence")));
-                finishOperation();
-                return;
-            }
-            try
-            {
-                auto& native = m_communicators.at(id.value);
-                if(native == MPI_COMM_NULL)
-                    throw std::invalid_argument("Unknown Caravan communicator");
-                int const error = MPI_Comm_free(&native);
-                if(error != MPI_SUCCESS)
-                    throw mpiError("MPI_Comm_free", error);
-                completion.setReady();
-            }
-            catch(...)
-            {
-                completion.setFailed(std::current_exception());
-            }
-            finishOperation();
-        }
-
         void releaseCommunicators()
         {
             assertOwner();
@@ -691,206 +452,16 @@ namespace caravan
             }
         }
 
-        void startBarrier(EventSource completion, CommunicatorId communicatorId)
+        void failActive(NativeCompletion& active, std::exception_ptr failure)
         {
-            assertOwner();
-            prepareActive();
-            MPI_Request request = MPI_REQUEST_NULL;
-            int const error = MPI_Ibarrier(communicator(communicatorId), &request);
-            if(error != MPI_SUCCESS)
-            {
-                completion.setFailed(std::make_exception_ptr(mpiError("MPI_Ibarrier", error)));
+            if(active.group->fail(std::move(failure)))
                 finishOperation();
-                return;
-            }
-            m_requests.emplace_back(request);
-            m_active.emplace_back(BarrierCompletion{std::move(completion)}, std::nullopt, std::nullopt);
         }
 
-        void startSend(
-            Promise<SendResult> completion,
-            BufferLease buffer,
-            Peer destination,
-            MessageTag tag,
-            CommunicatorId communicatorId)
+        void completeActive(NativeCompletion& active, MPI_Status const& status)
         {
-            assertOwner();
-            prepareActive();
-            MPI_Request request = MPI_REQUEST_NULL;
-            int const error = MPI_Isend(
-                buffer.data(),
-                static_cast<int>(buffer.bytes()),
-                MPI_BYTE,
-                destination.value,
-                tag.value,
-                communicator(communicatorId),
-                &request);
-            if(error != MPI_SUCCESS)
-            {
-                completion.setFailed(std::make_exception_ptr(mpiError("MPI_Isend", error)));
-                finishOperation();
-                return;
-            }
-            auto const bytes = buffer.bytes();
-            m_requests.emplace_back(request);
-            m_active.emplace_back(SendCompletion{std::move(completion), bytes}, std::move(buffer), std::nullopt);
-        }
-
-        void startReceive(
-            Promise<ReceiveResult> completion,
-            BufferLease buffer,
-            Peer source,
-            MessageTag tag,
-            CommunicatorId communicatorId)
-        {
-            assertOwner();
-            prepareActive();
-            MPI_Request request = MPI_REQUEST_NULL;
-            int const error = MPI_Irecv(
-                buffer.data(),
-                static_cast<int>(buffer.bytes()),
-                MPI_BYTE,
-                source.any ? MPI_ANY_SOURCE : source.value,
-                tag.any ? MPI_ANY_TAG : tag.value,
-                communicator(communicatorId),
-                &request);
-            if(error != MPI_SUCCESS)
-            {
-                completion.setFailed(std::make_exception_ptr(mpiError("MPI_Irecv", error)));
-                finishOperation();
-                return;
-            }
-            m_requests.emplace_back(request);
-            m_active.emplace_back(ReceiveCompletion{std::move(completion)}, std::move(buffer), std::nullopt);
-        }
-
-        static MPI_Datatype nativeType(ScalarType type)
-        {
-            switch(type)
-            {
-            case ScalarType::int32:
-                return MPI_INT32_T;
-            case ScalarType::uint32:
-                return MPI_UINT32_T;
-            case ScalarType::int64:
-                return MPI_INT64_T;
-            case ScalarType::uint64:
-                return MPI_UINT64_T;
-            case ScalarType::float32:
-                return MPI_FLOAT;
-            case ScalarType::float64:
-                return MPI_DOUBLE;
-            }
-            throw std::invalid_argument("Unknown Caravan scalar type");
-        }
-
-        static MPI_Op nativeOperation(ReduceOperation operation)
-        {
-            switch(operation)
-            {
-            case ReduceOperation::sum:
-                return MPI_SUM;
-            case ReduceOperation::minimum:
-                return MPI_MIN;
-            case ReduceOperation::maximum:
-                return MPI_MAX;
-            case ReduceOperation::product:
-                return MPI_PROD;
-            }
-            throw std::invalid_argument("Unknown Caravan reduce operation");
-        }
-
-        void startAllReduce(
-            Promise<AllReduceResult> completion,
-            BufferLease input,
-            BufferLease output,
-            ScalarType type,
-            ReduceOperation operation,
-            CommunicatorId communicatorId)
-        {
-            assertOwner();
-            prepareActive();
-            auto const elements = input.bytes() / scalarSize(type);
-            MPI_Request request = MPI_REQUEST_NULL;
-            void* const sendBuffer = input.data() == output.data() ? MPI_IN_PLACE : input.data();
-            int const error = MPI_Iallreduce(
-                sendBuffer,
-                output.data(),
-                static_cast<int>(elements),
-                nativeType(type),
-                nativeOperation(operation),
-                communicator(communicatorId),
-                &request);
-            if(error != MPI_SUCCESS)
-            {
-                completion.setFailed(std::make_exception_ptr(mpiError("MPI_Iallreduce", error)));
-                finishOperation();
-                return;
-            }
-            m_requests.emplace_back(request);
-            m_active.emplace_back(
-                AllReduceCompletion{std::move(completion), elements},
-                std::move(input),
-                std::move(output));
-        }
-
-        void failActive(ActiveOperation& active, std::exception_ptr failure)
-        {
-            std::visit(
-                [&](auto& completion)
-                {
-                    using Completion = std::remove_cvref_t<decltype(completion)>;
-                    if constexpr(std::is_same_v<Completion, NativeCompletion>)
-                    {
-                        if(completion.group->fail(failure))
-                            finishOperation();
-                    }
-                    else
-                    {
-                        completion.output.setFailed(failure);
-                        finishOperation();
-                    }
-                },
-                active.completion);
-        }
-
-        void completeActive(ActiveOperation& active, MPI_Status const& status)
-        {
-            std::visit(
-                [&](auto& completion)
-                {
-                    using Completion = std::remove_cvref_t<decltype(completion)>;
-                    if constexpr(std::is_same_v<Completion, BarrierCompletion>)
-                        completion.output.setReady();
-                    else if constexpr(std::is_same_v<Completion, SendCompletion>)
-                        completion.output.setValue(SendResult{completion.bytes});
-                    else if constexpr(std::is_same_v<Completion, ReceiveCompletion>)
-                    {
-                        int bytes = 0;
-                        int const error = MPI_Get_count(&status, MPI_BYTE, &bytes);
-                        if(error != MPI_SUCCESS)
-                            completion.output.setFailed(std::make_exception_ptr(mpiError("MPI_Get_count", error)));
-                        else if(bytes == MPI_UNDEFINED)
-                            completion.output.setFailed(
-                                std::make_exception_ptr(std::runtime_error("MPI_Get_count returned MPI_UNDEFINED")));
-                        else
-                            completion.output.setValue(
-                                ReceiveResult{
-                                    Peer{status.MPI_SOURCE},
-                                    MessageTag{status.MPI_TAG},
-                                    static_cast<std::size_t>(bytes)});
-                    }
-                    else if constexpr(std::is_same_v<Completion, AllReduceCompletion>)
-                        completion.output.setValue(AllReduceResult{completion.elements});
-                    else
-                    {
-                        auto context = nativeContext();
-                        if(completion.group->complete(context, completion.index, status))
-                            finishOperation();
-                    }
-                },
-                active.completion);
-            if(!std::holds_alternative<NativeCompletion>(active.completion))
+            auto context = nativeContext();
+            if(active.group->complete(context, active.index, status))
                 finishOperation();
         }
 
@@ -963,7 +534,7 @@ namespace caravan
         bool m_stopping = false;
         std::vector<MPI_Comm> m_communicators{MPI_COMM_WORLD};
         std::vector<MPI_Request> m_requests;
-        std::vector<ActiveOperation> m_active;
+        std::vector<NativeCompletion> m_active;
         std::vector<int> m_completedIndices;
         std::vector<MPI_Status> m_statuses;
         std::optional<detail::NativeBlockingSubmission> m_blocking;
@@ -986,12 +557,100 @@ namespace caravan
         std::vector<int> dimensions,
         std::vector<bool> periodic)
     {
-        return m_implementation->createCartesian(std::move(predecessor), std::move(dimensions), std::move(periodic));
+        std::size_t ranks = 1u;
+        for(int dimension : dimensions)
+        {
+            if(dimension <= 0 || ranks > static_cast<std::size_t>(topology().size) / dimension)
+            {
+                Promise<TopologySnapshot> failed;
+                failed.setFailed(
+                    std::make_exception_ptr(std::invalid_argument("Invalid Cartesian topology dimensions")));
+                return failed.future();
+            }
+            ranks *= static_cast<std::size_t>(dimension);
+        }
+        if(dimensions.empty() || dimensions.size() != periodic.size()
+           || ranks != static_cast<std::size_t>(topology().size))
+        {
+            Promise<TopologySnapshot> failed;
+            failed.setFailed(std::make_exception_ptr(std::invalid_argument("Invalid Cartesian topology dimensions")));
+            return failed.future();
+        }
+
+        auto const hostLocalRank = topology().hostLocalRank;
+        return nativeBlockingFuture<TopologySnapshot>(
+            *this,
+            std::move(predecessor),
+            [dimensions = std::move(dimensions), periodic = std::move(periodic), hostLocalRank](
+                NativeMpiContext& context) mutable
+            {
+                std::vector<int> periods;
+                periods.reserve(periodic.size());
+                for(bool value : periodic)
+                    periods.emplace_back(value ? 1 : 0);
+
+                TopologySnapshot snapshot;
+                snapshot.hostLocalRank = hostLocalRank;
+                snapshot.dimensions = std::move(dimensions);
+                snapshot.periodic = std::move(periodic);
+                snapshot.coordinates.resize(snapshot.dimensions.size());
+                snapshot.neighbors.reserve(snapshot.dimensions.size() * 2u);
+
+                MPI_Comm cartesian = MPI_COMM_NULL;
+                int error = MPI_Cart_create(
+                    context.communicator(worldCommunicator),
+                    static_cast<int>(snapshot.dimensions.size()),
+                    snapshot.dimensions.data(),
+                    periods.data(),
+                    0,
+                    &cartesian);
+                if(error != MPI_SUCCESS || cartesian == MPI_COMM_NULL)
+                    throw error == MPI_SUCCESS ? std::runtime_error("MPI_Cart_create returned MPI_COMM_NULL")
+                                               : mpiError("MPI_Cart_create", error);
+
+                error = MPI_Comm_rank(cartesian, &snapshot.rank);
+                if(error == MPI_SUCCESS)
+                    error = MPI_Comm_size(cartesian, &snapshot.size);
+                if(error == MPI_SUCCESS)
+                    error = MPI_Cart_coords(
+                        cartesian,
+                        snapshot.rank,
+                        static_cast<int>(snapshot.coordinates.size()),
+                        snapshot.coordinates.data());
+                for(int dimension = 0;
+                    error == MPI_SUCCESS && dimension < static_cast<int>(snapshot.dimensions.size());
+                    ++dimension)
+                {
+                    int negative = MPI_PROC_NULL;
+                    int positive = MPI_PROC_NULL;
+                    error = MPI_Cart_shift(cartesian, dimension, 1, &negative, &positive);
+                    snapshot.neighbors.emplace_back(negative == MPI_PROC_NULL ? -1 : negative);
+                    snapshot.neighbors.emplace_back(positive == MPI_PROC_NULL ? -1 : positive);
+                }
+                if(error != MPI_SUCCESS)
+                {
+                    MPI_Comm_free(&cartesian);
+                    throw mpiError("MPI Cartesian topology query", error);
+                }
+
+                snapshot.communicator = context.adoptCommunicator(cartesian);
+                return snapshot;
+            });
     }
 
     Event MpiExecutor::destroyCommunicator(Event predecessor, CommunicatorId communicator)
     {
-        return m_implementation->destroyCommunicator(std::move(predecessor), communicator);
+        if(communicator == worldCommunicator)
+        {
+            EventSource failed;
+            failed.setFailed(
+                std::make_exception_ptr(std::invalid_argument("The world communicator cannot be destroyed")));
+            return failed.event();
+        }
+        return nativeBlockingEvent(
+            *this,
+            std::move(predecessor),
+            [communicator](NativeMpiContext& context) { context.destroyCommunicator(communicator); });
     }
 
     Future<SendResult> MpiExecutor::send(
@@ -1001,7 +660,32 @@ namespace caravan
         MessageTag tag,
         CommunicatorId communicator)
     {
-        return m_implementation->send(std::move(dataReady), std::move(buffer), destination, tag, communicator);
+        if(!validBuffer(buffer) || destination.any || destination.value < 0 || tag.any || tag.value < 0)
+        {
+            Promise<SendResult> failed;
+            failed.setFailed(std::make_exception_ptr(std::invalid_argument("Invalid Caravan MPI send")));
+            return failed.future();
+        }
+        auto const bytes = buffer.bytes();
+        return nativeFuture<SendResult>(
+            *this,
+            std::move(dataReady),
+            [buffer = std::move(buffer), destination, tag, communicator](NativeMpiContext& context) mutable
+            {
+                NativeRequestBatch batch({MPI_REQUEST_NULL}, {buffer.lifetime()});
+                int const error = MPI_Isend(
+                    buffer.data(),
+                    static_cast<int>(buffer.bytes()),
+                    MPI_BYTE,
+                    destination.value,
+                    tag.value,
+                    context.communicator(communicator),
+                    &batch.requests[0]);
+                if(error != MPI_SUCCESS)
+                    throw mpiError("MPI_Isend", error);
+                return batch;
+            },
+            [bytes](std::span<MPI_Status const>) { return SendResult{bytes}; });
     }
 
     Future<ReceiveResult> MpiExecutor::receive(
@@ -1011,7 +695,43 @@ namespace caravan
         MessageTag tag,
         CommunicatorId communicator)
     {
-        return m_implementation->receive(std::move(bufferAvailable), std::move(buffer), source, tag, communicator);
+        if(!validBuffer(buffer) || (!source.any && source.value < 0) || (!tag.any && tag.value < 0))
+        {
+            Promise<ReceiveResult> failed;
+            failed.setFailed(std::make_exception_ptr(std::invalid_argument("Invalid Caravan MPI receive")));
+            return failed.future();
+        }
+        return nativeFuture<ReceiveResult>(
+            *this,
+            std::move(bufferAvailable),
+            [buffer = std::move(buffer), source, tag, communicator](NativeMpiContext& context) mutable
+            {
+                NativeRequestBatch batch({MPI_REQUEST_NULL}, {buffer.lifetime()});
+                int const error = MPI_Irecv(
+                    buffer.data(),
+                    static_cast<int>(buffer.bytes()),
+                    MPI_BYTE,
+                    source.any ? MPI_ANY_SOURCE : source.value,
+                    tag.any ? MPI_ANY_TAG : tag.value,
+                    context.communicator(communicator),
+                    &batch.requests[0]);
+                if(error != MPI_SUCCESS)
+                    throw mpiError("MPI_Irecv", error);
+                return batch;
+            },
+            [](std::span<MPI_Status const> statuses)
+            {
+                int bytes = 0;
+                int const error = MPI_Get_count(&statuses.front(), MPI_BYTE, &bytes);
+                if(error != MPI_SUCCESS)
+                    throw mpiError("MPI_Get_count", error);
+                if(bytes == MPI_UNDEFINED)
+                    throw std::runtime_error("MPI_Get_count returned MPI_UNDEFINED");
+                return ReceiveResult{
+                    Peer{statuses.front().MPI_SOURCE},
+                    MessageTag{statuses.front().MPI_TAG},
+                    static_cast<std::size_t>(bytes)};
+            });
     }
 
     Future<AllReduceResult> MpiExecutor::allReduce(
@@ -1022,13 +742,52 @@ namespace caravan
         ReduceOperation operation,
         CommunicatorId communicator)
     {
-        return m_implementation
-            ->allReduce(std::move(dataReady), std::move(input), std::move(output), type, operation, communicator);
+        auto const elementBytes = scalarSize(type);
+        if(elementBytes == 0u || !validBuffer(input) || !validBuffer(output) || input.bytes() % elementBytes != 0u
+           || output.bytes() < input.bytes())
+        {
+            Promise<AllReduceResult> failed;
+            failed.setFailed(std::make_exception_ptr(std::invalid_argument("Invalid Caravan MPI all-reduce")));
+            return failed.future();
+        }
+        auto const elements = input.bytes() / elementBytes;
+        return nativeFuture<AllReduceResult>(
+            *this,
+            std::move(dataReady),
+            [input = std::move(input), output = std::move(output), type, operation, communicator](
+                NativeMpiContext& context) mutable
+            {
+                NativeRequestBatch batch({MPI_REQUEST_NULL}, {input.lifetime(), output.lifetime()});
+                void* const sendBuffer = input.data() == output.data() ? MPI_IN_PLACE : input.data();
+                int const error = MPI_Iallreduce(
+                    sendBuffer,
+                    output.data(),
+                    static_cast<int>(input.bytes() / scalarSize(type)),
+                    nativeType(type),
+                    nativeOperation(operation),
+                    context.communicator(communicator),
+                    &batch.requests[0]);
+                if(error != MPI_SUCCESS)
+                    throw mpiError("MPI_Iallreduce", error);
+                return batch;
+            },
+            [elements](std::span<MPI_Status const>) { return AllReduceResult{elements}; });
     }
 
     Event MpiExecutor::barrier(Event predecessor, CommunicatorId communicator)
     {
-        return m_implementation->barrier(std::move(predecessor), communicator);
+        return nativeEvent(
+            *this,
+            std::move(predecessor),
+            [communicator](NativeMpiContext& context)
+            {
+                NativeRequestBatch batch({MPI_REQUEST_NULL});
+                int const error = MPI_Ibarrier(context.communicator(communicator), &batch.requests[0]);
+                if(error != MPI_SUCCESS)
+                    throw mpiError("MPI_Ibarrier", error);
+                return batch;
+            },
+            [](std::span<MPI_Status const>) {});
     }
 
     void MpiExecutor::run()
@@ -1066,67 +825,80 @@ namespace caravan
 
     int MpiRuntime::runImpl(int& argc, char**& argv, std::function<int(MpiExecutor&)> application)
     {
-        int provided = MPI_THREAD_SINGLE;
-        int const initError = MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
-        if(initError != MPI_SUCCESS)
-            throw std::runtime_error("MPI_Init_thread failed with error code " + std::to_string(initError));
-        if(provided < MPI_THREAD_FUNNELED)
-        {
-            MPI_Finalize();
-            throw std::runtime_error("MPI does not provide MPI_THREAD_FUNNELED");
-        }
+        std::promise<MpiExecutor*> startup;
+        auto ready = startup.get_future();
+        std::exception_ptr workerError;
+        std::jthread mpiWorker(
+            [&]
+            {
+                bool initialized = false;
+                bool published = false;
+                try
+                {
+                    int provided = MPI_THREAD_SINGLE;
+                    int const initError = MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
+                    if(initError != MPI_SUCCESS)
+                        throw std::runtime_error(
+                            "MPI_Init_thread failed with error code " + std::to_string(initError));
+                    initialized = true;
+                    if(provided < MPI_THREAD_FUNNELED)
+                        throw std::runtime_error("MPI does not provide MPI_THREAD_FUNNELED");
 
-        int const handlerError = MPI_Comm_set_errhandler(MPI_COMM_WORLD, MPI_ERRORS_RETURN);
-        if(handlerError != MPI_SUCCESS)
-        {
-            auto error = mpiError("MPI_Comm_set_errhandler", handlerError);
-            MPI_Finalize();
-            throw error;
-        }
+                    int const handlerError = MPI_Comm_set_errhandler(MPI_COMM_WORLD, MPI_ERRORS_RETURN);
+                    if(handlerError != MPI_SUCCESS)
+                        throw mpiError("MPI_Comm_set_errhandler", handlerError);
 
-        std::unique_ptr<MpiExecutor::Impl> implementation;
+                    MpiExecutor executor{std::make_unique<MpiExecutor::Impl>()};
+                    startup.set_value(&executor);
+                    published = true;
+                    executor.run();
+
+                    int const finalizeError = MPI_Finalize();
+                    initialized = false;
+                    if(finalizeError != MPI_SUCCESS)
+                        throw std::runtime_error(
+                            "MPI_Finalize failed with error code " + std::to_string(finalizeError));
+                }
+                catch(...)
+                {
+                    auto const error = std::current_exception();
+                    if(initialized)
+                        MPI_Finalize();
+                    if(published)
+                        workerError = error;
+                    else
+                        startup.set_exception(error);
+                }
+            });
+
+        MpiExecutor* executor;
         try
         {
-            implementation = std::make_unique<MpiExecutor::Impl>();
+            executor = ready.get();
         }
         catch(...)
         {
-            MPI_Finalize();
+            mpiWorker.join();
             throw;
         }
-        MpiExecutor executor{std::move(implementation)};
+
         int applicationResult = 0;
         std::exception_ptr applicationError;
-        std::thread applicationThread;
         try
         {
-            applicationThread = std::thread(
-                [&]
-                {
-                    try
-                    {
-                        applicationResult = application(executor);
-                    }
-                    catch(...)
-                    {
-                        applicationError = std::current_exception();
-                    }
-                    executor.requestShutdown();
-                });
+            applicationResult = application(*executor);
         }
         catch(...)
         {
-            MPI_Finalize();
-            throw;
+            applicationError = std::current_exception();
         }
+        executor->requestShutdown();
+        mpiWorker.join();
 
-        executor.run();
-        applicationThread.join();
-        int const finalizeError = MPI_Finalize();
         if(applicationError)
             std::rethrow_exception(applicationError);
-        if(finalizeError != MPI_SUCCESS)
-            throw std::runtime_error("MPI_Finalize failed with error code " + std::to_string(finalizeError));
+        if(workerError)
+            std::rethrow_exception(workerError);
         return applicationResult;
     }
 } // namespace caravan
