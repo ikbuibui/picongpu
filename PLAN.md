@@ -11,8 +11,9 @@ buffer leases, and MPI-owned Cartesian and split communicators with immutable
 topology snapshots. PMacc
 can now attach its environment to the runtime and initialize `CommunicatorMPI`
 from an immutable snapshot without application-thread topology calls. Its
-dedicated signal communicator, signal all-reductions, and simulation/checkpoint
-barriers use the MPI thread when Caravan is attached. An unused MPI-calling
+dedicated signal communicator, signal all-reductions, selected-rank reductions,
+and simulation/checkpoint barriers use the MPI thread when Caravan is attached.
+An unused MPI-calling
 memory diagnostic and an invalid pre-initialization example finalization were
 deleted instead of migrated. Legacy `TaskSendMPI` and `TaskReceiveMPI` can poll
 Caravan point-to-point futures while unchanged PMacc startup remains available
