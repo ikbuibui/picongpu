@@ -6,6 +6,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -75,6 +76,23 @@ int main(int argc, char** argv)
             assert(largeReceive.result().bytes == largeMessageBytes);
             assert(largeReceiveBuffer->front() == std::byte{42});
             assert(largeReceiveBuffer->back() == std::byte{42});
+
+            auto reductionInput
+                = std::make_shared<std::array<std::int32_t, 3>>(std::array{topology.rank + 1, 1, topology.rank});
+            auto reductionOutput = std::make_shared<std::array<std::int32_t, 3>>();
+            caravan::EventSource reductionReady;
+            auto reduction = mpi.allReduce(
+                reductionReady.event(),
+                caravan::BufferLease{reductionInput, reductionInput->data(), sizeof(*reductionInput)},
+                caravan::BufferLease{reductionOutput, reductionOutput->data(), sizeof(*reductionOutput)},
+                caravan::ScalarType::int32,
+                caravan::ReduceOperation::sum);
+            assert(reduction.state() == caravan::CompletionState::pending);
+            reductionReady.setReady();
+            assert(reduction.result().elements == reductionInput->size());
+            assert((*reductionOutput)[0] == topology.size * (topology.size + 1) / 2);
+            assert((*reductionOutput)[1] == topology.size);
+            assert((*reductionOutput)[2] == topology.size * (topology.size - 1) / 2);
 
             auto invalid = mpi.send(
                 caravan::readyEvent(),
