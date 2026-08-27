@@ -99,6 +99,9 @@ namespace pmacc
              */
             HINLINE pmacc::PluginConnector& PluginConnector();
 
+            /** get the attached Caravan MPI executor, or nullptr during legacy startup */
+            HINLINE caravan::MpiExecutor* getMpiExecutor();
+
             /** get the singleton MemoryInfo
              *
              * @return instance of MemoryInfo
