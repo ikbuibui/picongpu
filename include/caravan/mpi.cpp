@@ -638,6 +638,21 @@ namespace caravan
             });
     }
 
+    Future<CommunicatorId> MpiExecutor::duplicateCommunicator(Event predecessor, CommunicatorId communicator)
+    {
+        return nativeBlockingFuture<CommunicatorId>(
+            *this,
+            std::move(predecessor),
+            [communicator](NativeMpiContext& context)
+            {
+                MPI_Comm duplicate = MPI_COMM_NULL;
+                int const error = MPI_Comm_dup(context.communicator(communicator), &duplicate);
+                if(error != MPI_SUCCESS)
+                    throw mpiError("MPI_Comm_dup", error);
+                return context.adoptCommunicator(duplicate);
+            });
+    }
+
     Event MpiExecutor::destroyCommunicator(Event predecessor, CommunicatorId communicator)
     {
         if(communicator == worldCommunicator)

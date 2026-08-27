@@ -98,6 +98,11 @@ namespace pmacc
             return communicatorId;
         }
 
+        caravan::CommunicatorId getSignalCommunicatorId() const
+        {
+            return signalCommunicatorId;
+        }
+
         /*! returns a rank number (0-n) for each host
          *
          * E.g. if 8 GPUs are on 2 Hosts (4 GPUs each), the GPUs on each host will get hostrank 0 to 3
@@ -144,6 +149,13 @@ namespace pmacc
             size_t receiveBytes,
             uint32_t tag) override;
 
+        caravan::Future<caravan::AllReduceResult> startSignalAllReduce(
+            void const* input,
+            void* output,
+            size_t bytes,
+            caravan::ScalarType type,
+            caravan::ReduceOperation operation);
+
         bool usesMpiExecutor() const override
         {
             return mpiExecutor != nullptr;
@@ -186,8 +198,9 @@ namespace pmacc
         MPI_Comm topology{MPI_COMM_NULL};
         //! Communicator to handle signals
         MPI_Comm commSignal{MPI_COMM_NULL};
-        //! Opaque communicator owned by the Caravan MPI thread.
+        //! Opaque communicators owned by the Caravan MPI thread.
         caravan::CommunicatorId communicatorId{caravan::worldCommunicator};
+        caravan::CommunicatorId signalCommunicatorId{caravan::worldCommunicator};
         caravan::MpiExecutor* mpiExecutor{nullptr};
         //! array for exchangetype-to-rank conversion @see ExchangeTypeToRank
         int ranks[27];
