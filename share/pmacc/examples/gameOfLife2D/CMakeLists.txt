@@ -140,6 +140,43 @@ if(NOT WIN32)
 endif()
 
 ################################################################################
+# Tests
+################################################################################
+
+option(PMACC_BUILD_EXAMPLE_TESTS "Build PMacc example integration tests" ON)
+if(PMACC_BUILD_EXAMPLE_TESTS)
+    enable_testing()
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-1-rank" "${CMAKE_CURRENT_BINARY_DIR}/test-4-ranks")
+    add_test(
+        NAME gameOfLife-1-rank
+        COMMAND
+            ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 ${MPIEXEC_PREFLAGS} $<TARGET_FILE:gameOfLife> -d 1 1 -g 64
+            64 -s 5 -p 1 1 ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        gameOfLife-1-rank
+        PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-1-rank"
+            PASS_REGULAR_EXPRESSION "mask=4108"
+            TIMEOUT 30
+    )
+    add_test(
+        NAME gameOfLife-4-ranks
+        COMMAND
+            ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4 ${MPIEXEC_PREFLAGS} $<TARGET_FILE:gameOfLife> -d 2 2 -g 128
+            128 -s 5 -p 1 1 ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        gameOfLife-4-ranks
+        PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-4-ranks"
+            PASS_REGULAR_EXPRESSION "mask=4108"
+            PROCESSORS 4
+            TIMEOUT 30
+    )
+endif()
+
+################################################################################
 # Install GoL
 ################################################################################
 
