@@ -4,6 +4,9 @@
  */
 #include <pmacc/Environment.hpp>
 #include <pmacc/dimensions/DataSpace.hpp>
+#include <pmacc/math/operation/Add.hpp>
+#include <pmacc/mpi/MPIReduce.hpp>
+#include <pmacc/mpi/reduceMethods/Reduce.hpp>
 
 #include <array>
 #include <stdexcept>
@@ -48,6 +51,21 @@ TEST_CASE("CommunicatorMPI consumes Caravan topology snapshots")
                || signalOutput[1] != static_cast<std::uint32_t>(topology.size))
                 throw std::runtime_error("Signal all-reduce adapter failed");
             communicator.startBarrierAsync().wait();
+
+            {
+                pmacc::mpi::MPIReduce reduce;
+                std::uint32_t local = static_cast<std::uint32_t>(topology.rank + 1);
+                std::uint32_t global = 0u;
+                reduce(pmacc::math::operation::Add{}, &global, &local, 1u);
+                if(global != static_cast<std::uint32_t>(topology.size * (topology.size + 1) / 2))
+                    throw std::runtime_error("Caravan-backed PMacc all-reduce failed");
+
+                global = 0u;
+                reduce(pmacc::math::operation::Add{}, &global, &local, 1u, pmacc::mpi::reduceMethods::Reduce{});
+                if(reduce.hasResult(pmacc::mpi::reduceMethods::Reduce{})
+                   && global != static_cast<std::uint32_t>(topology.size * (topology.size + 1) / 2))
+                    throw std::runtime_error("Caravan-backed PMacc root reduction failed");
+            }
 
             for(int exchange = 1; exchange < -12 * TEST_DIM + 6 * TEST_DIM * TEST_DIM + 9; ++exchange)
             {
