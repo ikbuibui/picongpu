@@ -54,28 +54,44 @@ namespace pmacc
         {
             if(m_state == Init)
             {
-                // find the largest time step of all MPI ranks
-                MPI_CHECK(MPI_Iallreduce(
-                    &m_processSignalAtStep,
-                    &m_globalCommonTimestep,
-                    1,
-                    MPI_UINT32_T,
-                    MPI_MAX,
-                    Environment<T_dim>::get().GridController().getCommunicator().getMPISignalComm(),
-                    &m_reduceTimeStepRequest));
-
-
+                auto& communicator = Environment<T_dim>::get().GridController().getCommunicator();
                 m_sendSignals[doCheckpointing] = signal::createCheckpoint();
                 m_sendSignals[stopSimulation] = signal::stopSimulation();
 
-                MPI_CHECK(MPI_Iallreduce(
-                    m_sendSignals.data(),
-                    m_globalSignalCounts.data(),
-                    m_globalSignalCounts.size(),
-                    MPI_UINT32_T,
-                    MPI_SUM,
-                    Environment<T_dim>::get().GridController().getCommunicator().getMPISignalComm(),
-                    &m_signalRequest));
+                if(communicator.usesMpiExecutor())
+                {
+                    m_timeStepFuture = communicator.startSignalAllReduce(
+                        &m_processSignalAtStep,
+                        &m_globalCommonTimestep,
+                        sizeof(m_processSignalAtStep),
+                        caravan::ScalarType::uint32,
+                        caravan::ReduceOperation::maximum);
+                    m_signalFuture = communicator.startSignalAllReduce(
+                        m_sendSignals.data(),
+                        m_globalSignalCounts.data(),
+                        sizeof(m_sendSignals),
+                        caravan::ScalarType::uint32,
+                        caravan::ReduceOperation::sum);
+                }
+                else
+                {
+                    MPI_CHECK(MPI_Iallreduce(
+                        &m_processSignalAtStep,
+                        &m_globalCommonTimestep,
+                        1,
+                        MPI_UINT32_T,
+                        MPI_MAX,
+                        communicator.getMPISignalComm(),
+                        &m_reduceTimeStepRequest));
+                    MPI_CHECK(MPI_Iallreduce(
+                        m_sendSignals.data(),
+                        m_globalSignalCounts.data(),
+                        m_globalSignalCounts.size(),
+                        MPI_UINT32_T,
+                        MPI_SUM,
+                        communicator.getMPISignalComm(),
+                        &m_signalRequest));
+                }
 
                 m_state = WaitForMpiReduce;
             }
@@ -88,29 +104,37 @@ namespace pmacc
 
             if(m_state == WaitForMpiReduce)
             {
-                if(m_reduceTimeStepRequest != MPI_REQUEST_NULL)
+                if(m_timeStepFuture.valid())
                 {
-                    // wait for the global common time step
-                    MPI_Status mpiTimeStepStatus;
-
-                    int flag = 0;
-                    MPI_CHECK(MPI_Test(&m_reduceTimeStepRequest, &flag, &mpiTimeStepStatus));
-                    if(flag != 0)
-                        m_reduceTimeStepRequest = MPI_REQUEST_NULL;
+                    if(m_timeStepFuture.state() != caravan::CompletionState::pending
+                       && m_signalFuture.state() != caravan::CompletionState::pending)
+                    {
+                        static_cast<void>(m_timeStepFuture.result());
+                        static_cast<void>(m_signalFuture.result());
+                        m_state = HandleSignals;
+                    }
                 }
-                else if(m_signalRequest != MPI_REQUEST_NULL)
+                else
                 {
-                    // wait for signal categories
-                    MPI_Status mpiSignalStatus;
-
-                    int flag = 0;
-                    MPI_CHECK(MPI_Test(&m_signalRequest, &flag, &mpiSignalStatus));
-                    if(flag != 0)
-                        m_signalRequest = MPI_REQUEST_NULL;
+                    if(m_reduceTimeStepRequest != MPI_REQUEST_NULL)
+                    {
+                        MPI_Status status;
+                        int flag = 0;
+                        MPI_CHECK(MPI_Test(&m_reduceTimeStepRequest, &flag, &status));
+                        if(flag != 0)
+                            m_reduceTimeStepRequest = MPI_REQUEST_NULL;
+                    }
+                    else if(m_signalRequest != MPI_REQUEST_NULL)
+                    {
+                        MPI_Status status;
+                        int flag = 0;
+                        MPI_CHECK(MPI_Test(&m_signalRequest, &flag, &status));
+                        if(flag != 0)
+                            m_signalRequest = MPI_REQUEST_NULL;
+                    }
+                    if(m_reduceTimeStepRequest == MPI_REQUEST_NULL && m_signalRequest == MPI_REQUEST_NULL)
+                        m_state = HandleSignals;
                 }
-                // wait until we know the max timestep of all MPI ranks and which signals we should handle
-                if(m_reduceTimeStepRequest == MPI_REQUEST_NULL && m_signalRequest == MPI_REQUEST_NULL)
-                    m_state = HandleSignals;
             }
 
             if(m_state == HandleSignals)
@@ -174,10 +198,8 @@ namespace pmacc
         uint32_t m_processSignalAtStep = 0u;
         /** Largest common timestep within all MPI ranks */
         uint32_t m_globalCommonTimestep = 0u;
-        /** Number of MPI ranks received the signal to stop the simulation */
-        uint32_t m_globalNumStopSignals = 0u;
-        /** Number of MPI ranks received the signal to checkpoint the simulation */
-        uint32_t m_globalNumCheckpointSignals = 0u;
+        caravan::Future<caravan::AllReduceResult> m_timeStepFuture;
+        caravan::Future<caravan::AllReduceResult> m_signalFuture;
 
         /** MPI Request to check the status for the common time step MPI call */
         MPI_Request m_reduceTimeStepRequest = MPI_REQUEST_NULL;

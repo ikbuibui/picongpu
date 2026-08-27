@@ -146,6 +146,10 @@ namespace caravan
             std::vector<int> dimensions,
             std::vector<bool> periodic);
 
+        Future<CommunicatorId> duplicateCommunicator(
+            Event predecessor,
+            CommunicatorId communicator = worldCommunicator);
+
         Event destroyCommunicator(Event predecessor, CommunicatorId communicator);
 
         Future<SendResult> send(
