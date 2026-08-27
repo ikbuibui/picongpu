@@ -68,6 +68,11 @@ namespace caravan
             return m_bytes;
         }
 
+        std::shared_ptr<void> lifetime() const noexcept
+        {
+            return m_allocation;
+        }
+
         bool valid() const noexcept
         {
             return m_bytes == 0u || (m_allocation && m_data != nullptr);
