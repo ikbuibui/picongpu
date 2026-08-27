@@ -39,6 +39,12 @@ int main(int argc, char** argv)
             assert(cartesian.neighbors[0] == (topology.rank + topology.size - 1) % topology.size);
             assert(cartesian.neighbors[1] == (topology.rank + 1) % topology.size);
 
+            auto const portableDuplicate
+                = mpi.duplicateCommunicator(caravan::readyEvent(), cartesian.communicator).result();
+            assert(portableDuplicate != cartesian.communicator);
+            mpi.barrier(caravan::readyEvent(), portableDuplicate).wait();
+            mpi.destroyCommunicator(caravan::readyEvent(), portableDuplicate).wait();
+
             auto first = mpi.barrier(caravan::readyEvent(), cartesian.communicator);
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             first.wait();
