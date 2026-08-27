@@ -89,6 +89,11 @@ covered by the rows above; none is retained for PIConGPU compatibility.
 
 ## Local compile and behavior baseline
 
+### PMacc tests
+
+The complete CPU-serial PMacc unit suite built and passed: lockstep, memory,
+particles, and vector tests in both 2D and 3D (8/8 tests, 17.04 s total).
+
 ### PMacc examples
 
 Both CPU release builds passed. With a warm compiler/filesystem cache and two
