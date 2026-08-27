@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -119,6 +120,18 @@ namespace caravan
         std::size_t elements;
     };
 
+    struct ReduceResult
+    {
+        std::size_t elements;
+    };
+
+    struct CommunicatorInfo
+    {
+        CommunicatorId communicator;
+        int rank;
+        int size;
+    };
+
     struct TopologySnapshot
     {
         int rank;
@@ -150,6 +163,12 @@ namespace caravan
             Event predecessor,
             CommunicatorId communicator = worldCommunicator);
 
+        Future<std::optional<CommunicatorInfo>> splitCommunicator(
+            Event predecessor,
+            std::optional<int> color,
+            int key,
+            CommunicatorId communicator = worldCommunicator);
+
         Event destroyCommunicator(Event predecessor, CommunicatorId communicator);
 
         Future<SendResult> send(
@@ -172,6 +191,15 @@ namespace caravan
             BufferLease output,
             ScalarType type,
             ReduceOperation operation,
+            CommunicatorId communicator = worldCommunicator);
+
+        Future<ReduceResult> reduce(
+            Event dataReady,
+            BufferLease input,
+            BufferLease output,
+            ScalarType type,
+            ReduceOperation operation,
+            Peer root,
             CommunicatorId communicator = worldCommunicator);
 
         Event barrier(Event predecessor, CommunicatorId communicator = worldCommunicator);
