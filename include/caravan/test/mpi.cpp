@@ -24,8 +24,19 @@ int main(int argc, char** argv)
             auto const topology = mpi.topology();
             assert(topology.size > 0);
             assert(topology.rank >= 0 && topology.rank < topology.size);
+            assert(topology.hostLocalRank >= 0);
 
-            auto first = mpi.barrier(caravan::readyEvent());
+            auto cartesianFuture
+                = mpi.createCartesian(caravan::readyEvent(), std::vector<int>{topology.size}, std::vector<bool>{true});
+            auto const cartesian = cartesianFuture.result();
+            assert(cartesian.communicator != caravan::worldCommunicator);
+            assert(cartesian.dimensions == std::vector<int>{topology.size});
+            assert(cartesian.coordinates == std::vector<int>{topology.rank});
+            assert(cartesian.periodic == std::vector<bool>{true});
+            assert(cartesian.neighbors[0] == (topology.rank + topology.size - 1) % topology.size);
+            assert(cartesian.neighbors[1] == (topology.rank + 1) % topology.size);
+
+            auto first = mpi.barrier(caravan::readyEvent(), cartesian.communicator);
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             first.wait();
 
@@ -43,12 +54,14 @@ int main(int argc, char** argv)
                 caravan::readyEvent(),
                 caravan::BufferLease{receivedValues, receivedValues->data(), sizeof(*receivedValues)},
                 caravan::anyPeer,
-                caravan::anyMessageTag);
+                caravan::anyMessageTag,
+                cartesian.communicator);
             auto sent = mpi.send(
                 caravan::readyEvent(),
                 caravan::BufferLease{sentValue, sentValue.get(), sizeof(int)},
                 caravan::Peer{destination},
-                caravan::MessageTag{17});
+                caravan::MessageTag{17},
+                cartesian.communicator);
             std::array transfers{received.event(), sent.event()};
             caravan::whenAll(transfers).wait();
             assert(receivedValues->front() == source);
@@ -65,12 +78,14 @@ int main(int argc, char** argv)
                 caravan::readyEvent(),
                 caravan::BufferLease{largeReceiveBuffer, largeReceiveBuffer->data(), largeReceiveBuffer->size()},
                 caravan::Peer{source},
-                caravan::MessageTag{18});
+                caravan::MessageTag{18},
+                cartesian.communicator);
             auto largeSend = mpi.send(
                 caravan::readyEvent(),
                 caravan::BufferLease{largeSendBuffer, largeSendBuffer->data(), largeSendBuffer->size()},
                 caravan::Peer{destination},
-                caravan::MessageTag{18});
+                caravan::MessageTag{18},
+                cartesian.communicator);
             std::array largeTransfers{largeReceive.event(), largeSend.event()};
             caravan::whenAll(largeTransfers).wait();
             assert(largeReceive.result().bytes == largeMessageBytes);
@@ -86,7 +101,8 @@ int main(int argc, char** argv)
                 caravan::BufferLease{reductionInput, reductionInput->data(), sizeof(*reductionInput)},
                 caravan::BufferLease{reductionOutput, reductionOutput->data(), sizeof(*reductionOutput)},
                 caravan::ScalarType::int32,
-                caravan::ReduceOperation::sum);
+                caravan::ReduceOperation::sum,
+                cartesian.communicator);
             assert(reduction.state() == caravan::CompletionState::pending);
             reductionReady.setReady();
             assert(reduction.result().elements == reductionInput->size());
@@ -119,6 +135,8 @@ int main(int argc, char** argv)
             catch(std::runtime_error const&)
             {
             }
+
+            mpi.destroyCommunicator(caravan::readyEvent(), cartesian.communicator).wait();
 
             // MpiRuntime must drain native work even when the application drops its handle.
             static_cast<void>(mpi.barrier(caravan::readyEvent()));
