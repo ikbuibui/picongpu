@@ -5,6 +5,8 @@
 Implementation is in progress. The Caravan completion core (Phase 1) is
 implemented and tested. The Phase 0 local inventory and CPU baseline are
 recorded in `docs/CARAVAN_PHASE0.md`; target GPU measurements remain open.
+Phase 2 has started with the dedicated `MpiRuntime` and nonblocking barrier
+progress; point-to-point operations and PMacc startup migration remain open.
 
 This plan targets the PMacc event system.
 Breaking PMacc and PIConGPU interfaces is allowed during the migration.
