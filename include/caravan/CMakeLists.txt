@@ -15,7 +15,7 @@ find_package(MPI REQUIRED COMPONENTS CXX)
 find_package(Threads REQUIRED)
 add_library(caravan-mpi STATIC mpi.cpp)
 add_library(caravan::mpi ALIAS caravan-mpi)
-target_link_libraries(caravan-mpi PUBLIC caravan::core PRIVATE MPI::MPI_CXX Threads::Threads)
+target_link_libraries(caravan-mpi PUBLIC caravan::core MPI::MPI_CXX PRIVATE Threads::Threads)
 
 option(CARAVAN_BUILD_TESTING "Build Caravan tests" ${PROJECT_IS_TOP_LEVEL})
 if(CARAVAN_BUILD_TESTING)
