@@ -31,6 +31,23 @@ TEST_CASE("CommunicatorMPI consumes Caravan topology snapshots")
                 throw std::runtime_error("Unexpected topology snapshot");
             if(communicator.getCommunicatorId() == caravan::worldCommunicator)
                 throw std::runtime_error("Cartesian communicator was not retained");
+            if(communicator.getSignalCommunicatorId() == caravan::worldCommunicator
+               || communicator.getSignalCommunicatorId() == communicator.getCommunicatorId())
+                throw std::runtime_error("Signal communicator was not duplicated");
+
+            std::array<std::uint32_t, 2> signalInput{static_cast<std::uint32_t>(topology.rank + 1), 1u};
+            std::array<std::uint32_t, 2> signalOutput{};
+            auto signalReduction = communicator.startSignalAllReduce(
+                signalInput.data(),
+                signalOutput.data(),
+                sizeof(signalInput),
+                caravan::ScalarType::uint32,
+                caravan::ReduceOperation::sum);
+            if(signalReduction.result().elements != signalInput.size()
+               || signalOutput[0] != static_cast<std::uint32_t>(topology.size * (topology.size + 1) / 2)
+               || signalOutput[1] != static_cast<std::uint32_t>(topology.size))
+                throw std::runtime_error("Signal all-reduce adapter failed");
+
             for(int exchange = 1; exchange < -12 * TEST_DIM + 6 * TEST_DIM * TEST_DIM + 9; ++exchange)
             {
                 auto const direction = pmacc::Mask::getRelativeDirections<TEST_DIM>(exchange);

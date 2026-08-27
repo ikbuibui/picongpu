@@ -9,9 +9,10 @@ Phase 2 has started with the dedicated `MpiRuntime`, nonblocking barrier and
 all-reduce progress, point-to-point futures, receive metadata, buffer leases,
 and MPI-owned Cartesian communicators with immutable topology snapshots. PMacc
 can now attach its environment to the runtime and initialize `CommunicatorMPI`
-from an immutable snapshot without application-thread topology calls. Legacy
-`TaskSendMPI` and `TaskReceiveMPI` can poll Caravan point-to-point futures while
-unchanged PMacc startup remains available during migration. The general native
+from an immutable snapshot without application-thread topology calls. Its
+dedicated signal communicator and signal all-reductions are also MPI-thread
+owned. Legacy `TaskSendMPI` and `TaskReceiveMPI` can poll Caravan point-to-point
+futures while unchanged PMacc startup remains available during migration. The general native
 extension API now transfers arbitrary nonblocking requests and lifetimes to the
 executor, and exclusive blocking submissions wait for active requests before
 running. Caravan's point-to-point, collective, barrier, and communicator
