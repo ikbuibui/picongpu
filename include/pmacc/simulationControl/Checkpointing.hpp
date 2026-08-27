@@ -154,7 +154,7 @@ namespace pmacc::simulationControl
 
                 /* ensure that all MPI ranks are in the same time step to avoid that MPI collectives block asynchronous
                  * communication enqueued in the event system. */
-                eventSystem::mpiBlocking(gc.getCommunicator().getMPIComm());
+                eventSystem::mpiBlocking(gc.getCommunicator());
 
                 /* create directory containing checkpoints  */
                 if(numCheckpoints == 0 && gc.getGlobalRank() == 0)
@@ -166,7 +166,7 @@ namespace pmacc::simulationControl
 
                 /* ensure that all MPI ranks are in the same time step to avoid that MPI collectives block asynchronous
                  * communication enqueued in the event system. */
-                eventSystem::mpiBlocking(gc.getCommunicator().getMPIComm());
+                eventSystem::mpiBlocking(gc.getCommunicator());
 
                 /** important synchronize: only if no errors occurred until this  point guarantees that a checkpoint is
                  * usable

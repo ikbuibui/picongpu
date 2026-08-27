@@ -146,7 +146,7 @@ namespace pmacc
              * easier to hunt because the rank that outputs timings will only show the timing for the initialization if
              * all ranks reached this point.
              */
-            eventSystem::mpiBlocking(Environment<DIM>::get().GridController().getCommunicator().getMPIComm());
+            eventSystem::mpiBlocking(Environment<DIM>::get().GridController().getCommunicator());
 
             tInit.toggleEnd();
             if(output)
@@ -206,20 +206,10 @@ namespace pmacc
                 dumpOneStep(currentStep);
             }
 
-            // The simulation is finished, wait until all MPI ranks finished the time step loop
-            MPI_Request globalMPISync = MPI_REQUEST_NULL;
-            MPI_CHECK(
-                MPI_Ibarrier(Environment<DIM>::get().GridController().getCommunicator().getMPIComm(), &globalMPISync));
-            Manager::getInstance().waitFor(
-                [&]() -> bool
-                {
-                    // check for signal in case other MPI ranks still process the time step loop
-                    checkSignals(currentStep);
-                    MPI_Status mpiBarrierStatus;
-                    int flag = 0;
-                    MPI_CHECK(MPI_Test(&globalMPISync, &flag, &mpiBarrierStatus));
-                    return flag != 0;
-                });
+            // The simulation is finished, wait until all MPI ranks finished the time step loop.
+            eventSystem::mpiBlocking(
+                Environment<DIM>::get().GridController().getCommunicator(),
+                [&] { checkSignals(currentStep); });
 
             // ensure that the event system processed all tasks
             eventSystem::getTransactionEvent().waitForFinished();
