@@ -96,6 +96,11 @@ namespace pmacc
             return PluginConnector::getInstance();
         }
 
+        caravan::MpiExecutor* Environment::getMpiExecutor()
+        {
+            return EnvironmentContext::getInstance().m_mpiExecutor;
+        }
+
         device::MemoryInfo& Environment::MemoryInfo()
         {
             PMACC_ASSERT_MSG(

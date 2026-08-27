@@ -29,6 +29,13 @@
 #include "pmacc/mpi/reduceMethods/AllReduce.hpp"
 #include "pmacc/types.hpp"
 
+#include <iostream>
+#include <optional>
+#include <stdexcept>
+#include <type_traits>
+#include <vector>
+
+#include <caravan/mpi_native.hpp>
 #include <mpi.h>
 
 namespace pmacc
@@ -38,16 +45,28 @@ namespace pmacc
         /** reduce data over selected mpi ranks */
         struct MPIReduce
         {
-            MPIReduce() : comm(MPI_COMM_NULL)
-            {
-            }
+            MPIReduce() = default;
 
             virtual ~MPIReduce()
             {
-                if(isMPICommInitialized)
+                if(mpiExecutor && caravanCommunicator)
                 {
-                    MPI_CHECK_NO_EXCEPT(MPI_Comm_free(&comm));
+                    try
+                    {
+                        mpiExecutor->destroyCommunicator(caravan::readyEvent(), caravanCommunicator->communicator)
+                            .wait();
+                    }
+                    catch(std::exception const& error)
+                    {
+                        std::cerr << "Failed to destroy Caravan reduction communicator: " << error.what() << '\n';
+                    }
+                    catch(...)
+                    {
+                        std::cerr << "Failed to destroy Caravan reduction communicator\n";
+                    }
                 }
+                else if(comm != MPI_COMM_NULL)
+                    MPI_CHECK_NO_EXCEPT(MPI_Comm_free(&comm));
             }
 
             /* defines if the result of the MPI operation is valid
@@ -83,13 +102,33 @@ namespace pmacc
              */
             void participate(bool isActive)
             {
-                /*free old communicator of init is called again*/
-                if(isMPICommInitialized)
-                {
+                if(mpiExecutor && caravanCommunicator)
+                    mpiExecutor->destroyCommunicator(caravan::readyEvent(), caravanCommunicator->communicator).wait();
+                else if(comm != MPI_COMM_NULL)
                     MPI_CHECK(MPI_Comm_free(&comm));
-                    mpiRank = -1;
-                    numRanks = 0;
-                    isMPICommInitialized = false;
+
+                mpiRank = -1;
+                numRanks = 0;
+                caravanCommunicator.reset();
+                comm = MPI_COMM_NULL;
+                mpiExecutor = Environment<>::get().getMpiExecutor();
+
+                if(mpiExecutor)
+                {
+                    auto const world = mpiExecutor->topology();
+                    caravanCommunicator = mpiExecutor
+                                              ->splitCommunicator(
+                                                  caravan::readyEvent(),
+                                                  isActive ? std::optional<int>{0} : std::nullopt,
+                                                  world.rank)
+                                              .result();
+                    if(caravanCommunicator)
+                    {
+                        mpiRank = caravanCommunicator->rank;
+                        numRanks = caravanCommunicator->size;
+                    }
+                    isMPICommInitialized = true;
+                    return;
                 }
 
                 int countRanks;
@@ -108,26 +147,20 @@ namespace pmacc
                 for(int i = 0; i < countRanks; ++i)
                 {
                     if(reduceRank[i] != -1)
-                    {
-                        groupRanks[numRanks] = reduceRank[i];
-                        numRanks++;
-                    }
+                        groupRanks[numRanks++] = reduceRank[i];
                 }
 
                 MPI_Group group = MPI_GROUP_NULL;
                 MPI_Group newgroup = MPI_GROUP_NULL;
                 MPI_CHECK(MPI_Comm_group(MPI_COMM_WORLD, &group));
                 MPI_CHECK(MPI_Group_incl(group, numRanks, &groupRanks[0], &newgroup));
-
                 MPI_CHECK(MPI_Comm_create(MPI_COMM_WORLD, newgroup, &comm));
 
                 if(mpiRank != -1)
-                {
                     MPI_CHECK(MPI_Comm_rank(comm, &mpiRank));
-                    isMPICommInitialized = true;
-                }
                 MPI_CHECK(MPI_Group_free(&group));
                 MPI_CHECK(MPI_Group_free(&newgroup));
+                isMPICommInitialized = true;
             }
 
             /* Reduce elements on cpu memory
@@ -148,6 +181,48 @@ namespace pmacc
                 if(!isMPICommInitialized)
                     participate(true);
                 using ValueType = Type;
+
+                if(mpiExecutor)
+                {
+                    if(!caravanCommunicator)
+                        throw std::logic_error("Inactive rank cannot submit an MPI reduction");
+                    eventSystem::getTransactionEvent().waitForFinished();
+                    caravan::nativeEvent(
+                        *mpiExecutor,
+                        caravan::readyEvent(),
+                        [=, communicator = caravanCommunicator->communicator](caravan::NativeMpiContext& context)
+                        {
+                            auto const descriptor = ::pmacc::mpi::getMPI_StructAsArray<ValueType>();
+                            auto const elements = n * descriptor.sizeMultiplier;
+                            caravan::NativeRequestBatch batch({MPI_REQUEST_NULL});
+                            int error;
+                            if constexpr(std::is_same_v<std::remove_cvref_t<ReduceMethod>, reduceMethods::AllReduce>)
+                                error = MPI_Iallreduce(
+                                    src,
+                                    dest,
+                                    static_cast<int>(elements),
+                                    descriptor.dataType,
+                                    ::pmacc::mpi::getMPI_Op<Functor>(),
+                                    context.communicator(communicator),
+                                    &batch.requests[0]);
+                            else
+                                error = MPI_Ireduce(
+                                    src,
+                                    dest,
+                                    static_cast<int>(elements),
+                                    descriptor.dataType,
+                                    ::pmacc::mpi::getMPI_Op<Functor>(),
+                                    0,
+                                    context.communicator(communicator),
+                                    &batch.requests[0]);
+                            if(error != MPI_SUCCESS)
+                                throw std::runtime_error("PMacc native MPI reduction start failed");
+                            return batch;
+                        },
+                        [](std::span<MPI_Status const>) {})
+                        .wait();
+                    return;
+                }
 
                 method(
                     func,
@@ -181,7 +256,9 @@ namespace pmacc
 
 
         private:
-            MPI_Comm comm;
+            MPI_Comm comm{MPI_COMM_NULL};
+            std::optional<caravan::CommunicatorInfo> caravanCommunicator;
+            caravan::MpiExecutor* mpiExecutor{nullptr};
             int mpiRank{-1};
             int numRanks{0};
             bool isMPICommInitialized{false};
