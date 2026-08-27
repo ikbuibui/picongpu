@@ -2,12 +2,14 @@
  * This file is part of PIConGPU.
  * SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
  */
+#include <algorithm>
 #include <cassert>
 #include <climits>
 #include <condition_variable>
 #include <deque>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -18,7 +20,7 @@
 #include <variant>
 #include <vector>
 
-#include <caravan/mpi.hpp>
+#include <caravan/mpi_native.hpp>
 #include <mpi.h>
 
 namespace caravan
@@ -207,6 +209,34 @@ namespace caravan
             return result;
         }
 
+        void submitNative(Event predecessor, detail::NativeSubmission submission)
+        {
+            if(detail::executorDepth != 0u)
+            {
+                submission.setFailed(
+                    std::make_exception_ptr(std::logic_error("Recursive native MPI submission is not allowed")));
+                return;
+            }
+            submitAfter(
+                std::move(predecessor),
+                submission,
+                [this](detail::NativeSubmission output) { startNative(std::move(output)); });
+        }
+
+        void invokeBlocking(Event predecessor, detail::NativeBlockingSubmission submission)
+        {
+            if(detail::executorDepth != 0u)
+            {
+                submission.setFailed(
+                    std::make_exception_ptr(std::logic_error("Recursive native MPI submission is not allowed")));
+                return;
+            }
+            submitAfter(
+                std::move(predecessor),
+                submission,
+                [this](detail::NativeBlockingSubmission output) { startBlocking(std::move(output)); });
+        }
+
         void run()
         {
             assertOwner();
@@ -215,6 +245,8 @@ namespace caravan
             {
                 drainQueue();
                 progress();
+                if(m_requests.empty() && m_blocking)
+                    runBlocking();
 
                 std::unique_lock lock(m_queueMutex);
                 if(m_stopping && m_outstanding == 0u)
@@ -223,7 +255,7 @@ namespace caravan
                     releaseCommunicators();
                     return;
                 }
-                if(m_requests.empty() && m_queue.empty())
+                if(m_requests.empty() && m_queue.empty() && !m_blocking)
                     m_queueReady.wait(
                         lock,
                         [this] { return !m_queue.empty() || (m_stopping && m_outstanding == 0u); });
@@ -279,8 +311,55 @@ namespace caravan
             std::size_t elements;
         };
 
-        using ActiveCompletion
-            = std::variant<BarrierCompletion, SendCompletion, ReceiveCompletion, AllReduceCompletion>;
+        struct NativeGroup
+        {
+            detail::NativeSubmission output;
+            std::vector<MPI_Status> statuses;
+            std::vector<std::shared_ptr<void>> lifetimes;
+            std::size_t remaining;
+            bool terminal = false;
+
+            bool complete(NativeMpiContext& context, std::size_t index, MPI_Status const& status)
+            {
+                if(terminal)
+                    return false;
+                statuses[index] = status;
+                if(--remaining != 0u)
+                    return false;
+                terminal = true;
+                try
+                {
+                    output.completed(context, statuses);
+                }
+                catch(...)
+                {
+                    output.failed(std::current_exception());
+                }
+                return true;
+            }
+
+            bool fail(std::exception_ptr error)
+            {
+                if(terminal)
+                    return false;
+                terminal = true;
+                output.failed(std::move(error));
+                return true;
+            }
+        };
+
+        struct NativeCompletion
+        {
+            std::shared_ptr<NativeGroup> group;
+            std::size_t index;
+        };
+
+        using Barrier = BarrierCompletion;
+        using Send = SendCompletion;
+        using Receive = ReceiveCompletion;
+        using AllReduce = AllReduceCompletion;
+        using Native = NativeCompletion;
+        using ActiveCompletion = std::variant<Barrier, Send, Receive, AllReduce, Native>;
 
         struct ActiveOperation
         {
@@ -369,13 +448,18 @@ namespace caravan
         void drainQueue()
         {
             assertOwner();
-            std::deque<std::function<void()>> commands;
+            while(!m_blocking)
             {
-                std::lock_guard lock(m_queueMutex);
-                commands.swap(m_queue);
-            }
-            for(auto& command : commands)
+                std::function<void()> command;
+                {
+                    std::lock_guard lock(m_queueMutex);
+                    if(m_queue.empty())
+                        return;
+                    command = std::move(m_queue.front());
+                    m_queue.pop_front();
+                }
                 command();
+            }
         }
 
         void prepareActive()
@@ -390,6 +474,101 @@ namespace caravan
             if(id.value >= m_communicators.size() || m_communicators[id.value] == MPI_COMM_NULL)
                 throw std::invalid_argument("Unknown Caravan communicator");
             return m_communicators[id.value];
+        }
+
+        CommunicatorId adoptCommunicator(MPI_Comm native)
+        {
+            assertOwner();
+            if(native == MPI_COMM_NULL)
+                throw std::invalid_argument("Cannot adopt MPI_COMM_NULL");
+            if(m_communicators.size() >= std::numeric_limits<std::uint32_t>::max())
+                throw std::overflow_error("Too many Caravan communicators");
+            m_communicators.reserve(m_communicators.size() + 1u);
+            int const error = MPI_Comm_set_errhandler(native, MPI_ERRORS_RETURN);
+            if(error != MPI_SUCCESS)
+            {
+                MPI_Comm_free(&native);
+                throw mpiError("MPI_Comm_set_errhandler", error);
+            }
+            auto const id = CommunicatorId{static_cast<std::uint32_t>(m_communicators.size())};
+            m_communicators.emplace_back(native);
+            return id;
+        }
+
+        NativeMpiContext nativeContext()
+        {
+            return detail::NativeContextFactory::create(
+                this,
+                [](void* implementation, CommunicatorId id)
+                { return static_cast<Impl*>(implementation)->communicator(id); },
+                [](void* implementation, MPI_Comm native)
+                { return static_cast<Impl*>(implementation)->adoptCommunicator(native); });
+        }
+
+        void startNative(detail::NativeSubmission output)
+        {
+            assertOwner();
+            auto context = nativeContext();
+            auto batch = output.start(context);
+            auto const activeRequests = static_cast<std::size_t>(std::count_if(
+                batch.requests.begin(),
+                batch.requests.end(),
+                [](MPI_Request request) { return request != MPI_REQUEST_NULL; }));
+            m_requests.reserve(m_requests.size() + activeRequests);
+            m_active.reserve(m_active.size() + activeRequests);
+
+            if(batch.requests.empty())
+            {
+                detail::NativeAccess::release(batch);
+                output.completed(context, {});
+                finishOperation();
+                return;
+            }
+
+            auto group = std::make_shared<NativeGroup>(
+                output,
+                std::vector<MPI_Status>(batch.requests.size()),
+                std::move(batch.lifetimes),
+                batch.requests.size());
+            for(std::size_t index = 0u; index < batch.requests.size(); ++index)
+            {
+                if(batch.requests[index] == MPI_REQUEST_NULL)
+                {
+                    if(group->complete(context, index, MPI_Status{}))
+                        finishOperation();
+                    continue;
+                }
+                m_requests.emplace_back(batch.requests[index]);
+                m_active.emplace_back(NativeCompletion{group, index}, std::nullopt, std::nullopt);
+            }
+            detail::NativeAccess::release(batch);
+        }
+
+        void startBlocking(detail::NativeBlockingSubmission output)
+        {
+            assertOwner();
+            if(m_blocking)
+                throw std::logic_error("Nested native blocking MPI operation");
+            m_blocking.emplace(std::move(output));
+            if(m_requests.empty())
+                runBlocking();
+        }
+
+        void runBlocking()
+        {
+            assertOwner();
+            auto output = std::move(*m_blocking);
+            m_blocking.reset();
+            try
+            {
+                auto context = nativeContext();
+                output.invoke(context);
+            }
+            catch(...)
+            {
+                output.failed(std::current_exception());
+            }
+            finishOperation();
         }
 
         void startCreateCartesian(
@@ -657,8 +836,22 @@ namespace caravan
 
         void failActive(ActiveOperation& active, std::exception_ptr failure)
         {
-            std::visit([&](auto& completion) { completion.output.setFailed(failure); }, active.completion);
-            finishOperation();
+            std::visit(
+                [&](auto& completion)
+                {
+                    using Completion = std::remove_cvref_t<decltype(completion)>;
+                    if constexpr(std::is_same_v<Completion, NativeCompletion>)
+                    {
+                        if(completion.group->fail(failure))
+                            finishOperation();
+                    }
+                    else
+                    {
+                        completion.output.setFailed(failure);
+                        finishOperation();
+                    }
+                },
+                active.completion);
         }
 
         void completeActive(ActiveOperation& active, MPI_Status const& status)
@@ -687,11 +880,18 @@ namespace caravan
                                     MessageTag{status.MPI_TAG},
                                     static_cast<std::size_t>(bytes)});
                     }
-                    else
+                    else if constexpr(std::is_same_v<Completion, AllReduceCompletion>)
                         completion.output.setValue(AllReduceResult{completion.elements});
+                    else
+                    {
+                        auto context = nativeContext();
+                        if(completion.group->complete(context, completion.index, status))
+                            finishOperation();
+                    }
                 },
                 active.completion);
-            finishOperation();
+            if(!std::holds_alternative<NativeCompletion>(active.completion))
+                finishOperation();
         }
 
         void progress()
@@ -766,6 +966,7 @@ namespace caravan
         std::vector<ActiveOperation> m_active;
         std::vector<int> m_completedIndices;
         std::vector<MPI_Status> m_statuses;
+        std::optional<detail::NativeBlockingSubmission> m_blocking;
         ContinuationTarget m_continuations;
     };
 
@@ -838,6 +1039,29 @@ namespace caravan
     void MpiExecutor::requestShutdown()
     {
         m_implementation->requestShutdown();
+    }
+
+    void MpiExecutor::submitNative(Event predecessor, detail::NativeSubmission submission)
+    {
+        m_implementation->submitNative(std::move(predecessor), std::move(submission));
+    }
+
+    void MpiExecutor::invokeBlocking(Event predecessor, detail::NativeBlockingSubmission submission)
+    {
+        m_implementation->invokeBlocking(std::move(predecessor), std::move(submission));
+    }
+
+    void detail::NativeAccess::submit(MpiExecutor& executor, Event predecessor, detail::NativeSubmission submission)
+    {
+        executor.submitNative(std::move(predecessor), std::move(submission));
+    }
+
+    void detail::NativeAccess::invokeBlocking(
+        MpiExecutor& executor,
+        Event predecessor,
+        detail::NativeBlockingSubmission submission)
+    {
+        executor.invokeBlocking(std::move(predecessor), std::move(submission));
     }
 
     int MpiRuntime::runImpl(int& argc, char**& argv, std::function<int(MpiExecutor&)> application)
