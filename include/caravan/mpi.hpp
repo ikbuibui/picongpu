@@ -125,6 +125,11 @@ namespace caravan
         std::size_t elements;
     };
 
+    struct GatherResult
+    {
+        std::size_t bytes;
+    };
+
     struct CommunicatorInfo
     {
         CommunicatorId communicator;
@@ -199,6 +204,22 @@ namespace caravan
             BufferLease output,
             ScalarType type,
             ReduceOperation operation,
+            Peer root,
+            CommunicatorId communicator = worldCommunicator);
+
+        Future<GatherResult> gather(
+            Event dataReady,
+            BufferLease input,
+            BufferLease output,
+            Peer root,
+            CommunicatorId communicator = worldCommunicator);
+
+        Future<GatherResult> gatherV(
+            Event dataReady,
+            BufferLease input,
+            BufferLease output,
+            std::vector<std::size_t> receiveBytes,
+            std::vector<std::size_t> displacements,
             Peer root,
             CommunicatorId communicator = worldCommunicator);
 

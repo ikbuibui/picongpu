@@ -149,6 +149,44 @@ int main(int argc, char** argv)
             if(topology.rank == 0)
                 assert(*reduceOutput == topology.size * (topology.size + 1) / 2);
 
+            auto gatherInput = std::make_shared<int>(topology.rank);
+            auto gatherOutput = std::make_shared<std::vector<int>>(topology.size, -1);
+            auto gathered = mpi.gather(
+                caravan::readyEvent(),
+                caravan::BufferLease{gatherInput, gatherInput.get(), sizeof(*gatherInput)},
+                caravan::BufferLease{gatherOutput, gatherOutput->data(), gatherOutput->size() * sizeof(int)},
+                caravan::Peer{0},
+                cartesian.communicator);
+            assert(gathered.result().bytes == (topology.rank == 0 ? gatherOutput->size() * sizeof(int) : 0u));
+            if(topology.rank == 0)
+                for(int rank = 0; rank < topology.size; ++rank)
+                    assert((*gatherOutput)[rank] == rank);
+
+            auto gatherVInput = std::make_shared<std::vector<int>>(topology.rank + 1, topology.rank);
+            std::vector<std::size_t> gatherVCounts(topology.size);
+            std::vector<std::size_t> gatherVOffsets(topology.size);
+            std::size_t gatherVElements = 0u;
+            for(int rank = 0; rank < topology.size; ++rank)
+            {
+                gatherVOffsets[rank] = gatherVElements * sizeof(int);
+                gatherVCounts[rank] = static_cast<std::size_t>(rank + 1) * sizeof(int);
+                gatherVElements += static_cast<std::size_t>(rank + 1);
+            }
+            auto gatherVOutput = std::make_shared<std::vector<int>>(gatherVElements, -1);
+            auto gatheredV = mpi.gatherV(
+                caravan::readyEvent(),
+                caravan::BufferLease{gatherVInput, gatherVInput->data(), gatherVInput->size() * sizeof(int)},
+                caravan::BufferLease{gatherVOutput, gatherVOutput->data(), gatherVOutput->size() * sizeof(int)},
+                gatherVCounts,
+                gatherVOffsets,
+                caravan::Peer{0},
+                cartesian.communicator);
+            assert(gatheredV.result().bytes == (topology.rank == 0 ? gatherVOutput->size() * sizeof(int) : 0u));
+            if(topology.rank == 0)
+                for(int rank = 0; rank < topology.size; ++rank)
+                    for(std::size_t i = 0u; i < static_cast<std::size_t>(rank + 1); ++i)
+                        assert((*gatherVOutput)[gatherVOffsets[rank] / sizeof(int) + i] == rank);
+
             auto nativeInput = std::make_shared<int>(topology.rank + 1);
             auto nativeOutput = std::make_shared<int>(0);
             auto nativeReduction = caravan::nativeFuture<int>(
