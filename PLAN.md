@@ -8,7 +8,8 @@ recorded in `docs/CARAVAN_PHASE0.md`; target GPU measurements remain open.
 Phase 2 has started with the dedicated `MpiRuntime`, nonblocking barrier and
 all-reduce progress, point-to-point futures, receive metadata, buffer leases,
 and MPI-owned Cartesian communicators with immutable topology snapshots. PMacc
-startup migration remains behind the Phase 0 target-GPU gate.
+startup migration is next; target-GPU validation is deferred as described in
+the migration gate below.
 
 This plan targets the PMacc event system.
 Breaking PMacc and PIConGPU interfaces is allowed during the migration.
@@ -623,14 +624,14 @@ The migration has a hard project boundary:
   than restoring removed compatibility interfaces.
 
 Each phase's in-scope runtime, PMacc, and PMacc-example targets must build and
-test before the next phase starts. The only exception is that Phase 1 and the
-PMacc-independent parts of Phase 2 (items 2 through 7) may proceed while
-Phase 0 target-GPU measurements are pending. Phase 2 must not change PMacc
-startup, add PMacc migration adapters, or route PMacc call sites (items 1 and
-8 through 11) until the complete Phase 0 gate passes. PIConGPU is required to
-build again only at the end of Phase 7. Do not maintain two independent
-long-lived runtimes; adapters are temporary PMacc migration tools and are
-deleted immediately after their last in-scope user is ported.
+test before the next phase starts. Target-GPU measurements may remain pending
+through implementation, but must be collected from the recorded baseline
+revision before the Phase 6 exit gate and performance comparison. This deferral
+does not relax CPU tests, available CUDA compile checks, or phase-local
+correctness gates. PIConGPU is required to build again only at the end of
+Phase 7. Do not maintain two independent long-lived runtimes; adapters are
+temporary PMacc migration tools and are deleted immediately after their last
+in-scope user is ported.
 
 ### Phase 0: PMacc inventory and baseline
 
@@ -658,13 +659,13 @@ deleted immediately after their last in-scope user is ported.
 7. Benchmark current host submission cost, manager CPU time, MPI ping-pong,
    halo exchange overlap, and both example runtimes.
 
-Local exit criterion: the CPU behavior baseline, inventories, migration paths,
-and hardware-independent regression tests are recorded. This permits only the
-isolated Caravan work described by the exception above.
+Implementation exit criterion: the CPU behavior baseline, inventories,
+migration paths, and hardware-independent regression tests are recorded. This
+permits PMacc migration work to proceed.
 
-Full exit criterion and PMacc-mutation gate: target CUDA and GPU-aware MPI
-behavior and performance baselines are also recorded. Only then may Phase 2
-change PMacc or its examples.
+Deferred target criterion: target CUDA and GPU-aware MPI behavior and
+performance baselines are recorded from the baseline revision before the
+Phase 6 exit gate. Phase 7 cannot begin without them.
 
 ### Phase 1: Completion core
 
