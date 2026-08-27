@@ -214,6 +214,9 @@ namespace caravan
         template<typename T_Executor, typename T_Operation>
         Event then(T_Executor& executor, T_Operation&& operation) const;
 
+        template<typename T_Executor, typename T_Continuation>
+        Event continueWith(T_Executor& executor, T_Continuation&& continuation) const;
+
     private:
         explicit Event(std::shared_ptr<detail::State> state) : m_state(std::move(state))
         {
@@ -308,6 +311,41 @@ namespace caravan
                     try
                     {
                         std::invoke(*work);
+                        successor.setReady();
+                    }
+                    catch(...)
+                    {
+                        successor.setFailed(std::current_exception());
+                    }
+                };
+                try
+                {
+                    executor->post(std::move(task));
+                }
+                catch(...)
+                {
+                    successor.setFailed(std::current_exception());
+                }
+            });
+        return result;
+    }
+
+    template<typename T_Executor, typename T_Continuation>
+    Event Event::continueWith(T_Executor& executor, T_Continuation&& continuation) const
+    {
+        EventSource successor;
+        auto result = successor.event();
+        auto predecessor = *this;
+        auto work = std::make_shared<std::decay_t<T_Continuation>>(std::forward<T_Continuation>(continuation));
+        subscribe(
+            [predecessor, successor, work, executor = &executor]
+            {
+                auto task = [predecessor, successor, work]
+                {
+                    ExecutorThreadGuard guard;
+                    try
+                    {
+                        std::invoke(*work, predecessor);
                         successor.setReady();
                     }
                     catch(...)

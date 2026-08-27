@@ -110,6 +110,14 @@ namespace
             assert(std::string_view{error.what()} == "expected");
         }
         assert(!called);
+
+        bool failureObserved = false;
+        auto observation = failed.event().continueWith(
+            executor,
+            [&](caravan::Event predecessor)
+            { failureObserved = predecessor.state() == caravan::CompletionState::failed; });
+        observation.wait();
+        assert(failureObserved);
     }
 
     void testFuture()
