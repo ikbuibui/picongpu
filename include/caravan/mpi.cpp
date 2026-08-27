@@ -863,6 +863,144 @@ namespace caravan
             [elements](std::span<MPI_Status const>) { return ReduceResult{elements}; });
     }
 
+    Future<GatherResult> MpiExecutor::gather(
+        Event dataReady,
+        BufferLease input,
+        BufferLease output,
+        Peer root,
+        CommunicatorId communicator)
+    {
+        if(!validBuffer(input) || !validBuffer(output) || root.any || root.value < 0)
+        {
+            Promise<GatherResult> failed;
+            failed.setFailed(std::make_exception_ptr(std::invalid_argument("Invalid Caravan MPI gather")));
+            return failed.future();
+        }
+        auto resultBytes = std::make_shared<std::size_t>(0u);
+        return nativeFuture<GatherResult>(
+            *this,
+            std::move(dataReady),
+            [input = std::move(input), output = std::move(output), root, communicator, resultBytes](
+                NativeMpiContext& context) mutable
+            {
+                auto const native = context.communicator(communicator);
+                int rank = -1;
+                int size = 0;
+                int error = MPI_Comm_rank(native, &rank);
+                if(error == MPI_SUCCESS)
+                    error = MPI_Comm_size(native, &size);
+                if(error != MPI_SUCCESS)
+                    throw mpiError("MPI gather communicator query", error);
+                if(rank == root.value)
+                {
+                    if(size <= 0 || input.bytes() > output.bytes() / static_cast<std::size_t>(size))
+                        throw std::invalid_argument("Caravan MPI gather output is too small");
+                    *resultBytes = input.bytes() * static_cast<std::size_t>(size);
+                }
+
+                NativeRequestBatch batch({MPI_REQUEST_NULL}, {input.lifetime(), output.lifetime(), resultBytes});
+                error = MPI_Igather(
+                    input.data(),
+                    static_cast<int>(input.bytes()),
+                    MPI_BYTE,
+                    output.data(),
+                    static_cast<int>(input.bytes()),
+                    MPI_BYTE,
+                    root.value,
+                    native,
+                    &batch.requests[0]);
+                if(error != MPI_SUCCESS)
+                    throw mpiError("MPI_Igather", error);
+                return batch;
+            },
+            [resultBytes](std::span<MPI_Status const>) { return GatherResult{*resultBytes}; });
+    }
+
+    Future<GatherResult> MpiExecutor::gatherV(
+        Event dataReady,
+        BufferLease input,
+        BufferLease output,
+        std::vector<std::size_t> receiveBytes,
+        std::vector<std::size_t> displacements,
+        Peer root,
+        CommunicatorId communicator)
+    {
+        if(!validBuffer(input) || !validBuffer(output) || receiveBytes.size() != displacements.size() || root.any
+           || root.value < 0)
+        {
+            Promise<GatherResult> failed;
+            failed.setFailed(std::make_exception_ptr(std::invalid_argument("Invalid Caravan MPI variable gather")));
+            return failed.future();
+        }
+
+        auto counts = std::make_shared<std::vector<int>>();
+        auto offsets = std::make_shared<std::vector<int>>();
+        counts->reserve(receiveBytes.size());
+        offsets->reserve(displacements.size());
+        for(std::size_t i = 0u; i < receiveBytes.size(); ++i)
+        {
+            if(receiveBytes[i] > static_cast<std::size_t>(INT_MAX)
+               || displacements[i] > static_cast<std::size_t>(INT_MAX))
+            {
+                Promise<GatherResult> failed;
+                failed.setFailed(
+                    std::make_exception_ptr(std::invalid_argument("Invalid Caravan MPI variable gather layout")));
+                return failed.future();
+            }
+            counts->emplace_back(static_cast<int>(receiveBytes[i]));
+            offsets->emplace_back(static_cast<int>(displacements[i]));
+        }
+
+        auto resultBytes = std::make_shared<std::size_t>(0u);
+        return nativeFuture<GatherResult>(
+            *this,
+            std::move(dataReady),
+            [input = std::move(input), output = std::move(output), counts, offsets, root, communicator, resultBytes](
+                NativeMpiContext& context) mutable
+            {
+                auto const native = context.communicator(communicator);
+                int rank = -1;
+                int size = 0;
+                int error = MPI_Comm_rank(native, &rank);
+                if(error == MPI_SUCCESS)
+                    error = MPI_Comm_size(native, &size);
+                if(error != MPI_SUCCESS)
+                    throw mpiError("MPI variable gather communicator query", error);
+                if(rank == root.value)
+                {
+                    if(size <= 0 || counts->size() != static_cast<std::size_t>(size))
+                        throw std::invalid_argument("Invalid Caravan MPI variable gather rank count");
+                    for(std::size_t i = 0u; i < counts->size(); ++i)
+                    {
+                        auto const end
+                            = static_cast<std::size_t>((*offsets)[i]) + static_cast<std::size_t>((*counts)[i]);
+                        if(end > output.bytes())
+                            throw std::invalid_argument("Caravan MPI variable gather output is too small");
+                        *resultBytes += static_cast<std::size_t>((*counts)[i]);
+                    }
+                }
+
+                NativeRequestBatch batch(
+                    {MPI_REQUEST_NULL},
+                    {input.lifetime(), output.lifetime(), counts, offsets, resultBytes});
+                error = MPI_Igatherv(
+                    input.data(),
+                    static_cast<int>(input.bytes()),
+                    MPI_BYTE,
+                    output.data(),
+                    counts->data(),
+                    offsets->data(),
+                    MPI_BYTE,
+                    root.value,
+                    native,
+                    &batch.requests[0]);
+                if(error != MPI_SUCCESS)
+                    throw mpiError("MPI_Igatherv", error);
+                return batch;
+            },
+            [resultBytes](std::span<MPI_Status const>) { return GatherResult{*resultBytes}; });
+    }
+
     Event MpiExecutor::barrier(Event predecessor, CommunicatorId communicator)
     {
         return nativeEvent(

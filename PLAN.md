@@ -6,8 +6,9 @@ Implementation is in progress. The Caravan completion core (Phase 1) is
 implemented and tested. The Phase 0 local inventory and CPU baseline are
 recorded in `docs/CARAVAN_PHASE0.md`; target GPU measurements remain open.
 Phase 2 has started with the dedicated `MpiRuntime`, nonblocking barrier,
-all-reduce and root-reduce progress, point-to-point futures, receive metadata,
-buffer leases, and MPI-owned Cartesian and split communicators with immutable
+all-reduce, root-reduce, fixed-gather, and variable-gather progress,
+point-to-point futures, receive metadata, buffer leases, and MPI-owned Cartesian
+and split communicators with immutable
 topology snapshots. PMacc
 can now attach its environment to the runtime and initialize `CommunicatorMPI`
 from an immutable snapshot without application-thread topology calls. Its
