@@ -5,9 +5,10 @@
 Implementation is in progress. The Caravan completion core (Phase 1) is
 implemented and tested. The Phase 0 local inventory and CPU baseline are
 recorded in `docs/CARAVAN_PHASE0.md`; target GPU measurements remain open.
-Phase 2 has started with the dedicated `MpiRuntime`, nonblocking barrier and
-all-reduce progress, point-to-point futures, receive metadata, buffer leases,
-and MPI-owned Cartesian communicators with immutable topology snapshots. PMacc
+Phase 2 has started with the dedicated `MpiRuntime`, nonblocking barrier,
+all-reduce and root-reduce progress, point-to-point futures, receive metadata,
+buffer leases, and MPI-owned Cartesian and split communicators with immutable
+topology snapshots. PMacc
 can now attach its environment to the runtime and initialize `CommunicatorMPI`
 from an immutable snapshot without application-thread topology calls. Its
 dedicated signal communicator, signal all-reductions, and simulation/checkpoint
@@ -752,7 +753,7 @@ transition is exactly once, and `whenAll()` uses one node rather than a tree.
 13. Add a PMacc-scoped CI direct-MPI allowlist. PIConGPU is out of scope until
     Phase 7 and receives no compatibility exemption.
 
-Exit criterion: no PMacc example, PMacc task, or PMacc helper thread calls MPI;
+Exit criterion: no PMacc example, PMacc task, or PMacc helper thread calls MPI directly;
 the dedicated Caravan worker continues progressing requests while the process
 main application thread sleeps or computes.
 
