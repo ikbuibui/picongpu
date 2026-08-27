@@ -34,7 +34,7 @@ are not calls. Each direct-call owner and migration path is listed below.
 
 | Classification | Current owner | Migration path |
 |---|---|---|
-| Bootstrap/finalize | `Environment.tpp`, `gameOfLife2D/main.cpp` | `MpiRuntime::run()` on process main; remove example finalization |
+| Bootstrap/finalize | `Environment.tpp`, `gameOfLife2D/main.cpp` | dedicated `MpiRuntime` worker; remove example finalization |
 | Topology/communicators | `communication/CommunicatorMPI.cpp` | MPI-thread commands plus immutable topology snapshot |
 | Point-to-point | `CommunicatorMPI.cpp`, `TaskSendMPI.hpp`, `TaskReceiveMPI.hpp` | `MpiExecutor::send/receive`; status/count copied into results |
 | Barrier/progress | `eventSystem/mpiBarrier.cpp`, `simulationControl/SimulationHelper.cpp`, `simulationControl/Checkpointing.hpp` | nonblocking executor barriers; delete manager pumping |
