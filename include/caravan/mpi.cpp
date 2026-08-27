@@ -653,6 +653,39 @@ namespace caravan
             });
     }
 
+    Future<std::optional<CommunicatorInfo>> MpiExecutor::splitCommunicator(
+        Event predecessor,
+        std::optional<int> color,
+        int key,
+        CommunicatorId communicator)
+    {
+        return nativeBlockingFuture<std::optional<CommunicatorInfo>>(
+            *this,
+            std::move(predecessor),
+            [color, key, communicator](NativeMpiContext& context) -> std::optional<CommunicatorInfo>
+            {
+                MPI_Comm split = MPI_COMM_NULL;
+                int error
+                    = MPI_Comm_split(context.communicator(communicator), color.value_or(MPI_UNDEFINED), key, &split);
+                if(error != MPI_SUCCESS)
+                    throw mpiError("MPI_Comm_split", error);
+                if(split == MPI_COMM_NULL)
+                    return std::nullopt;
+
+                CommunicatorInfo info;
+                error = MPI_Comm_rank(split, &info.rank);
+                if(error == MPI_SUCCESS)
+                    error = MPI_Comm_size(split, &info.size);
+                if(error != MPI_SUCCESS)
+                {
+                    MPI_Comm_free(&split);
+                    throw mpiError("MPI split communicator query", error);
+                }
+                info.communicator = context.adoptCommunicator(split);
+                return info;
+            });
+    }
+
     Event MpiExecutor::destroyCommunicator(Event predecessor, CommunicatorId communicator)
     {
         if(communicator == worldCommunicator)
@@ -787,6 +820,47 @@ namespace caravan
                 return batch;
             },
             [elements](std::span<MPI_Status const>) { return AllReduceResult{elements}; });
+    }
+
+    Future<ReduceResult> MpiExecutor::reduce(
+        Event dataReady,
+        BufferLease input,
+        BufferLease output,
+        ScalarType type,
+        ReduceOperation operation,
+        Peer root,
+        CommunicatorId communicator)
+    {
+        auto const elementBytes = scalarSize(type);
+        if(elementBytes == 0u || !validBuffer(input) || !validBuffer(output) || input.bytes() % elementBytes != 0u
+           || output.bytes() < input.bytes() || input.data() == output.data() || root.any || root.value < 0)
+        {
+            Promise<ReduceResult> failed;
+            failed.setFailed(std::make_exception_ptr(std::invalid_argument("Invalid Caravan MPI reduce")));
+            return failed.future();
+        }
+        auto const elements = input.bytes() / elementBytes;
+        return nativeFuture<ReduceResult>(
+            *this,
+            std::move(dataReady),
+            [input = std::move(input), output = std::move(output), type, operation, root, communicator](
+                NativeMpiContext& context) mutable
+            {
+                NativeRequestBatch batch({MPI_REQUEST_NULL}, {input.lifetime(), output.lifetime()});
+                int const error = MPI_Ireduce(
+                    input.data(),
+                    output.data(),
+                    static_cast<int>(input.bytes() / scalarSize(type)),
+                    nativeType(type),
+                    nativeOperation(operation),
+                    root.value,
+                    context.communicator(communicator),
+                    &batch.requests[0]);
+                if(error != MPI_SUCCESS)
+                    throw mpiError("MPI_Ireduce", error);
+                return batch;
+            },
+            [elements](std::span<MPI_Status const>) { return ReduceResult{elements}; });
     }
 
     Event MpiExecutor::barrier(Event predecessor, CommunicatorId communicator)

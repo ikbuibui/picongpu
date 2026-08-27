@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -44,6 +45,21 @@ int main(int argc, char** argv)
             assert(portableDuplicate != cartesian.communicator);
             mpi.barrier(caravan::readyEvent(), portableDuplicate).wait();
             mpi.destroyCommunicator(caravan::readyEvent(), portableDuplicate).wait();
+
+            auto const split = mpi.splitCommunicator(
+                                      caravan::readyEvent(),
+                                      topology.rank % 2 == 0 ? std::optional<int>{0} : std::nullopt,
+                                      topology.rank)
+                                   .result();
+            if(topology.rank % 2 == 0)
+            {
+                assert(split.has_value());
+                assert(split->rank == topology.rank / 2);
+                assert(split->size == (topology.size + 1) / 2);
+                mpi.destroyCommunicator(caravan::readyEvent(), split->communicator).wait();
+            }
+            else
+                assert(!split.has_value());
 
             auto first = mpi.barrier(caravan::readyEvent(), cartesian.communicator);
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -118,6 +134,20 @@ int main(int argc, char** argv)
             assert((*reductionOutput)[0] == topology.size * (topology.size + 1) / 2);
             assert((*reductionOutput)[1] == topology.size);
             assert((*reductionOutput)[2] == topology.size * (topology.size - 1) / 2);
+
+            auto reduceInput = std::make_shared<std::int32_t>(topology.rank + 1);
+            auto reduceOutput = std::make_shared<std::int32_t>(-1);
+            auto reduced = mpi.reduce(
+                caravan::readyEvent(),
+                caravan::BufferLease{reduceInput, reduceInput.get(), sizeof(*reduceInput)},
+                caravan::BufferLease{reduceOutput, reduceOutput.get(), sizeof(*reduceOutput)},
+                caravan::ScalarType::int32,
+                caravan::ReduceOperation::sum,
+                caravan::Peer{0},
+                cartesian.communicator);
+            assert(reduced.result().elements == 1u);
+            if(topology.rank == 0)
+                assert(*reduceOutput == topology.size * (topology.size + 1) / 2);
 
             auto nativeInput = std::make_shared<int>(topology.rank + 1);
             auto nativeOutput = std::make_shared<int>(0);
