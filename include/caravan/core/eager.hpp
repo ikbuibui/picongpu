@@ -20,6 +20,8 @@
 #include <utility>
 #include <vector>
 
+#include <caravan/core/sender.hpp>
+
 namespace caravan
 {
     enum class CompletionState : std::uint8_t
@@ -600,4 +602,148 @@ namespace caravan
             return result;
         }
     }
+
+    /** A lazy sender bridge for an already-started Event.
+     *
+     * The connected operation must remain at a stable address from start until
+     * receiver completion, matching the P2300 operation-state lifetime rule.
+     */
+    template<typename T_Receiver>
+    class EventOperation
+    {
+    public:
+        EventOperation(Event event, T_Receiver receiver) : m_event(std::move(event)), m_receiver(std::move(receiver))
+        {
+        }
+
+        EventOperation(EventOperation const&) = delete;
+        EventOperation& operator=(EventOperation const&) = delete;
+        EventOperation(EventOperation&&) = delete;
+        EventOperation& operator=(EventOperation&&) = delete;
+
+        void start() & noexcept
+        {
+            m_event.subscribe([this] { complete(); });
+        }
+
+    private:
+        void complete() noexcept
+        {
+            switch(m_event.state())
+            {
+            case CompletionState::ready:
+                m_receiver.set_value();
+                break;
+            case CompletionState::failed:
+                m_receiver.set_error(m_event.error());
+                break;
+            case CompletionState::stopped:
+                m_receiver.set_stopped();
+                break;
+            case CompletionState::pending:
+                std::terminate();
+            }
+        }
+
+        Event m_event;
+        T_Receiver m_receiver;
+    };
+
+    class EventSender
+    {
+    public:
+        using completion_signatures = detail::DefaultCompletionSignatures<ValueSignature<>>;
+
+        explicit EventSender(Event event) : m_event(std::move(event))
+        {
+        }
+
+        template<typename T_Receiver>
+        auto connect(T_Receiver&& receiver) const
+        {
+            return EventOperation<std::decay_t<T_Receiver>>{m_event, std::forward<T_Receiver>(receiver)};
+        }
+
+    private:
+        Event m_event;
+    };
+
+    inline EventSender asSender(Event event)
+    {
+        return EventSender{std::move(event)};
+    }
+
+    namespace detail
+    {
+        template<typename T>
+        struct SyncWaitReceiver
+        {
+            template<typename U>
+            void set_value(U&& value) noexcept
+            {
+                try
+                {
+                    output.setValue(std::forward<U>(value));
+                }
+                catch(...)
+                {
+                    output.setFailed(std::current_exception());
+                }
+            }
+
+            void set_error(std::exception_ptr error) noexcept
+            {
+                output.setFailed(std::move(error));
+            }
+
+            void set_stopped() noexcept
+            {
+                output.setStopped();
+            }
+
+            Promise<T> output;
+        };
+
+        struct SyncWaitVoidReceiver
+        {
+            void set_value() noexcept
+            {
+                output.setReady();
+            }
+
+            void set_error(std::exception_ptr error) noexcept
+            {
+                output.setFailed(std::move(error));
+            }
+
+            void set_stopped() noexcept
+            {
+                output.setStopped();
+            }
+
+            EventSource output;
+        };
+    } // namespace detail
+
+    /** Start a sender and block at an imperative boundary. */
+    template<typename T, typename T_Sender>
+    T syncWait(T_Sender sender)
+    {
+        Promise<T> output;
+        auto result = output.future();
+        auto operation = std::move(sender).connect(detail::SyncWaitReceiver<T>{output});
+        operation.start();
+        return result.result();
+    }
+
+    template<typename T_Sender>
+    void syncWait(T_Sender sender)
+    {
+        EventSource output;
+        auto result = output.event();
+        auto operation = std::move(sender).connect(detail::SyncWaitVoidReceiver{output});
+        operation.start();
+        result.wait();
+    }
+
 } // namespace caravan
