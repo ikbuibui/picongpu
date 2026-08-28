@@ -5,6 +5,7 @@
 #include <pmacc/Environment.hpp>
 #include <pmacc/dimensions/DataSpace.hpp>
 #include <pmacc/math/operation/Add.hpp>
+#include <pmacc/mpi/GatherSlice.hpp>
 #include <pmacc/mpi/MPIReduce.hpp>
 #include <pmacc/mpi/reduceMethods/Reduce.hpp>
 
@@ -77,6 +78,23 @@ TEST_CASE("CommunicatorMPI consumes Caravan topology snapshots")
                 if(reduce.hasResult(pmacc::mpi::reduceMethods::Reduce{})
                    && global != static_cast<std::uint32_t>(topology.size * (topology.size + 1) / 2))
                     throw std::runtime_error("Caravan-backed PMacc root reduction failed");
+            }
+
+            {
+                pmacc::mpi::GatherSlice gather;
+                static_cast<void>(gather.participate(true));
+                pmacc::HostBuffer<int, DIM2> local(pmacc::DataSpace<DIM2>{1, 1});
+                local.data()[0] = topology.rank + 1;
+                auto gathered = gather.gatherSlice(
+                    local,
+                    pmacc::DataSpace<DIM2>{topology.size, 1},
+                    pmacc::DataSpace<DIM2>{topology.rank, 0});
+                if(gather.isMaster())
+                    for(int rank = 0; rank < topology.size; ++rank)
+                        if(gathered->data()[rank] != rank + 1)
+                            throw std::runtime_error("Caravan-backed PMacc slice gather failed");
+                if(!gather.isMaster() && gathered)
+                    throw std::runtime_error("Non-root PMacc slice gather returned data");
             }
 
             for(int exchange = 1; exchange < -12 * TEST_DIM + 6 * TEST_DIM * TEST_DIM + 9; ++exchange)

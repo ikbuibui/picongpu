@@ -1540,6 +1540,10 @@ global Caravan supervisor or general task/scheduler hierarchy has been introduce
 
 ## Phase 3: Complete the dedicated-thread MPI backend and PMacc MPI migration
 
+**Current state:** PMacc's `GatherSlice` communicator setup, metadata gathers, and
+variable data gather use the managed Caravan MPI context when attached; the legacy
+startup path remains temporarily available for unmigrated applications.
+
 Begin this phase only after the Phase 2 alpaka sender prototype has exercised the
 shared sender model across both backend shapes.
 
