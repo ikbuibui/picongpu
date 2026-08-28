@@ -27,7 +27,9 @@
 #include "types.hpp"
 
 #include <pmacc/Environment.hpp>
+#include <pmacc/async.hpp>
 #include <pmacc/dimensions/DataSpace.hpp>
+#include <pmacc/eventSystem/queues/QueueController.hpp>
 #include <pmacc/mappings/kernel/MappingDescription.hpp>
 #include <pmacc/mappings/simulation/SubGrid.hpp>
 #include <pmacc/memory/buffers/GridBuffer.hpp>
@@ -59,6 +61,7 @@ namespace gol
         uint32_t steps;
 
         bool isMaster;
+        pmacc::async::Context asyncContext;
 
     public:
         Simulation(
@@ -202,20 +205,29 @@ namespace gol
     private:
         void oneStep(uint32_t currentStep, std::unique_ptr<Buffer>& read, std::unique_ptr<Buffer>& write)
         {
-            auto splitEvent = eventSystem::getTransactionEvent();
-            /* GridBuffer 'read' will use 'splitEvent' to schedule transaction    *
-             * tasks from the Borders of the neighboring areas to the Guards of   *
-             * this local Area added by 'addExchange'. All transactions in        *
-             * Transaction Manager will then be done in parallel to the           *
-             * calculations in the core. In order to synchronize the data         *
-             * transfer for the case the core calculation is finished earlier,    *
-             * GridBuffer.asyncComm returns a transaction handle we can check     */
-            auto send = read->asyncCommunication(splitEvent);
-            evo.run<CORE>(read->getDeviceBuffer().getDataBox(), write->getDeviceBuffer().getDataBox());
-            /* Join communication with worker tasks, Now all next tasks run sequential */
-            eventSystem::setTransactionEvent(send);
-            /* Calculate Borders */
-            evo.run<BORDER>(read->getDeviceBuffer().getDataBox(), write->getDeviceBuffer().getDataBox());
+            auto& queue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+            // Communication remains an EventTask boundary until its Phase 6 sender port.
+            auto communication = read->asyncCommunication(EventTask{});
+            auto core = asyncContext.spawn(evo.runAsync<CORE>(
+                queue,
+                pmacc::async::retain(
+                    read->getDeviceBuffer().getDataBox(),
+                    read->getDeviceBuffer().getOwnedAlpakaView()),
+                pmacc::async::retain(
+                    write->getDeviceBuffer().getDataBox(),
+                    write->getDeviceBuffer().getOwnedAlpakaView())));
+
+            communication.waitForFinished();
+            asyncContext.wait(core);
+            auto border = asyncContext.spawn(evo.runAsync<BORDER>(
+                queue,
+                pmacc::async::retain(
+                    read->getDeviceBuffer().getDataBox(),
+                    read->getDeviceBuffer().getOwnedAlpakaView()),
+                pmacc::async::retain(
+                    write->getDeviceBuffer().getDataBox(),
+                    write->getDeviceBuffer().getOwnedAlpakaView())));
+            asyncContext.wait(border);
 
             /* gather::operator() gathers all the buffers and assembles those to  *
              * a complete picture discarding the guards.                          */

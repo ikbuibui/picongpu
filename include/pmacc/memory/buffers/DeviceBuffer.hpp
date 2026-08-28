@@ -23,6 +23,7 @@
 #pragma once
 
 #include "pmacc/assert.hpp"
+#include "pmacc/async/Operations.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/eventSystem/tasks/Factory.hpp"
 #include "pmacc/memory/Array.hpp"
@@ -73,7 +74,6 @@ namespace pmacc
         BufferType1D as1DBuffer()
         {
             auto numElements = this->size();
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             return BufferType1D(
                 alpaka::getPtrNative(*view),
                 alpaka::getDev(*devBuffer),
@@ -83,17 +83,22 @@ namespace pmacc
         BufferType1D as1DBufferNElem(size_t const numElements)
         {
             PMACC_ASSERT(numElements < this->size());
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             return BufferType1D(
                 alpaka::getPtrNative(*view),
                 alpaka::getDev(*devBuffer),
                 MemSpace<DIM1>(numElements).toAlpakaMemVec());
         }
 
+        /** Borrowed view; the DeviceBuffer must outlive all native use. */
         ViewType getAlpakaView() const
         {
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             return *view;
+        }
+
+        /** View retaining the underlying allocation for asynchronous operation state. */
+        auto getOwnedAlpakaView() const
+        {
+            return async::OwnedView{*view, *devBuffer};
         }
 
         /** allocate data accessible from the device
@@ -182,7 +187,6 @@ namespace pmacc
 
         T_Type* data() override
         {
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
             return alpaka::getPtrNative(*view);
         }
@@ -190,7 +194,6 @@ namespace pmacc
         DataBoxType getDataBox() override
         {
             auto pitchBytes = MemSpace<T_dim>(getPitchesInBytes(*view));
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             return DataBoxType(PitchedBox<T_Type, T_dim>(alpaka::getPtrNative(*view), pitchBytes));
         }
 
@@ -209,7 +212,6 @@ namespace pmacc
          */
         CurrentSizeBufferDevice sizeOnDeviceBuffer()
         {
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             if(!hasCurrentSizeOnDevice())
             {
                 throw std::runtime_error("Buffer has no size on device!, currentSize is only stored on host side.");
@@ -223,19 +225,12 @@ namespace pmacc
          */
         typename Buffer<T_Type, T_dim>::CurrentSizeBufferHost sizeHostSideBuffer()
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
             return this->currentSizeBufferHost;
         }
 
+        /** Host-side cached size. Synchronize sizeOnDeviceBuffer() explicitly when required. */
         size_t size() override
         {
-            if(hasCurrentSizeOnDevice())
-            {
-                eventSystem::startTransaction(eventSystem::getTransactionEvent());
-                Environment<>::get().Factory().createTaskGetCurrentSizeFromDevice(*this);
-                eventSystem::endTransaction().waitForFinished();
-            }
-
             return Buffer<T_Type, T_dim>::size();
         }
 
@@ -274,7 +269,6 @@ namespace pmacc
 
         auto sizeDeviceSideBuffer()
         {
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             return currentSizeBufferDevice.value();
         }
 
@@ -282,14 +276,12 @@ namespace pmacc
         {
             PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
             size_t const size = this->size();
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             return {alpaka::getPtrNative(*view), size};
         }
 
         typename Buffer<T_Type, T_dim>::CPtr getCPtrCapacity() final
         {
             PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             size_t const size = this->capacityND().productOfComponents();
             return {alpaka::getPtrNative(*view), size};
         }

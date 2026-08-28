@@ -143,6 +143,7 @@ namespace pmacc
                             numThreads,
                             numIdsPerThread);
                     idBuf.deviceToHost();
+                    eventSystem::getTransactionEvent().waitForFinished();
                     REQUIRE(numIds == ids.size());
                     auto hostBox = idBuf.getHostBuffer().getDataBox();
                     // Make sure they are the same

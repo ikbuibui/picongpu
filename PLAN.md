@@ -18,6 +18,10 @@ The implementation completed so far remains valuable and is not discarded:
   snapshots, and buffer lifetime retention exist;
 - PMacc can attach its environment to the current MPI runtime and routes several
   signal, reduction, gather, barrier, and point-to-point paths through it;
+- PMacc now has an explicit async context owning a Caravan scope and manually
+  driven run loop, and the `gameOfLife2D` local core/border step uses lazy kernel
+  senders with explicit allocation retention; buffer accessors no longer mutate
+  transaction state;
 - the native MPI extension can transfer arbitrary nonblocking requests and their
   retained lifetimes to the progress engine;
 - the MPI engine no longer stores predecessor Events; lazy senders submit directly,
@@ -62,8 +66,9 @@ The immediate implementation order is:
    Event-taking wrappers compose or subscribe above the backend;
 6. **CPU prototype implemented; target accelerator runtime validation remains:**
    complete the first real alpaka/device sender architecture test; and only then
-7. replace PMacc polling task chains with local sender composition and retain Event
-   only at unavoidable legacy boundaries.
+7. **Phase 5 representative path implemented:** replace PMacc polling task chains
+   with local sender composition and retain Event only at unavoidable legacy
+   boundaries.
 
 ---
 
@@ -1636,37 +1641,40 @@ these completion paths.
 
 ## Phase 5: Explicit PMacc dependencies, async scope, run loop, and ownership migration
 
-Begin architectural replacement of polling tasks only after the typed sender
-vocabulary and the MPI and alpaka backend gates pass. Until then,
-`TaskSendMPI`/`TaskReceiveMPI` and similar classes remain compatibility shims;
-they may adapt Events above sender backends but must not shape backend APIs.
+**Current state:** implemented for the representative PMacc path. The
+`gameOfLife2D` core/border step uses explicit lazy kernel senders, a PMacc-owned
+async scope/run loop, and explicit allocation retention. Its communication call
+remains the deliberate legacy `EventTask` boundary for Phase 6.
 
-1. Introduce/select the PMacc application async scope used to own dynamically
-   spawned migration work.
-2. Introduce/select a manually driven PMacc `RunLoop` and use its
-   `RunLoopScheduler` for host continuations and wait/progress integration where
-   useful.
-3. Prefer standard/P2300 implementations for scope/run loop if the supported
-   toolchain is viable; otherwise keep migration implementations intentionally
-   replaceable by those semantics.
-4. Implement/finalize `Flow` only as temporary PMacc-friendly graph-construction
-   sugar over sender/Event APIs.
-5. Remove global transaction state from a representative PMacc simulation step.
-6. Remove event-system hooks from buffer accessors.
-7. Port PMacc buffer/view ownership semantics: borrowed views where enclosing
-   lifetime is sufficient; explicit allocation-handle capture by operation state
-   where asynchronous work must extend storage lifetime.
-8. Port basic kernel, copy, fill/set, and size-transfer call sites.
-9. Replace Manager-style blocking progress on migrated paths with scope/run-loop-
-   aware waits rather than global task scanning.
-10. Add debug checks for invalid waits and borrowed-lifetime violations where
-    practical.
-11. Keep resource-access dependency inference disabled/optional at this stage;
-    explicit composition is the correctness baseline.
-12. Add a structured fork/join helper if forgotten manual joins prove to be a
-    recurring migration defect.
+1. **Implemented:** PMacc's explicit `async::Context` owns dynamically spawned
+   migration work in a Caravan `AsyncScope`.
+2. **Implemented:** the context owns and drives a `RunLoop` and transfers sender
+   completion through its `RunLoopScheduler`.
+3. **Implemented with the replaceable custom subset:** the supported toolchain
+   still uses Caravan's P2300-shaped scope/run-loop semantics.
+4. **Deliberately not introduced:** `Flow` is unnecessary on the representative
+   path; direct sender composition is smaller and remains the baseline.
+5. **Implemented:** the representative `gameOfLife2D` local core/border step no
+   longer reads or mutates global transaction state.
+6. **Implemented:** buffer/view/pointer/size accessors no longer call
+   `eventSystem::startOperation`; mutating legacy operations and destruction
+   safety remain until their later call-site ports.
+7. **Implemented:** PMacc exposes borrowed alpaka views and explicit `OwnedView` /
+   `Retained` allocation capture for asynchronous operation state.
+8. **Implemented and tested:** explicit kernel, copy, byte-fill, and size-transfer
+   sender call sites use the alpaka backend; CPU runtime and CUDA translation pass.
+9. **Implemented on migrated paths:** `async::Context::wait` drives the local run
+   loop; the remaining Manager wait in `gameOfLife2D` is confined to its unmigrated
+   Phase 6 communication boundary.
+10. **Implemented where practical:** pending waits from an executor continuation
+    are diagnosed; owned-view lifetime is tested by destroying PMacc buffer
+    wrappers before native completion.
+11. **Preserved:** resource-access dependency inference remains disabled; all new
+    dependencies are explicit composition.
+12. **Not needed:** no recurring forgotten-join defect was observed, so no
+    speculative fork/join helper was added.
 
-**Exit criterion:** a representative PMacc example uses explicit local sender/Event
+**Exit criterion met:** a representative PMacc example uses explicit local sender
 composition, an explicit async scope, and selected run-loop execution; application
 resource ownership is explicit rather than a generic Caravan `KeepAlive` rule; no
 buffer accessor mutates global scheduling state and no Caravan-global Manager has

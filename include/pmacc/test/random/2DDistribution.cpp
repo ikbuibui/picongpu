@@ -211,6 +211,7 @@ namespace pmacc
                 generateRandomNumbers(rngSize, numSamples, detector.getDeviceBuffer(), GetRanidx<RNGProvider>());
 
                 detector.deviceToHost();
+                eventSystem::getTransactionEvent().waitForFinished();
                 auto box = detector.getHostBuffer().getDataBox();
                 // Write data to file
                 std::ofstream dataFile((rngName + "_data.txt").c_str());

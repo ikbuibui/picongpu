@@ -24,8 +24,6 @@
 
 #include "pmacc/dimensions/Definition.hpp"
 
-#include <thread>
-
 #include <caravan/core.hpp>
 #include <caravan/mpi/native.hpp>
 
@@ -66,16 +64,7 @@ namespace pmacc
     } // namespace detail
 
     template<unsigned DIM>
-    CommunicatorMPI<DIM>::~CommunicatorMPI()
-    {
-        auto joined = asyncScope.join();
-        // ponytail: shutdown-only polling; add a run-loop wakeup wait if teardown latency matters.
-        while(joined.state() == caravan::CompletionState::pending)
-        {
-            runLoop.runReady();
-            std::this_thread::yield();
-        }
-    }
+    CommunicatorMPI<DIM>::~CommunicatorMPI() = default;
 
     template<unsigned DIM>
     void CommunicatorMPI<DIM>::init(
@@ -117,14 +106,12 @@ namespace pmacc
         size_t sendBytes,
         uint32_t tag)
     {
-        return asyncScope.spawnFuture<caravan::SendResult>(caravan::continuesOn(
-            caravan::mpi::send(
-                *mpiContext,
-                caravan::BufferLease::borrowed(const_cast<char*>(sendData), sendBytes),
-                caravan::Peer{ExchangeTypeToRank(ex)},
-                caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
-                communicatorId),
-            runLoop.scheduler()));
+        return asyncContext.spawnFuture<caravan::SendResult>(caravan::mpi::send(
+            *mpiContext,
+            caravan::BufferLease::borrowed(const_cast<char*>(sendData), sendBytes),
+            caravan::Peer{ExchangeTypeToRank(ex)},
+            caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
+            communicatorId));
     }
 
     template<unsigned DIM>
@@ -134,14 +121,12 @@ namespace pmacc
         size_t receiveBytes,
         uint32_t tag)
     {
-        return asyncScope.spawnFuture<caravan::ReceiveResult>(caravan::continuesOn(
-            caravan::mpi::receive(
-                *mpiContext,
-                caravan::BufferLease::borrowed(receiveData, receiveBytes),
-                caravan::Peer{ExchangeTypeToRank(ex)},
-                caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
-                communicatorId),
-            runLoop.scheduler()));
+        return asyncContext.spawnFuture<caravan::ReceiveResult>(caravan::mpi::receive(
+            *mpiContext,
+            caravan::BufferLease::borrowed(receiveData, receiveBytes),
+            caravan::Peer{ExchangeTypeToRank(ex)},
+            caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
+            communicatorId));
     }
 
     template<unsigned DIM>
@@ -152,22 +137,19 @@ namespace pmacc
         caravan::ScalarType type,
         caravan::ReduceOperation operation)
     {
-        return asyncScope.spawnFuture<caravan::AllReduceResult>(caravan::continuesOn(
-            caravan::mpi::allReduce(
-                *mpiContext,
-                caravan::BufferLease::borrowed(const_cast<void*>(input), bytes),
-                caravan::BufferLease::borrowed(output, bytes),
-                type,
-                operation,
-                signalCommunicatorId),
-            runLoop.scheduler()));
+        return asyncContext.spawnFuture<caravan::AllReduceResult>(caravan::mpi::allReduce(
+            *mpiContext,
+            caravan::BufferLease::borrowed(const_cast<void*>(input), bytes),
+            caravan::BufferLease::borrowed(output, bytes),
+            type,
+            operation,
+            signalCommunicatorId));
     }
 
     template<unsigned DIM>
     caravan::Event CommunicatorMPI<DIM>::startBarrierAsync()
     {
-        return asyncScope.spawn(
-            caravan::continuesOn(caravan::mpi::barrier(*mpiContext, communicatorId), runLoop.scheduler()));
+        return asyncContext.spawn(caravan::mpi::barrier(*mpiContext, communicatorId));
     }
 
     // description in ICommunicator
