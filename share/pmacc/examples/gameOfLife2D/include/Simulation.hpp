@@ -37,6 +37,8 @@
 
 #include <string>
 
+#include <caravan/mpi.hpp>
+
 namespace gol
 {
     class Simulation
@@ -59,7 +61,13 @@ namespace gol
         bool isMaster;
 
     public:
-        Simulation(uint32_t rule, int32_t steps, Space gridSize, Space devices, Space periodic)
+        Simulation(
+            caravan::MpiContext& mpi,
+            uint32_t rule,
+            int32_t steps,
+            Space gridSize,
+            Space devices,
+            Space periodic)
             : gridSize(gridSize)
             , evo(rule)
             , steps(steps)
@@ -75,7 +83,7 @@ namespace gol
              * -Then the CUDA Stream Controller is activated and one stream is    *
              *  added. It's basically a List of cudaStreams. Used to parallelize  *
              *  Memory transfers and calculations.                                */
-            Environment<DIM2>::get().initDevices(devices, periodic);
+            Environment<DIM2>::get().initDevices(mpi, devices, periodic);
 
             /* Now we have allocated every node to a grid position in the GC. We  *
              * use that grid position to allocate every node to a position in the *

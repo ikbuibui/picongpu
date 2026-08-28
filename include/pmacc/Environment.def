@@ -103,12 +103,6 @@ namespace pmacc
                 return m_isSubGridDefined;
             }
 
-            /** initialize the environment
-             *
-             * After this call it is allowed to use MPI.
-             */
-            HINLINE void init();
-
             /** attach to MPI initialized and owned by Caravan */
             HINLINE void init(caravan::MpiContext& mpiContext);
 

@@ -23,7 +23,6 @@
 #pragma once
 
 #include "pmacc/communication/ICommunicator.hpp"
-#include "pmacc/communication/manager_common.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/memory/dataTypes/Mask.hpp"
 #include "pmacc/types.hpp"
@@ -32,7 +31,6 @@
 
 #include <caravan/core.hpp>
 #include <caravan/mpi.hpp>
-#include <mpi.h>
 
 namespace pmacc
 {
@@ -56,27 +54,6 @@ namespace pmacc
             return mpiSize;
         }
 
-        MPI_Comm getMPIComm() const
-        {
-            return topology;
-        }
-
-        /*! MPI communicator for signal handling
-         *
-         * @attention Do not use this communicator to transfer simulation data.
-         *
-         * @return communicator used transfer signal information only
-         */
-        MPI_Comm getMPISignalComm() const
-        {
-            return commSignal;
-        }
-
-        MPI_Info getMPIInfo() const
-        {
-            return MPI_INFO_NULL;
-        }
-
         DataSpace<DIM3> getPeriodic() const override
         {
             return this->periodic;
@@ -89,8 +66,6 @@ namespace pmacc
          *
          * \warning throws invalid argument if cx*cy*cz != totalnodes
          */
-        void init(DataSpace<DIM3> numberProcesses, DataSpace<DIM3> periodic);
-
         /** initialize from MPI-thread-owned immutable topology data */
         void init(caravan::MpiContext& mpiContext, DataSpace<DIM3> numberProcesses, DataSpace<DIM3> periodic);
 
@@ -131,13 +106,6 @@ namespace pmacc
             return this->coordinates;
         }
 
-        //! description in ICommunicator
-        MPI_Request* startSend(uint32_t ex, char const* send_data, size_t send_data_count, uint32_t tag) override;
-
-
-        //! description in ICommunicator
-        MPI_Request* startReceive(uint32_t ex, char* recv_data, size_t recv_data_max, uint32_t tag) override;
-
         caravan::Future<caravan::SendResult> startSendAsync(
             uint32_t ex,
             char const* sendData,
@@ -159,11 +127,6 @@ namespace pmacc
 
         caravan::Event startBarrierAsync();
 
-        bool usesMpiContext() const override
-        {
-            return mpiContext != nullptr;
-        }
-
         void progressAsync() override
         {
             runLoop.runReady();
@@ -184,14 +147,6 @@ namespace pmacc
 
 
     protected:
-        /*! gets hostRank
-         *
-         * Computes the node-local rank (the index of this process among all
-         * processes sharing the same node) via MPI_Comm_split_type. This is used
-         * to assign one GPU per process on a node.
-         */
-        void updateHostRank();
-
         /*! update coordinates @see getCoordinates
          */
         void updateCoordinates();
@@ -202,10 +157,6 @@ namespace pmacc
         DataSpace<DIM> baseCoordinates;
 
         DataSpace<DIM3> periodic;
-        //! MPI communicator (currently MPI_COMM_WORLD)
-        MPI_Comm topology{MPI_COMM_NULL};
-        //! Communicator to handle signals
-        MPI_Comm commSignal{MPI_COMM_NULL};
         //! Opaque communicators owned by the Caravan MPI thread.
         caravan::CommunicatorId communicatorId{caravan::worldCommunicator};
         caravan::CommunicatorId signalCommunicatorId{caravan::worldCommunicator};
@@ -223,6 +174,7 @@ namespace pmacc
 
         int mpiRank;
         int mpiSize;
+        static constexpr uint32_t gridExchangeTag = 5u;
         caravan::RunLoop runLoop;
         caravan::AsyncScope asyncScope;
     };

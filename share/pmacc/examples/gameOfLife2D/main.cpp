@@ -30,6 +30,7 @@
 
 #include <iostream>
 
+#include <caravan/mpi.hpp>
 
 namespace po = boost::program_options;
 
@@ -140,14 +141,16 @@ int main(int argc, char** argv)
     }
     std::cout << "newborn if=" << newBornIf << " stay alive if=" << stayAliveIf << " mask=" << ruleMask << std::endl;
 
-    /* start game of life simulation */
-    gol::Simulation sim(ruleMask, steps, grid, gpus, endless);
-    sim.init();
-    sim.start();
-    sim.finalize();
-
-    /* finalize the pmacc context */
-    pmacc::Environment<>::get().finalize();
-
-    return 0;
+    return caravan::MpiRuntime::run(
+        argc,
+        argv,
+        [&](caravan::MpiContext& mpi)
+        {
+            gol::Simulation sim(mpi, ruleMask, steps, grid, gpus, endless);
+            sim.init();
+            sim.start();
+            sim.finalize();
+            pmacc::Environment<>::get().finalize();
+            return 0;
+        });
 }
