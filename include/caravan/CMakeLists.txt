@@ -13,7 +13,7 @@ target_include_directories(
 
 find_package(MPI REQUIRED COMPONENTS CXX)
 find_package(Threads REQUIRED)
-add_library(caravan-mpi STATIC mpi.cpp)
+add_library(caravan-mpi STATIC mpi/communicator.cpp mpi/context.cpp mpi/operations.cpp)
 add_library(caravan::mpi ALIAS caravan-mpi)
 target_link_libraries(caravan-mpi PUBLIC caravan::core MPI::MPI_CXX PRIVATE Threads::Threads)
 
