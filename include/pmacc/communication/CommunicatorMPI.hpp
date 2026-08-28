@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "pmacc/async/Context.hpp"
 #include "pmacc/communication/ICommunicator.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/memory/dataTypes/Mask.hpp"
@@ -129,7 +130,7 @@ namespace pmacc
 
         void progressAsync() override
         {
-            runLoop.runReady();
+            asyncContext.runReady();
         }
 
         //! description in ICommunicator
@@ -175,8 +176,7 @@ namespace pmacc
         int mpiRank;
         int mpiSize;
         static constexpr uint32_t gridExchangeTag = 5u;
-        caravan::RunLoop runLoop;
-        caravan::AsyncScope asyncScope;
+        async::Context asyncContext;
     };
 
 } // namespace pmacc

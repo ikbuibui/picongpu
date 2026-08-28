@@ -283,6 +283,7 @@ TEST_CASE("lockstep kernel", "[iota]")
         hostDeviceBuffer.getDeviceBuffer().setValue(0u);
         function(hostDeviceBuffer.getDeviceBuffer());
         hostDeviceBuffer.deviceToHost();
+        eventSystem::getTransactionEvent().waitForFinished();
         validate(hostDeviceBuffer.getHostBuffer(), referenceBuffer);
     };
 

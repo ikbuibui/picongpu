@@ -198,12 +198,13 @@ namespace gol
                     typename T_MappingDesc::SuperCellSize{})(writeBox, seed, fraction, mapper);
         }
 
-        template<uint32_t Area, typename DBox>
-        void run(DBox const& readBox, DBox const& writeBox)
+        template<uint32_t Area, typename T_Queue, typename T_Read, typename T_Write>
+        auto runAsync(T_Queue& queue, T_Read read, T_Write write)
         {
             AreaMapping<Area, T_MappingDesc> mapper(*mapping);
-            PMACC_LOCKSTEP_KERNEL(kernel::Evolution{})
-                .config(mapper.getGridDim(), typename T_MappingDesc::SuperCellSize{})(readBox, writeBox, rule, mapper);
+            return PMACC_LOCKSTEP_KERNEL(kernel::Evolution{})
+                .config(mapper.getGridDim(), typename T_MappingDesc::SuperCellSize{})
+                .sender(queue, std::move(read), std::move(write), rule, mapper);
         }
     };
 
