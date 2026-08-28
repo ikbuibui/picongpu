@@ -15,8 +15,8 @@
 #include <utility>
 #include <vector>
 
-#include <caravan/mpi.hpp>
-#include <caravan/sender.hpp>
+#include <caravan/core/sender.hpp>
+#include <caravan/mpi/context.hpp>
 #include <mpi.h>
 
 namespace caravan
