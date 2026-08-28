@@ -70,7 +70,7 @@ int main(int argc, char** argv)
     return caravan::MpiRuntime::run(
         argc,
         argv,
-        [processMain](caravan::MpiExecutor& mpi)
+        [processMain](caravan::MpiContext& mpi)
         {
             assert(std::this_thread::get_id() == processMain);
             auto const topology = mpi.topology();
@@ -475,7 +475,7 @@ int main(int argc, char** argv)
             assert(!scopedSenderStarted);
             caravan::RunLoop controlLoop;
             caravan::AsyncScope scope;
-            auto scopedEvent = scope.spawn(caravan::continuesOn(std::move(scopedSender), controlLoop));
+            auto scopedEvent = scope.spawn(caravan::continuesOn(std::move(scopedSender), controlLoop.scheduler()));
             std::thread controlThread([&controlLoop] { controlLoop.run(); });
             scopedEvent.wait();
             controlLoop.finish();

@@ -8,8 +8,10 @@
 #include <exception>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include <caravan/core.hpp>
@@ -52,6 +54,11 @@ namespace
     class AsyncValueSender
     {
     public:
+        using completion_signatures = caravan::CompletionSignatures<
+            caravan::ValueSignature<T>,
+            caravan::ErrorSignature<std::exception_ptr>,
+            caravan::StoppedSignature>;
+
         AsyncValueSender(caravan::Event ready, T value) : m_ready(std::move(ready)), m_value(std::move(value))
         {
         }
@@ -295,6 +302,98 @@ namespace
         eagerJoin.wait();
     }
 
+    void testTypedSenderVocabulary()
+    {
+        static_assert(caravan::Sender<caravan::EventSender>);
+        static_assert(caravan::SenderTo<caravan::EventSender, EventReceiver>);
+        static_assert(caravan::Sender<AsyncValueSender<int>>);
+
+        caravan::EventSource thenReady;
+        auto doubled
+            = caravan::then(AsyncValueSender<int>{thenReady.event(), 21}, [](int value) { return value * 2; });
+        static_assert(std::is_same_v<
+                      caravan::CompletionSignaturesOf<decltype(doubled)>,
+                      caravan::CompletionSignatures<
+                          caravan::ValueSignature<int>,
+                          caravan::ErrorSignature<std::exception_ptr>,
+                          caravan::StoppedSignature>>);
+        caravan::AsyncScope thenScope;
+        auto doubledResult = thenScope.spawnFuture<int>(std::move(doubled));
+        thenReady.setReady();
+        assert(doubledResult.result() == 42);
+        thenScope.join().wait();
+
+        bool voidThenCalled = false;
+        caravan::syncWait(caravan::then(caravan::asSender(caravan::readyEvent()), [&] { voidThenCalled = true; }));
+        assert(voidThenCalled);
+
+        caravan::EventSource predecessorReady;
+        caravan::EventSource successorReady;
+        bool factoryCalled = false;
+        auto chained = caravan::letValue(
+            AsyncValueSender<int>{predecessorReady.event(), 20},
+            [&](int value)
+            {
+                factoryCalled = true;
+                return AsyncValueSender<int>{successorReady.event(), value + 22};
+            });
+        caravan::AsyncScope letScope;
+        auto chainedResult = letScope.spawnFuture<int>(std::move(chained));
+        assert(!factoryCalled);
+        predecessorReady.setReady();
+        assert(factoryCalled);
+        successorReady.setReady();
+        assert(chainedResult.result() == 42);
+        letScope.join().wait();
+
+        caravan::EventSource firstReady;
+        caravan::EventSource secondReady;
+        auto combined = caravan::then(
+            caravan::whenAll(
+                AsyncValueSender<int>{firstReady.event(), 40},
+                AsyncValueSender<std::string>{secondReady.event(), "ok"}),
+            [](int value, std::string text) { return value + static_cast<int>(text.size()); });
+        caravan::AsyncScope allScope;
+        auto combinedResult = allScope.spawnFuture<int>(std::move(combined));
+        firstReady.setReady();
+        assert(combinedResult.state() == caravan::CompletionState::pending);
+        secondReady.setReady();
+        assert(combinedResult.result() == 42);
+        allScope.join().wait();
+
+        caravan::syncWait(caravan::whenAll());
+
+        caravan::EventSource failedReady;
+        caravan::EventSource unfinishedReady;
+        bool continuationCalled = false;
+        auto failing = caravan::then(
+            caravan::whenAll(
+                AsyncValueSender<int>{failedReady.event(), 1},
+                AsyncValueSender<int>{unfinishedReady.event(), 2}),
+            [&](int, int) { continuationCalled = true; });
+        caravan::AsyncScope failureScope;
+        auto failed = failureScope.spawn(std::move(failing));
+        failedReady.setFailed(std::make_exception_ptr(std::runtime_error("typed whenAll failure")));
+        assert(failed.state() == caravan::CompletionState::pending);
+        unfinishedReady.setReady();
+        assert(failed.state() == caravan::CompletionState::failed);
+        assert(!continuationCalled);
+        failureScope.join().wait();
+
+        caravan::EventSource stoppedReady;
+        caravan::EventSource stoppedPeerReady;
+        caravan::AsyncScope stoppedScope;
+        auto stopped = stoppedScope.spawn(
+            caravan::whenAll(
+                AsyncValueSender<int>{stoppedReady.event(), 1},
+                AsyncValueSender<int>{stoppedPeerReady.event(), 2}));
+        stoppedReady.setStopped();
+        assert(stopped.state() == caravan::CompletionState::pending);
+        stoppedPeerReady.setReady();
+        assert(stopped.state() == caravan::CompletionState::stopped);
+        stoppedScope.join().wait();
+    }
+
     void testEagerSenderBridgesAndOperationLifetime()
     {
         caravan::AsyncScope scope;
@@ -349,9 +448,11 @@ namespace
     void testContinuesOnRunLoop()
     {
         caravan::RunLoop runLoop;
+        auto scheduler = runLoop.scheduler();
+        static_assert(std::is_trivially_copyable_v<caravan::RunLoopScheduler>);
         caravan::AsyncScope scope;
         caravan::EventSource source;
-        auto transferred = scope.spawn(caravan::continuesOn(caravan::asSender(source.event()), runLoop));
+        auto transferred = scope.spawn(caravan::continuesOn(caravan::asSender(source.event()), scheduler));
         auto joined = scope.join();
 
         source.setReady();
@@ -361,11 +462,20 @@ namespace
         runLoop.run();
         transferred.wait();
         joined.wait();
+        try
+        {
+            scheduler.post([] {});
+            assert(false);
+        }
+        catch(std::logic_error const&)
+        {
+        }
 
         caravan::RunLoop polledLoop;
         caravan::AsyncScope polledScope;
         caravan::EventSource polledSource;
-        auto polled = polledScope.spawn(caravan::continuesOn(caravan::asSender(polledSource.event()), polledLoop));
+        auto polled
+            = polledScope.spawn(caravan::continuesOn(caravan::asSender(polledSource.event()), polledLoop.scheduler()));
         auto polledJoin = polledScope.join();
         polledSource.setReady();
         assert(polled.state() == caravan::CompletionState::pending);
@@ -475,6 +585,7 @@ int main()
     testEventSenderBridge();
     testSyncWait();
     testLetValue();
+    testTypedSenderVocabulary();
     testEagerSenderBridgesAndOperationLifetime();
     testContinuesOnRunLoop();
     testAsyncScope();

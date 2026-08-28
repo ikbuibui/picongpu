@@ -36,12 +36,12 @@ are not calls. Each direct-call owner and migration path is listed below.
 |---|---|---|
 | Bootstrap/finalize | `Environment.tpp`, `gameOfLife2D/main.cpp` | dedicated `MpiRuntime` worker; remove example finalization |
 | Topology/communicators | `communication/CommunicatorMPI.cpp` | MPI-thread commands plus immutable topology snapshot |
-| Point-to-point | `CommunicatorMPI.cpp`, `TaskSendMPI.hpp`, `TaskReceiveMPI.hpp` | `MpiExecutor::send/receive`; status/count copied into results |
-| Barrier/progress | `eventSystem/mpiBarrier.cpp`, `simulationControl/SimulationHelper.cpp`, `simulationControl/Checkpointing.hpp` | nonblocking executor barriers; delete manager pumping |
+| Point-to-point | `CommunicatorMPI.cpp`, `TaskSendMPI.hpp`, `TaskReceiveMPI.hpp` | `MpiContext::send/receive`; status/count copied into results |
+| Barrier/progress | `eventSystem/mpiBarrier.cpp`, `simulationControl/SimulationHelper.cpp`, `simulationControl/Checkpointing.hpp` | nonblocking context barriers; delete manager pumping |
 | Signals | `eventSystem/tasks/TaskSignal.hpp` | signal-communicator all-reduce futures |
-| Diagnostics barriers | `device/MemoryInfo.hpp` | executor barriers |
-| Reduction | `mpi/reduceMethods/{Reduce,AllReduce}.hpp`, `mpi/MPIReduce.hpp` | executor collective futures and MPI-owned communicators |
-| Gather | `mpi/GatherSlice.hpp` | executor gather/gatherv operations and MPI-owned communicator |
+| Diagnostics barriers | `device/MemoryInfo.hpp` | context barriers |
+| Reduction | `mpi/reduceMethods/{Reduce,AllReduce}.hpp`, `mpi/MPIReduce.hpp` | context collective futures and MPI-owned communicators |
+| Gather | `mpi/GatherSlice.hpp` | context gather/gatherv operations and MPI-owned communicator |
 | Error checking | `communication/manager_common.hpp` | keep only inside Caravan MPI implementation |
 
 The exact direct calls are reproducible with:
@@ -75,7 +75,7 @@ Migration ownership is grouped by the component that removes each call:
 | `eventSystem/{Manager,eventSystem,transactions,events}` | Caravan Events/Flows; delete after last PMacc caller |
 | Basic device tasks (`TaskKernel`, copy, fill, size transfer) | `DeviceExecutor` operations in Phases 3-4 |
 | `TaskSend`, `TaskReceive`, `TaskSendMPI`, `TaskReceiveMPI` | temporary Phase 2 MPI adapters, deleted in Phase 5 |
-| `TaskSignal`, `mpiBarrier` | `MpiExecutor` in Phase 2 |
+| `TaskSignal`, `mpiBarrier` | `MpiContext` in Phase 2 |
 | Buffer accessors and `GridBuffer` | explicit dependencies and allocation leases in Phases 4-5 |
 | Field task classes and `FieldFactory` | direction Flows in Phase 6 |
 | Particle task classes and `ParticleFactory` | continuation chunk loops in Phase 6 |

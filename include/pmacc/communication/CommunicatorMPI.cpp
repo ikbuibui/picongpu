@@ -124,12 +124,12 @@ namespace pmacc
 
     template<unsigned DIM>
     void CommunicatorMPI<DIM>::init(
-        caravan::MpiExecutor& executor,
+        caravan::MpiContext& context,
         DataSpace<DIM3> numberProcesses,
         DataSpace<DIM3> periodic)
     {
         this->periodic = periodic;
-        mpiExecutor = &executor;
+        mpiContext = &context;
         yoffset = 0;
         for(unsigned dimension = 0; dimension < DIM3; ++dimension)
             dims[dimension] = numberProcesses[dimension];
@@ -143,10 +143,10 @@ namespace pmacc
         }
 
         auto const snapshot = caravan::syncWait<caravan::TopologySnapshot>(
-            caravan::mpi::createCartesian(executor, std::move(dimensions), std::move(periods)));
+            caravan::mpi::createCartesian(context, std::move(dimensions), std::move(periods)));
         communicatorId = snapshot.communicator;
-        signalCommunicatorId = caravan::syncWait<caravan::CommunicatorId>(
-            caravan::mpi::duplicateCommunicator(executor, communicatorId));
+        signalCommunicatorId
+            = caravan::syncWait<caravan::CommunicatorId>(caravan::mpi::duplicateCommunicator(context, communicatorId));
         mpiRank = snapshot.rank;
         mpiSize = snapshot.size;
         hostRank = snapshot.hostLocalRank;
@@ -202,16 +202,16 @@ namespace pmacc
         size_t sendBytes,
         uint32_t tag)
     {
-        if(!mpiExecutor)
+        if(!mpiContext)
             throw std::logic_error("CommunicatorMPI is not attached to Caravan");
         return asyncScope.spawnFuture<caravan::SendResult>(caravan::continuesOn(
             caravan::mpi::send(
-                *mpiExecutor,
+                *mpiContext,
                 caravan::BufferLease::borrowed(const_cast<char*>(sendData), sendBytes),
                 caravan::Peer{ExchangeTypeToRank(ex)},
                 caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
                 communicatorId),
-            runLoop));
+            runLoop.scheduler()));
     }
 
     template<unsigned DIM>
@@ -221,16 +221,16 @@ namespace pmacc
         size_t receiveBytes,
         uint32_t tag)
     {
-        if(!mpiExecutor)
+        if(!mpiContext)
             throw std::logic_error("CommunicatorMPI is not attached to Caravan");
         return asyncScope.spawnFuture<caravan::ReceiveResult>(caravan::continuesOn(
             caravan::mpi::receive(
-                *mpiExecutor,
+                *mpiContext,
                 caravan::BufferLease::borrowed(receiveData, receiveBytes),
                 caravan::Peer{ExchangeTypeToRank(ex)},
                 caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
                 communicatorId),
-            runLoop));
+            runLoop.scheduler()));
     }
 
     template<unsigned DIM>
@@ -241,25 +241,26 @@ namespace pmacc
         caravan::ScalarType type,
         caravan::ReduceOperation operation)
     {
-        if(!mpiExecutor)
+        if(!mpiContext)
             throw std::logic_error("CommunicatorMPI is not attached to Caravan");
         return asyncScope.spawnFuture<caravan::AllReduceResult>(caravan::continuesOn(
             caravan::mpi::allReduce(
-                *mpiExecutor,
+                *mpiContext,
                 caravan::BufferLease::borrowed(const_cast<void*>(input), bytes),
                 caravan::BufferLease::borrowed(output, bytes),
                 type,
                 operation,
                 signalCommunicatorId),
-            runLoop));
+            runLoop.scheduler()));
     }
 
     template<unsigned DIM>
     caravan::Event CommunicatorMPI<DIM>::startBarrierAsync()
     {
-        if(!mpiExecutor)
+        if(!mpiContext)
             throw std::logic_error("CommunicatorMPI is not attached to Caravan");
-        return asyncScope.spawn(caravan::continuesOn(caravan::mpi::barrier(*mpiExecutor, communicatorId), runLoop));
+        return asyncScope.spawn(
+            caravan::continuesOn(caravan::mpi::barrier(*mpiContext, communicatorId), runLoop.scheduler()));
     }
 
     // description in ICommunicator
@@ -321,7 +322,7 @@ namespace pmacc
         int coords[DIM];
         int rank = mpiRank;
 
-        if(mpiExecutor)
+        if(mpiContext)
         {
             for(unsigned dimension = 0; dimension < DIM; ++dimension)
                 coords[dimension] = baseCoordinates[dimension];
@@ -389,7 +390,7 @@ namespace pmacc
                 if(dims[1] > 1)
                     mcoords[1] = (mcoords[1] - yoffset) % dims[1];
 
-                if(mpiExecutor)
+                if(mpiContext)
                 {
                     ranks[i] = 0;
                     for(unsigned dimension = 0; dimension < DIM; ++dimension)
