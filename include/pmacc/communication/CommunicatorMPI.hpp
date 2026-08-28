@@ -31,6 +31,7 @@
 #include <utility>
 
 #include <caravan/mpi.hpp>
+#include <caravan/sender.hpp>
 #include <mpi.h>
 
 namespace pmacc
@@ -43,7 +44,7 @@ namespace pmacc
     public:
         CommunicatorMPI() = default;
 
-        virtual ~CommunicatorMPI() = default;
+        virtual ~CommunicatorMPI();
 
         int getRank() override
         {
@@ -163,6 +164,11 @@ namespace pmacc
             return mpiExecutor != nullptr;
         }
 
+        void progressAsync() override
+        {
+            runLoop.runReady();
+        }
+
         //! description in ICommunicator
         bool slide() override;
 
@@ -217,6 +223,8 @@ namespace pmacc
 
         int mpiRank;
         int mpiSize;
+        caravan::RunLoop runLoop;
+        caravan::AsyncScope asyncScope;
     };
 
 } // namespace pmacc

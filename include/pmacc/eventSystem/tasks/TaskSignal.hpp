@@ -106,6 +106,8 @@ namespace pmacc
             {
                 if(m_timeStepFuture.valid())
                 {
+                    auto& communicator = Environment<T_dim>::get().GridController().getCommunicator();
+                    communicator.progressAsync();
                     if(m_timeStepFuture.state() != caravan::CompletionState::pending
                        && m_signalFuture.state() != caravan::CompletionState::pending)
                     {
