@@ -92,7 +92,7 @@ namespace pmacc
         void init(DataSpace<DIM3> numberProcesses, DataSpace<DIM3> periodic);
 
         /** initialize from MPI-thread-owned immutable topology data */
-        void init(caravan::MpiExecutor& mpiExecutor, DataSpace<DIM3> numberProcesses, DataSpace<DIM3> periodic);
+        void init(caravan::MpiContext& mpiContext, DataSpace<DIM3> numberProcesses, DataSpace<DIM3> periodic);
 
         caravan::CommunicatorId getCommunicatorId() const
         {
@@ -159,9 +159,9 @@ namespace pmacc
 
         caravan::Event startBarrierAsync();
 
-        bool usesMpiExecutor() const override
+        bool usesMpiContext() const override
         {
-            return mpiExecutor != nullptr;
+            return mpiContext != nullptr;
         }
 
         void progressAsync() override
@@ -209,7 +209,7 @@ namespace pmacc
         //! Opaque communicators owned by the Caravan MPI thread.
         caravan::CommunicatorId communicatorId{caravan::worldCommunicator};
         caravan::CommunicatorId signalCommunicatorId{caravan::worldCommunicator};
-        caravan::MpiExecutor* mpiExecutor{nullptr};
+        caravan::MpiContext* mpiContext{nullptr};
         //! array for exchangetype-to-rank conversion @see ExchangeTypeToRank
         int ranks[27];
         //! size of pmacc [cx,cy,cz]

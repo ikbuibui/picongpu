@@ -96,9 +96,9 @@ namespace pmacc
             return PluginConnector::getInstance();
         }
 
-        caravan::MpiExecutor* Environment::getMpiExecutor()
+        caravan::MpiContext* Environment::getMpiContext()
         {
-            return EnvironmentContext::getInstance().m_mpiExecutor;
+            return EnvironmentContext::getInstance().m_mpiContext;
         }
 
         device::MemoryInfo& Environment::MemoryInfo()
@@ -155,21 +155,21 @@ namespace pmacc
 
     template<uint32_t T_dim>
     void Environment<T_dim>::initDevices(
-        caravan::MpiExecutor& mpiExecutor,
+        caravan::MpiContext& mpiContext,
         DataSpace<T_dim> devices,
         DataSpace<T_dim> periodic)
     {
-        detail::EnvironmentContext::getInstance().init(mpiExecutor);
-        initDevicesImpl(devices, periodic, &mpiExecutor);
+        detail::EnvironmentContext::getInstance().init(mpiContext);
+        initDevicesImpl(devices, periodic, &mpiContext);
     }
 
     template<uint32_t T_dim>
     void Environment<T_dim>::initDevicesImpl(
         DataSpace<T_dim> devices,
         DataSpace<T_dim> periodic,
-        caravan::MpiExecutor* mpiExecutor)
+        caravan::MpiContext* mpiContext)
     {
-        GridController().init(devices, periodic, mpiExecutor);
+        GridController().init(devices, periodic, mpiContext);
         EnvironmentController();
         detail::EnvironmentContext::getInstance().setDevice(static_cast<int>(GridController().getHostRank()));
         QueueController().activate();
@@ -245,9 +245,9 @@ namespace pmacc
             }
         }
 
-        void EnvironmentContext::init(caravan::MpiExecutor& mpiExecutor)
+        void EnvironmentContext::init(caravan::MpiContext& mpiContext)
         {
-            m_mpiExecutor = &mpiExecutor;
+            m_mpiContext = &mpiContext;
             m_isMpiInitialized = true;
         }
 
@@ -260,9 +260,9 @@ namespace pmacc
                 alpaka::wait(manager::Device<ComputeDevice>::get().current());
                 m_isMpiInitialized = false;
                 /* The gpu context is freed by the QueueController. Caravan owns
-                 * MPI finalization when a dedicated executor is attached. */
-                if(m_mpiExecutor)
-                    m_mpiExecutor = nullptr;
+                 * MPI finalization when a dedicated context is attached. */
+                if(m_mpiContext)
+                    m_mpiContext = nullptr;
                 else
                     MPI_CHECK(MPI_Finalize());
             }

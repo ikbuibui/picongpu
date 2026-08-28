@@ -63,8 +63,8 @@ namespace pmacc
             /** state shows if MPI direct is activated */
             bool m_isMpiDirectEnabled{false};
 
-            /** Caravan MPI executor, owned by the process main thread. */
-            caravan::MpiExecutor* m_mpiExecutor{nullptr};
+            /** Caravan MPI context, owned by MpiRuntime's dedicated thread. */
+            caravan::MpiContext* m_mpiContext{nullptr};
 
             /** get the singleton EnvironmentContext
              *
@@ -110,7 +110,7 @@ namespace pmacc
             HINLINE void init();
 
             /** attach to MPI initialized and owned by Caravan */
-            HINLINE void init(caravan::MpiExecutor& mpiExecutor);
+            HINLINE void init(caravan::MpiContext& mpiContext);
 
             /** cleanup the environment */
             HINLINE void finalize();

@@ -45,7 +45,7 @@ namespace pmacc
         {
             auto cPtr = exchange->getCPtrCurrentSize();
             auto& communicator = Environment<DIM>::get().EnvironmentController().getCommunicator();
-            if(communicator.usesMpiExecutor())
+            if(communicator.usesMpiContext())
             {
                 future = communicator.startSendAsync(
                     exchange->getExchangeType(),

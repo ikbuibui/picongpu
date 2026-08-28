@@ -94,7 +94,7 @@ namespace caravan
         }
     } // namespace
 
-    class MpiExecutor::Impl
+    class MpiContext::Impl
     {
     public:
         Impl() : m_owner(std::this_thread::get_id()), m_continuations(*this)
@@ -264,7 +264,7 @@ namespace caravan
                 std::lock_guard lock(m_queueMutex);
                 if(!m_accepting)
                 {
-                    output.setFailed(std::make_exception_ptr(std::runtime_error("MPI executor is shutting down")));
+                    output.setFailed(std::make_exception_ptr(std::runtime_error("MPI context is shutting down")));
                     return;
                 }
                 ++m_outstanding;
@@ -568,13 +568,13 @@ namespace caravan
         ContinuationTarget m_continuations;
     };
 
-    MpiExecutor::MpiExecutor(std::unique_ptr<Impl> implementation) : m_implementation(std::move(implementation))
+    MpiContext::MpiContext(std::unique_ptr<Impl> implementation) : m_implementation(std::move(implementation))
     {
     }
 
-    MpiExecutor::~MpiExecutor() = default;
+    MpiContext::~MpiContext() = default;
 
-    TopologySnapshot MpiExecutor::topology() const
+    TopologySnapshot MpiContext::topology() const
     {
         return m_implementation->topology();
     }
@@ -782,7 +782,7 @@ namespace caravan
         return batch;
     }
 
-    Future<AllReduceResult> MpiExecutor::allReduce(
+    Future<AllReduceResult> MpiContext::allReduce(
         Event dataReady,
         BufferLease input,
         BufferLease output,
@@ -832,7 +832,7 @@ namespace caravan
         return batch;
     }
 
-    Future<ReduceResult> MpiExecutor::reduce(
+    Future<ReduceResult> MpiContext::reduce(
         Event dataReady,
         BufferLease input,
         BufferLease output,
@@ -894,7 +894,7 @@ namespace caravan
         return batch;
     }
 
-    Future<GatherResult> MpiExecutor::gather(
+    Future<GatherResult> MpiContext::gather(
         Event dataReady,
         BufferLease input,
         BufferLease output,
@@ -979,7 +979,7 @@ namespace caravan
         return batch;
     }
 
-    Future<GatherResult> MpiExecutor::gatherV(
+    Future<GatherResult> MpiContext::gatherV(
         Event dataReady,
         BufferLease input,
         BufferLease output,
@@ -1023,7 +1023,7 @@ namespace caravan
         return batch;
     }
 
-    Event MpiExecutor::barrier(Event predecessor, CommunicatorId communicator)
+    Event MpiContext::barrier(Event predecessor, CommunicatorId communicator)
     {
         return nativeEvent(
             *this,
@@ -1033,42 +1033,42 @@ namespace caravan
             communicator);
     }
 
-    void MpiExecutor::run()
+    void MpiContext::run()
     {
         m_implementation->run();
     }
 
-    void MpiExecutor::requestShutdown()
+    void MpiContext::requestShutdown()
     {
         m_implementation->requestShutdown();
     }
 
-    void MpiExecutor::submitNative(Event predecessor, detail::NativeSubmission submission)
+    void MpiContext::submitNative(Event predecessor, detail::NativeSubmission submission)
     {
         m_implementation->submitNative(std::move(predecessor), std::move(submission));
     }
 
-    void MpiExecutor::invokeBlocking(Event predecessor, detail::NativeBlockingSubmission submission)
+    void MpiContext::invokeBlocking(Event predecessor, detail::NativeBlockingSubmission submission)
     {
         m_implementation->invokeBlocking(std::move(predecessor), std::move(submission));
     }
 
-    void detail::NativeAccess::submit(MpiExecutor& executor, Event predecessor, detail::NativeSubmission submission)
+    void detail::NativeAccess::submit(MpiContext& context, Event predecessor, detail::NativeSubmission submission)
     {
-        executor.submitNative(std::move(predecessor), std::move(submission));
+        context.submitNative(std::move(predecessor), std::move(submission));
     }
 
     void detail::NativeAccess::invokeBlocking(
-        MpiExecutor& executor,
+        MpiContext& context,
         Event predecessor,
         detail::NativeBlockingSubmission submission)
     {
-        executor.invokeBlocking(std::move(predecessor), std::move(submission));
+        context.invokeBlocking(std::move(predecessor), std::move(submission));
     }
 
-    int MpiRuntime::runImpl(int& argc, char**& argv, std::function<int(MpiExecutor&)> application)
+    int MpiRuntime::runImpl(int& argc, char**& argv, std::function<int(MpiContext&)> application)
     {
-        std::promise<MpiExecutor*> startup;
+        std::promise<MpiContext*> startup;
         auto ready = startup.get_future();
         std::exception_ptr workerError;
         std::jthread mpiWorker(
@@ -1091,10 +1091,10 @@ namespace caravan
                     if(handlerError != MPI_SUCCESS)
                         throw mpiError("MPI_Comm_set_errhandler", handlerError);
 
-                    MpiExecutor executor{std::make_unique<MpiExecutor::Impl>()};
-                    startup.set_value(&executor);
+                    MpiContext context{std::make_unique<MpiContext::Impl>()};
+                    startup.set_value(&context);
                     published = true;
-                    executor.run();
+                    context.run();
 
                     int const finalizeError = MPI_Finalize();
                     initialized = false;
@@ -1114,10 +1114,10 @@ namespace caravan
                 }
             });
 
-        MpiExecutor* executor;
+        MpiContext* context;
         try
         {
-            executor = ready.get();
+            context = ready.get();
         }
         catch(...)
         {
@@ -1129,13 +1129,13 @@ namespace caravan
         std::exception_ptr applicationError;
         try
         {
-            applicationResult = application(*executor);
+            applicationResult = application(*context);
         }
         catch(...)
         {
             applicationError = std::current_exception();
         }
-        executor->requestShutdown();
+        context->requestShutdown();
         mpiWorker.join();
 
         if(applicationError)

@@ -99,8 +99,8 @@ namespace pmacc
              */
             HINLINE pmacc::PluginConnector& PluginConnector();
 
-            /** get the attached Caravan MPI executor, or nullptr during legacy startup */
-            HINLINE caravan::MpiExecutor* getMpiExecutor();
+            /** get the attached Caravan MPI context, or nullptr during legacy startup */
+            HINLINE caravan::MpiContext* getMpiContext();
 
             /** get the singleton MemoryInfo
              *
@@ -160,10 +160,7 @@ namespace pmacc
         HINLINE void initDevices(DataSpace<T_dim> devices, DataSpace<T_dim> periodic);
 
         /** initialize PMacc under the dedicated Caravan MPI runtime */
-        HINLINE void initDevices(
-            caravan::MpiExecutor& mpiExecutor,
-            DataSpace<T_dim> devices,
-            DataSpace<T_dim> periodic);
+        HINLINE void initDevices(caravan::MpiContext& mpiContext, DataSpace<T_dim> devices, DataSpace<T_dim> periodic);
 
         /** initialize the computing domain information of PMacc
          *
@@ -184,7 +181,7 @@ namespace pmacc
         HINLINE void initDevicesImpl(
             DataSpace<T_dim> devices,
             DataSpace<T_dim> periodic,
-            caravan::MpiExecutor* mpiExecutor);
+            caravan::MpiContext* mpiContext);
 
         Environment() = default;
 

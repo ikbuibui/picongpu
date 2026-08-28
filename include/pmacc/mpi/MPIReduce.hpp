@@ -50,12 +50,12 @@ namespace pmacc
 
             virtual ~MPIReduce()
             {
-                if(mpiExecutor && caravanCommunicator)
+                if(mpiContext && caravanCommunicator)
                 {
                     try
                     {
                         caravan::syncWait(
-                            caravan::mpi::destroyCommunicator(*mpiExecutor, caravanCommunicator->communicator));
+                            caravan::mpi::destroyCommunicator(*mpiContext, caravanCommunicator->communicator));
                     }
                     catch(std::exception const& error)
                     {
@@ -103,9 +103,9 @@ namespace pmacc
              */
             void participate(bool isActive)
             {
-                if(mpiExecutor && caravanCommunicator)
+                if(mpiContext && caravanCommunicator)
                     caravan::syncWait(
-                        caravan::mpi::destroyCommunicator(*mpiExecutor, caravanCommunicator->communicator));
+                        caravan::mpi::destroyCommunicator(*mpiContext, caravanCommunicator->communicator));
                 else if(comm != MPI_COMM_NULL)
                     MPI_CHECK(MPI_Comm_free(&comm));
 
@@ -113,14 +113,14 @@ namespace pmacc
                 numRanks = 0;
                 caravanCommunicator.reset();
                 comm = MPI_COMM_NULL;
-                mpiExecutor = Environment<>::get().getMpiExecutor();
+                mpiContext = Environment<>::get().getMpiContext();
 
-                if(mpiExecutor)
+                if(mpiContext)
                 {
-                    auto const world = mpiExecutor->topology();
+                    auto const world = mpiContext->topology();
                     caravanCommunicator
                         = caravan::syncWait<std::optional<caravan::CommunicatorInfo>>(caravan::mpi::splitCommunicator(
-                            *mpiExecutor,
+                            *mpiContext,
                             isActive ? std::optional<int>{0} : std::nullopt,
                             world.rank));
                     if(caravanCommunicator)
@@ -183,14 +183,14 @@ namespace pmacc
                     participate(true);
                 using ValueType = Type;
 
-                if(mpiExecutor)
+                if(mpiContext)
                 {
                     if(!caravanCommunicator)
                         throw std::logic_error("Inactive rank cannot submit an MPI reduction");
                     eventSystem::getTransactionEvent().waitForFinished();
                     caravan::syncWait(
                         caravan::mpi::request<void>(
-                            *mpiExecutor,
+                            *mpiContext,
                             [=, communicator = caravanCommunicator->communicator](caravan::NativeMpiContext& context)
                             {
                                 auto const descriptor = ::pmacc::mpi::getMPI_StructAsArray<ValueType>();
@@ -261,7 +261,7 @@ namespace pmacc
         private:
             MPI_Comm comm{MPI_COMM_NULL};
             std::optional<caravan::CommunicatorInfo> caravanCommunicator;
-            caravan::MpiExecutor* mpiExecutor{nullptr};
+            caravan::MpiContext* mpiContext{nullptr};
             int mpiRank{-1};
             int numRanks{0};
             bool isMPICommInitialized{false};
