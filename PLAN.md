@@ -1596,33 +1596,41 @@ worker and progresses independently of application polling.
 
 ## Phase 4: Alpaka accelerator backend
 
-Expand the Phase 2 prototype rather than designing a new abstraction. This phase
-is the second-backend architecture gate before PMacc polling-task replacement.
+**Current state:** implemented and CPU-runtime tested. CUDA translation of the
+backend, primitive chain, and alpaka-to-MPI chain is validated. Target-accelerator
+runtime and HIP translation remain the hardware-dependent Phase 2 validation gate.
 
-1. Implement `caravan::alpaka` as the first accelerator backend.
-2. Make kernel/copy/fill/size primitives sender-oriented/lazy at the public/internal
-   composition boundary; native queue submission occurs on operation start.
-3. Adapt caller-supplied alpaka queues/events directly; define whether each native
-   resource is borrowed or backend-owned.
-4. Do not introduce a Caravan submission thread/queue by default.
-5. Implement same-queue FIFO dependency lowering.
-6. Implement cross-queue native waits where backend support permits.
-7. Publish host-visible completion independently from backend-native dependency
-   availability.
-8. Keep alpaka-native dependency/event information inside `caravan::alpaka` for
-   alpaka-to-alpaka chaining; use host completion for MPI/cross-backend edges at
-   this stage.
-9. Prototype the smallest P2300 execution-domain/scheduler transformation needed
-   to preserve native dependency chaining across composed accelerator senders.
-10. Preserve CPU alpaka backend behavior with an explicit policy rather than GPU-
-    specific polling assumptions.
-11. Test continuation transfer so completion observation does not accidentally run
-    arbitrary PMacc code on a backend authority.
-12. Test concurrent submission to supported caller-supplied queue configurations.
+The implementation expands the Phase 2 prototype rather than adding a second
+abstraction.
 
-**Exit criterion:** PMacc can start accelerator operations through sender-like
-alpaka primitives; native accelerator-only chains do not host-wait unnecessarily;
-no legacy Manager is required for migrated completion paths.
+1. **Implemented:** `caravan::alpaka` is the first accelerator backend.
+2. **Implemented:** kernel/copy/fill/size primitives are sender-oriented and lazy;
+   native queue submission occurs on operation start.
+3. **Implemented:** caller-supplied queues are borrowed and must outlive the
+   operation; submit callables and primitive arguments are retained by value, while
+   storage referenced by non-owning alpaka views remains borrowed.
+4. **Implemented:** Caravan adds no submission thread or queue.
+5. **Implemented:** same-queue stages lower directly to queue FIFO.
+6. **Implemented for supported same-device queues:** queue changes record an alpaka
+   event and insert a native queue wait.
+7. **Implemented:** only the final queue host callback publishes host-visible
+   completion; native dependency availability precedes it.
+8. **Implemented:** native events remain private to `caravan::alpaka`; MPI and
+   generic sender edges continue to consume host-visible completion.
+9. **Implemented:** the small `caravan::alpaka::then` domain transformation merges
+   typed alpaka senders into one native FIFO/event chain without adding a scheduler
+   hierarchy.
+10. **Implemented:** CPU and GPU use the same explicit alpaka queue-host-callback
+    completion policy; no GPU-specific polling is assumed.
+11. **Implemented and tested:** explicit `continuesOn` transfer places application
+    continuations on the selected run-loop scheduler.
+12. **Implemented and tested:** supported caller-supplied queues accept concurrent
+    starts without Caravan serialization.
+
+**Exit criterion met for the hardware-independent Phase 4 scope:** PMacc can start
+accelerator operations through sender-like alpaka primitives; native accelerator-
+only chains do not host-wait between stages; no legacy Manager is required for
+these completion paths.
 
 ---
 
