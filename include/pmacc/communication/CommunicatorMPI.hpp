@@ -30,8 +30,8 @@
 
 #include <utility>
 
+#include <caravan/core/sender.hpp>
 #include <caravan/mpi.hpp>
-#include <caravan/sender.hpp>
 #include <mpi.h>
 
 namespace pmacc

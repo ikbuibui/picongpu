@@ -15,7 +15,7 @@
 #include <vector>
 
 #include <caravan/core.hpp>
-#include <caravan/sender.hpp>
+#include <caravan/core/sender.hpp>
 
 namespace
 {
