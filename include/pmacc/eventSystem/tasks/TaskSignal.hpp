@@ -58,7 +58,7 @@ namespace pmacc
                 m_sendSignals[doCheckpointing] = signal::createCheckpoint();
                 m_sendSignals[stopSimulation] = signal::stopSimulation();
 
-                if(communicator.usesMpiExecutor())
+                if(communicator.usesMpiContext())
                 {
                     m_timeStepFuture = communicator.startSignalAllReduce(
                         &m_processSignalAtStep,

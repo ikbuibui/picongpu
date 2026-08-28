@@ -22,9 +22,11 @@ The implementation completed so far remains valuable and is not discarded:
   retained lifetimes to the progress engine;
 - blocking MPI-context submissions already provide an escape path for blocking
   MPI-enabled operations and third-party libraries;
-- an initial sender bridge, void-only `letValue`, `continuesOn`, `RunLoop`, async
-  scope, and typed MPI sender prototypes exist, but the generic typed sender
-  vocabulary and completion-signature model are not yet complete;
+- the minimal typed sender vocabulary and completion-signature model are
+  implemented: typed `then`, value-forwarding `letValue`, fixed-arity sender
+  `whenAll`, sender/operation concepts, and Event/sender bridges;
+- the manually driven `RunLoop` now exposes a cheap `RunLoopScheduler`, and
+  `continuesOn` consumes that scheduler;
 - legacy `TaskSendMPI` and `TaskReceiveMPI` can temporarily consume Caravan
   completion handles during migration.
 
@@ -39,13 +41,14 @@ system.
 
 The immediate implementation order is:
 
-1. complete the minimal typed sender vocabulary (`then`, value-forwarding
-   `letValue`, fixed-arity sender `whenAll`, and one coherent sender
-   concept/completion-signature representation);
-2. split the manually driven `RunLoop` from its cheap `RunLoopScheduler`, and make
-   `continuesOn` consume the scheduler rather than the loop as an "executor";
-3. rename `MpiExecutor` to `MpiContext` and expose it as the MPI backend authority
-   while keeping its dedicated worker and progress implementation;
+1. **Implemented:** complete the minimal typed sender vocabulary (`then`,
+   value-forwarding `letValue`, fixed-arity sender `whenAll`, and one coherent
+   sender concept/completion-signature representation).
+2. **Implemented:** split the manually driven `RunLoop` from its cheap
+   `RunLoopScheduler`, and make `continuesOn` consume the scheduler rather than the
+   loop as an "executor".
+3. **Implemented:** rename `MpiExecutor` to `MpiContext` and expose it as the MPI
+   backend authority while keeping its dedicated worker and progress implementation;
 4. make the typed `mpi::send`, `receive`, collectives, and barrier sender factories
    part of the normal public MPI header, leaving request/invoke/native context in
    an extension/native header;
@@ -1389,9 +1392,9 @@ with P2300 semantics and the clarified Caravan scope.
 
 ### 2.5 Reframe and layer MPI around lazy sender operations
 
-1. Rename `MpiExecutor` to `MpiContext` and present it as the MPI backend/runtime
-   authority, not a scheduler; retain the working dedicated worker/progress
-   implementation.
+1. **Implemented:** rename `MpiExecutor` to `MpiContext` and present it as the MPI
+   backend/runtime authority, not a scheduler; retain the working dedicated
+   worker/progress implementation.
 2. Preserve the current dedicated worker policy behavior and make the native
    nonblocking request engine the central implementation.
 3. Put normal typed sender factories (`mpi::send`, `receive`, reductions, gathers,

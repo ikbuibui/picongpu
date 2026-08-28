@@ -159,12 +159,16 @@ namespace caravan
         std::vector<int> neighbors;
     };
 
-    class MpiExecutor
+    /** MPI backend authority owning lifecycle, progress, and native resources.
+     *
+     * This context is not a scheduler for application continuations.
+     */
+    class MpiContext
     {
     public:
-        MpiExecutor(MpiExecutor const&) = delete;
-        MpiExecutor& operator=(MpiExecutor const&) = delete;
-        ~MpiExecutor();
+        MpiContext(MpiContext const&) = delete;
+        MpiContext& operator=(MpiContext const&) = delete;
+        ~MpiContext();
 
         TopologySnapshot topology() const;
 
@@ -205,7 +209,7 @@ namespace caravan
 
     private:
         class Impl;
-        explicit MpiExecutor(std::unique_ptr<Impl> implementation);
+        explicit MpiContext(std::unique_ptr<Impl> implementation);
 
         void run();
         void requestShutdown();
@@ -224,17 +228,17 @@ namespace caravan
         template<typename T_Application>
         static int run(int& argc, char**& argv, T_Application&& application)
         {
-            auto invoke = [&application](MpiExecutor& executor)
+            auto invoke = [&application](MpiContext& context)
             {
-                if constexpr(std::is_invocable_v<T_Application&, MpiExecutor&>)
+                if constexpr(std::is_invocable_v<T_Application&, MpiContext&>)
                 {
-                    if constexpr(std::is_void_v<std::invoke_result_t<T_Application&, MpiExecutor&>>)
+                    if constexpr(std::is_void_v<std::invoke_result_t<T_Application&, MpiContext&>>)
                     {
-                        std::invoke(application, executor);
+                        std::invoke(application, context);
                         return 0;
                     }
                     else
-                        return static_cast<int>(std::invoke(application, executor));
+                        return static_cast<int>(std::invoke(application, context));
                 }
                 else
                 {
@@ -252,6 +256,6 @@ namespace caravan
         }
 
     private:
-        static int runImpl(int& argc, char**& argv, std::function<int(MpiExecutor&)> application);
+        static int runImpl(int& argc, char**& argv, std::function<int(MpiContext&)> application);
     };
 } // namespace caravan
