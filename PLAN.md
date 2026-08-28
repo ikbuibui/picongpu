@@ -22,6 +22,9 @@ The implementation completed so far remains valuable and is not discarded:
   retained lifetimes to the progress engine;
 - blocking MPI-context submissions already provide an escape path for blocking
   MPI-enabled operations and third-party libraries;
+- an initial sender bridge, void-only `letValue`, `continuesOn`, `RunLoop`, async
+  scope, and typed MPI sender prototypes exist, but the generic typed sender
+  vocabulary and completion-signature model are not yet complete;
 - legacy `TaskSendMPI` and `TaskReceiveMPI` can temporarily consume Caravan
   completion handles during migration.
 
@@ -33,6 +36,25 @@ becomes an alpaka backend policy rather than a universal execution model.
 Breaking PMacc and PIConGPU interfaces is allowed during the migration. Do not
 retain compatibility scaffolding merely to avoid porting users of the legacy
 system.
+
+The immediate implementation order is:
+
+1. complete the minimal typed sender vocabulary (`then`, value-forwarding
+   `letValue`, fixed-arity sender `whenAll`, and one coherent sender
+   concept/completion-signature representation);
+2. split the manually driven `RunLoop` from its cheap `RunLoopScheduler`, and make
+   `continuesOn` consume the scheduler rather than the loop as an "executor";
+3. rename `MpiExecutor` to `MpiContext` and expose it as the MPI backend authority
+   while keeping its dedicated worker and progress implementation;
+4. make the typed `mpi::send`, `receive`, collectives, and barrier sender factories
+   part of the normal public MPI header, leaving request/invoke/native context in
+   an extension/native header;
+5. remove predecessor handling from the MPI engine; temporary Event-taking PMacc
+   wrappers compose or subscribe above the backend;
+6. implement the first real alpaka/device sender prototype as the second backend
+   architecture test; and only then
+7. replace PMacc polling task chains with local sender composition and retain Event
+   only at unavoidable legacy boundaries.
 
 ---
 
@@ -137,7 +159,7 @@ interoperability/backend library plus optional resource-dependency utilities.
    not for generic ownership of application buffers/fields/particles.
 5. Support explicit application async scopes so dynamically spawned work can be
    joined/quiesced without a global Caravan registry.
-6. Permit PMacc to use a single-threaded run-loop/control executor for host
+6. Permit PMacc to use a single-threaded run loop and its scheduler for host
    continuations and progress integration without making that loop a Caravan
    singleton or semantic manager.
 7. Keep generic task scheduling and CPU parallelism outside Caravan.
@@ -335,6 +357,13 @@ A third-party P2300 implementation is optional during the migration. Caravan mus
 not require one before the supported PMacc/PIConGPU toolchains can use it
 reliably, but custom APIs should not diverge semantically without a measured need.
 
+Before adding more backend or PMacc composition code, the custom migration layer
+must provide one small, typed vocabulary: `then`, value-forwarding `letValue`,
+fixed-arity sender `whenAll`, and a coherent sender concept/completion-signature
+representation used by those algorithms and backend senders. Do not add the rest
+of P2300 speculatively; add environment/query machinery only when continuation
+placement or a real backend requires it.
+
 ### 7. `Event` is an eager, type-erased completion bridge, not the universal async model
 
 `Event` represents terminal state of work that has already been started/spawned.
@@ -423,10 +452,12 @@ safely; application scopes account for application-level structured lifetime.
 
 ### 12. A PMacc run loop is allowed and useful, but it is not the new Manager
 
-PMacc may use one manually driven, single-threaded `run_loop`-style executor for
-host continuations, control-plane work, and integration with blocking waits. If a
-usable standard/P2300 `run_loop` exists, prefer it; otherwise a small migration
-implementation should intentionally match that semantic shape.
+PMacc may use one manually driven, single-threaded `RunLoop` for host
+continuations, control-plane work, and integration with blocking waits. Scheduling
+is exposed through a cheap copyable `RunLoopScheduler` obtained from the loop;
+`continuesOn` consumes that scheduler, not the loop itself. If a usable
+standard/P2300 `run_loop` exists, prefer it; otherwise the migration implementation
+should intentionally match that scheduler-shaped semantic split.
 
 The loop may execute ready host continuations and invoke registered progress
 sources while waiting, but it must not:
@@ -489,8 +520,11 @@ Initial targets should remain small and independently usable:
 
 ```text
 caravan::core
+    minimal sender concept and completion-signature representation
+    typed then()/letValue()/fixed-arity sender whenAll()
+    RunLoop + cheap RunLoopScheduler and continuesOn()
     Event / Future<T> eager completion bridges
-    runtime-sized joinAll()/readyEvent()
+    runtime-sized Event whenAll()/readyEvent()
     terminal/error/stopped semantics
     operation-state/completion utilities
     sender/completion bridge utilities
@@ -568,6 +602,26 @@ Do not add predecessor parameters merely because `Event` is currently convenient
 Compose predecessor work outside the primitive. An eager `Event` API may be
 provided as a wrapper that spawns/starts a sender into an explicit scope.
 
+### Minimum generic sender vocabulary
+
+Complete this vocabulary before extending MPI or migrating more PMacc call sites:
+
+- one sender concept based on a coherent completion-signature representation;
+- `then(sender, f)`, invoking `f` with the predecessor values and publishing its
+  void or non-void result through the resulting sender;
+- `letValue(sender, f)`, forwarding predecessor values to `f` and connecting the
+  sender returned by `f` without type-erasing the successor operation;
+- fixed-arity sender `whenAll(...)`, combining typed value completions while
+  propagating error/stopped completion coherently; and
+- the existing runtime-sized Event `whenAll(span<Event>)` as the separate eager,
+  type-erased quiescence primitive.
+
+Completion signatures are the single source of truth for algorithm result typing
+and backend sender declarations. The initial representation need only cover the
+channels Caravan actually supports: `set_value(Ts...)`,
+`set_error(std::exception_ptr)`, and `set_stopped()`. Do not build a broad query,
+environment, or customization framework ahead of a concrete backend need.
+
 ### `Event` and `Future<T>` eager bridge
 
 Representative migration interface:
@@ -635,17 +689,23 @@ spawned sender work is attached to that scope, and stage/shutdown code joins the
 scope. Prefer standard/P2300 async-scope semantics where supported; a temporary
 PMacc implementation must remain replaceable by them.
 
-A PMacc `run_loop`-style executor may drive host continuations and progress while
-waiting. It is an execution choice owned by PMacc, not a Caravan global manager.
+A PMacc `RunLoopScheduler` may place host continuations while its owning `RunLoop`
+is manually driven during waits. The scheduler is an execution choice owned by
+PMacc, not a Caravan global manager.
 
 ---
 
 ## MPI integration
 
-### Scope
+### Scope and public layering
 
 `caravan::mpi` is an asynchronous integration layer over native MPI, not a new MPI
-API and not a general scheduler.
+API and not a general scheduler. The ordinary public MPI header exposes the typed
+sender factories applications should normally use: `send`, `receive`, reductions,
+gathers, barrier, and similar operations. Generic request submission,
+`invoke`/`invokeBlocking`, `NativeMpiContext`, and native request ownership belong
+in an explicitly native/extension header. Public header placement must make the
+sender path obvious without hiding the native escape hatch.
 
 The hard part is implemented once:
 
@@ -754,7 +814,13 @@ provides independent progress and a simple MPI threading contract. The architect
 must not prevent future attach/MULTIPLE/external-runtime/Sessions-based policies,
 but do not implement them without a consumer.
 
-### The MPI progress thread is not a scheduler
+### The MPI context/progress authority is not a scheduler
+
+Rename the current `MpiExecutor` to `MpiContext` and expose it as the MPI backend
+runtime authority. Keep essentially its current dedicated worker, progress,
+lifecycle, and resource-destruction implementation; the change is its public role,
+not a rewrite of a good progress engine. `NativeMpiContext` remains the short-lived
+native view used by extension hooks.
 
 The progress thread is an implementation authority for MPI initiation/progress and
 native MPI resource destruction. It must not be exposed as the place arbitrary
@@ -887,10 +953,13 @@ they execute backend code.
 PMacc may use two explicit application-level control objects during migration:
 
 ```text
-PmaccRunLoop
-    single-thread host/control scheduler
-    executes ready continuations
-    may integrate progress callbacks while blocking
+PmaccRunLoop / caravan::RunLoop
+    manually driven single-thread host/control queue
+    owns queued continuation storage and blocking drive operations
+
+RunLoopScheduler
+    cheap copyable scheduling handle obtained from the loop
+    consumed by continuesOn and other placement algorithms
 
 PmaccAsyncScope
     owns dynamically spawned application operations
@@ -902,9 +971,10 @@ counting-scope facilities, prefer them directly. Otherwise implement only the
 small semantic subset required for migration and keep the replacement boundary
 clear.
 
-Neither object is a global Caravan singleton. The run loop does not own dependency
-state or every native operation. The async scope does not decide where work runs.
-Backends remain independently capable of native progress.
+Neither the loop, its scheduler, nor the async scope is a global Caravan singleton.
+The run loop does not own dependency state or every native operation. The async
+scope does not decide where work runs. Backends remain independently capable of
+native progress.
 
 Blocking PMacc boundaries should prefer a scope/run-loop-aware wait that continues
 to run eligible host continuations/progress instead of recreating
@@ -968,10 +1038,11 @@ spawn during migration.
 
 ### Run loops and execution transfer
 
-Use `run_loop`-style schedulers for the PMacc single-thread control plane. Model
-execution-resource transitions explicitly (`starts_on`/`continues_on` semantics)
-so native completion on MPI/device authorities does not accidentally execute
-application code there.
+Use the scheduler obtained from a manually driven `RunLoop` for the PMacc
+single-thread control plane. `continuesOn` accepts the scheduler, not the loop.
+Model execution-resource transitions explicitly (`starts_on`/`continues_on`
+semantics) so native completion on MPI/device authorities does not accidentally
+execute application code there.
 
 ### Runtime dynamic boundaries
 
@@ -1262,18 +1333,37 @@ This phase occurs before adding more PMacc functionality. Reuse the working
 completion/MPI code, but change the conceptual/API boundaries so new work aligns
 with P2300 semantics and the clarified Caravan scope.
 
-### 2.1 Separate operation description, start, completion, execution, and progress
+### 2.1 Complete the minimum typed sender vocabulary
 
-1. Remove assumptions from `caravan::core` that every backend is a Caravan-owned
-   executor thread.
-2. Introduce an internal sender-like contract/prototype where construction is lazy,
-   connect owns operation state, and start performs native initiation.
-3. Make continuation dispatch/execution placement explicit; completion on an MPI or
-   device authority must not imply arbitrary continuation execution there.
-4. Ensure backend APIs do not consume `Flow` internals.
-5. Keep `Flow` optional and layered above sender/Event bridges.
+1. Define one coherent completion-signature representation for value, error, and
+   stopped channels, and use it to define the sender contract checked by generic
+   algorithms and backend senders.
+2. Implement typed `then`: predecessor values are passed to the callable and the
+   callable's void or non-void result determines the successor value signature.
+3. Generalize `letValue` to pass predecessor values to a sender-returning factory;
+   retain the successor operation state without virtual/type-erased storage.
+4. Implement fixed-arity typed sender `whenAll`; keep runtime-sized Event
+   `whenAll(span<Event>)` as the separate eager quiescence operation.
+5. Test value, void, error, stopped, laziness, and operation-state lifetime for
+   each algorithm.
+6. Add no broader P2300 query/environment/customization machinery until
+   `continuesOn` or a real backend demonstrates the need.
+7. Ensure backend APIs do not consume `Flow` internals; keep `Flow` optional and
+   layered above sender/Event bridges.
 
-### 2.2 Reposition `Event`/`Future` as eager bridges
+### 2.2 Make the run loop scheduler-shaped
+
+1. Keep `RunLoop` manually driven and single-threaded.
+2. Split scheduling from driving: expose a cheap copyable `RunLoopScheduler`
+   referring to the loop's queue/state.
+3. Make `continuesOn` consume the scheduler and schedule through it; do not pass
+   `RunLoop` as an executor.
+4. Test scheduler copies, finish/post races, continuation placement, and manual
+   `run`/`runReady` driving.
+5. Use standard `run_loop` naming and semantics where practical; do not introduce a
+   generic Caravan executor hierarchy.
+
+### 2.3 Reposition `Event`/`Future` as eager bridges
 
 1. Preserve exactly-once terminal state and thread-safe registration.
 2. Preserve flat runtime-sized quiescent joins.
@@ -1284,7 +1374,7 @@ with P2300 semantics and the clarified Caravan scope.
 6. Keep `Future<T>` as an eager shared-result migration boundary, not a competing
    general asynchronous value model.
 
-### 2.3 Narrow lifetime responsibility to operation state and explicit captures
+### 2.4 Narrow lifetime responsibility to operation state and explicit captures
 
 1. Caravan core owns/retains only its own operation/completion state.
 2. Remove the architectural requirement for generic core `KeepAlive`/`LifetimeSet`
@@ -1297,22 +1387,28 @@ with P2300 semantics and the clarified Caravan scope.
 6. Ensure terminal completion means native work can no longer access operation-owned
    or explicitly captured state.
 
-### 2.4 Refactor MPI around lazy sender-like native operations
+### 2.5 Reframe and layer MPI around lazy sender operations
 
-1. Rename/reframe current MPI executor/runtime concepts as MPI context/backend plus
-   progress/lifecycle policy, not a general scheduler.
-2. Preserve the current dedicated worker policy behavior.
-3. Make the native nonblocking request engine the central implementation.
-4. Prototype/implement a sender-like generic request primitive whose `start()`
-   performs MPI initiation in the valid authority.
-5. Reimplement send/receive/collective helpers as thin factories over that path.
-6. Replace predecessor-taking `invoke`/`invokeBlocking` APIs with composable
-   sender-like operations; caller dependencies are composed outside them.
-7. Preserve per-communicator collective initiation ordering.
-8. Avoid Caravan replicas of MPI types unless they express a Caravan-specific
+1. Rename `MpiExecutor` to `MpiContext` and present it as the MPI backend/runtime
+   authority, not a scheduler; retain the working dedicated worker/progress
+   implementation.
+2. Preserve the current dedicated worker policy behavior and make the native
+   nonblocking request engine the central implementation.
+3. Put normal typed sender factories (`mpi::send`, `receive`, reductions, gathers,
+   barrier, and peers) in the normal public MPI header.
+4. Keep generic `request`, `invoke`, `invokeBlocking`, `NativeMpiContext`, and raw
+   request/lifetime transfer in the native extension header.
+5. Ensure every primitive sender's `start()` performs MPI initiation in the valid
+   authority and convenience operations remain thin factories over that path.
+6. Remove predecessor `Event` parameters from the MPI engine and its internal
+   submission queue. Sender composition decides when an MPI operation is started.
+7. Let temporary compatibility wrappers subscribe to/adapt predecessor Events
+   above the backend; do not retain `submitAfter(Event, ...)` as the engine model.
+8. Preserve per-communicator collective initiation ordering.
+9. Avoid Caravan replicas of MPI types unless they express a Caravan-specific
    safety property.
 
-### 2.5 Separate MPI completion from continuation execution
+### 2.6 Separate MPI completion from continuation execution
 
 1. Isolate request initiation/storage/completion decoding from worker-loop policy.
 2. Isolate MPI init/finalize ownership into the dedicated policy.
@@ -1322,24 +1418,43 @@ with P2300 semantics and the clarified Caravan scope.
 5. Prototype an explicit execution-transfer path from MPI completion to a PMacc
    run-loop/external scheduler (`continues_on`-style semantics).
 
-### 2.6 Preserve accelerator-native dependency information
+### 2.7 Build the alpaka/device sender prototype
+
+Implement this prototype before deepening generic abstractions or migrating PMacc
+polling chains. MPI validates native progress; alpaka must validate the genuinely
+different accelerator half of the architecture.
+
+1. Implement one real lazy sender over a caller-supplied alpaka queue, plus only the
+   minimum copy/fill/kernel shape needed to compose a representative chain.
+2. Validate operation-state and borrowed/captured resource lifetime through native
+   completion.
+3. Preserve same-queue ordering and backend-native dependency information without a
+   host wait; use host-visible completion at the MPI boundary.
+4. Validate completion placement so arbitrary continuations do not execute on a
+   backend completion authority.
+5. Compile the representative chain with the supported CPU and CUDA/HIP translation
+   paths and record type/compile-time constraints.
+6. Use the prototype to decide the smallest sender environment/domain support
+   actually required; do not design it from MPI alone.
+
+### 2.8 Preserve accelerator-native dependency information
 
 1. Ensure `caravan::core` does not erase backend-local dependency information.
 2. Do not add a generic cross-backend `NativeDependency` protocol yet.
 3. Use host-visible completion at independent backend boundaries initially.
 4. Revisit generic native interop only with a real second path.
 
-### 2.7 P2300 feasibility and semantic-alignment spike
+### 2.9 P2300 feasibility and semantic-alignment spike
 
 This is now a design gate, not merely a future adapter experiment.
 
-1. With a viable implementation/toolchain, prototype one sender chain:
+1. Compose the Phase 2 alpaka prototype into one sender chain:
    accelerator operation -> MPI request -> host continuation.
 2. Verify lazy construction/start semantics.
 3. Verify MPI completion can feed a receiver without exposing the MPI thread as an
    application scheduler.
-4. Prototype explicit `continues_on`/scheduler transfer to a single-thread
-   `run_loop`-style PMacc scheduler.
+4. Prototype explicit `continues_on` transfer to a `RunLoopScheduler` owned by a
+   manually driven PMacc-style `RunLoop`.
 5. Prototype a small async scope with spawn/join semantics comparable to
    `counting_scope`/`simple_counting_scope` or the available implementation.
 6. Test an eager/type-erased bridge from a spawned sender to `Event`.
@@ -1349,7 +1464,7 @@ This is now a design gate, not merely a future adapter experiment.
    semantics in the custom migration layer instead of inventing incompatible
    concepts.
 
-### 2.8 Define the optional resource-layer boundary
+### 2.10 Define the optional resource-layer boundary
 
 1. Specify a minimal pluggable interface around stable resource identity and
    explicit `read`/`write` access declarations.
@@ -1361,7 +1476,7 @@ This is now a design gate, not merely a future adapter experiment.
 5. Do not require or fully implement the resource tracker for the PMacc migration
    unless a representative use case shows clear value.
 
-### 2.9 Preserve current PMacc integration during refactor
+### 2.11 Preserve current PMacc integration during refactor
 
 1. Update temporary PMacc attachment and legacy MPI adapters to the revised MPI
    context/API.
@@ -1370,11 +1485,15 @@ This is now a design gate, not merely a future adapter experiment.
 3. Do not expand the migrated PMacc feature set until this architecture passes the
    existing tests.
 
-**Exit criterion:** existing Caravan/PMacc functionality still works; new primitive
-async APIs have sender/P2300-compatible semantics; `Event` is explicitly an eager
-bridge; core no longer promises generic application-resource ownership; MPI
-completion is separable from continuation placement; the dedicated MPI thread is
-an explicit progress/lifecycle policy; a run-loop and async-scope prototype is
+**Exit criterion:** existing Caravan/PMacc functionality still works; the typed
+sender vocabulary and coherent completion signatures are implemented; `RunLoop`
+and `RunLoopScheduler` have distinct driving/scheduling roles; normal MPI sender
+operations are the obvious public API; the renamed MPI context retains its worker
+as a progress/lifecycle authority with no backend-level Event predecessor model;
+`Event` is explicitly an eager bridge; core no longer promises generic
+application-resource ownership; MPI completion is separable from continuation
+placement; one real alpaka sender validates lifetime, native dependency, completion
+placement, and supported device compilation; an async-scope prototype is
 documented; resource dependency inference has a pluggable non-core boundary; no
 global Caravan supervisor or general task/scheduler hierarchy has been introduced.
 
@@ -1382,8 +1501,11 @@ global Caravan supervisor or general task/scheduler hierarchy has been introduce
 
 ## Phase 3: Complete the dedicated-thread MPI backend and PMacc MPI migration
 
+Begin this phase only after the Phase 2 alpaka sender prototype has exercised the
+shared sender model across both backend shapes.
+
 1. Finish the dedicated-thread submission queue and batched active-request
-   progress path.
+   progress path without reintroducing predecessor storage in the MPI engine.
 2. Complete point-to-point operations, receive status/count metadata, required
    collectives, barriers, communicator creation/destruction, and topology setup
    through the generic MPI mechanisms.
@@ -1411,6 +1533,9 @@ worker and progresses independently of application polling.
 ---
 
 ## Phase 4: Alpaka accelerator backend
+
+Expand the Phase 2 prototype rather than designing a new abstraction. This phase
+is the second-backend architecture gate before PMacc polling-task replacement.
 
 1. Implement `caravan::alpaka` as the first accelerator backend.
 2. Make kernel/copy/fill/size primitives sender-oriented/lazy at the public/internal
@@ -1441,10 +1566,16 @@ no legacy Manager is required for migrated completion paths.
 
 ## Phase 5: Explicit PMacc dependencies, async scope, run loop, and ownership migration
 
+Begin architectural replacement of polling tasks only after the typed sender
+vocabulary and the MPI and alpaka backend gates pass. Until then,
+`TaskSendMPI`/`TaskReceiveMPI` and similar classes remain compatibility shims;
+they may adapt Events above sender backends but must not shape backend APIs.
+
 1. Introduce/select the PMacc application async scope used to own dynamically
    spawned migration work.
-2. Introduce/select a single-thread `run_loop`-style PMacc control scheduler for
-   host continuations and wait/progress integration where useful.
+2. Introduce/select a manually driven PMacc `RunLoop` and use its
+   `RunLoopScheduler` for host continuations and wait/progress integration where
+   useful.
 3. Prefer standard/P2300 implementations for scope/run loop if the supported
    toolchain is viable; otherwise keep migration implementations intentionally
    replaceable by those semantics.
@@ -1718,8 +1849,14 @@ into a general scheduler/runtime or mandatory resource manager.
 - operation-state lifetime through start -> terminal completion;
 - borrowed-resource lifetime precondition tests and explicit operation capture tests;
 - sender construction is lazy and native side effects begin on start;
+- completion-signature representation and sender concept checks;
+- typed `then` for void and value predecessors/results;
+- typed value-forwarding `letValue` without successor type erasure;
+- fixed-arity sender `whenAll` value, error, and stopped behavior;
 - Event <-> sender eager bridge behavior;
 - async-scope spawn/join/quiescence and shutdown behavior;
+- `RunLoopScheduler` copies schedule onto their owning manually driven `RunLoop`;
+- `continuesOn` consumes a scheduler and places completion on the run-loop thread;
 - PMacc run-loop continuation placement and progress-aware waits;
 - no global outstanding-operation registry is required by `caravan::core`;
 - `Flow` move-only/local semantics if retained;
@@ -1770,7 +1907,9 @@ Run with at least one, two, and four ranks where applicable:
 - shutdown with queued and active requests;
 - propagated MPI errors where practical;
 - no arbitrary application callback execution on the progress thread;
-- thin convenience wrappers use the same generic request engine.
+- thin convenience wrappers use the same generic request engine;
+- normal typed MPI sender operations are available from the normal public header;
+- the MPI engine stores no Event predecessor; compatibility adaptation is above it.
 
 ## Accelerator tests
 
@@ -1788,6 +1927,8 @@ Run with at least one, two, and four ranks where applicable:
 - explicitly captured application allocations survive until operation completion;
 - borrowed allocation lifetime violations are diagnosed where practical;
 - sender creation does not enqueue native work before start;
+- sender operation/resource lifetime through native completion;
+- representative typed chains compile on supported CPU and CUDA/HIP paths;
 - CPU backend behavior without GPU-only polling assumptions.
 
 ## PMacc regression tests
@@ -1904,9 +2045,10 @@ silently reusing the worker.
 completion of one of those requests requires a later MPI operation to be
 initiated, manufacturing a deadlock that was not present in the application.
 
-**Mitigation:** `invokeBlocking()` waits only for an explicit predecessor supplied
-by the caller. Application-required quiescence is built with explicit joins; the
-MPI backend never silently adds a dependency on all active requests.
+**Mitigation:** dependencies before `invokeBlocking()` are composed by the caller
+outside the primitive. Application-required quiescence is built with explicit
+joins; the MPI backend never stores Event predecessors or silently adds a
+dependency on all active requests.
 
 ## Dependency readiness reorders MPI collectives
 
@@ -2015,6 +2157,9 @@ The PMacc/PIConGPU migration is complete when:
 
 - no global PMacc event manager, transaction stack, observer system, task-ID lookup,
   or polling task hierarchy remains;
+- the custom sender layer has one coherent sender concept/completion-signature
+  representation plus typed `then`, value-forwarding `letValue`, and fixed-arity
+  sender `whenAll`;
 - new primitive Caravan MPI/alpaka operations have sender/P2300-compatible lazy
   start/completion semantics, even if the implementation is still custom;
 - dependencies are explicit composition relationships, or are produced by an
@@ -2025,14 +2170,17 @@ The PMacc/PIConGPU migration is complete when:
 - terminal completion means represented native work no longer accesses
   operation-owned or explicitly retained state;
 - PMacc has an explicit async scope for dynamic structured work and may use a
-  single-thread `run_loop`-style control scheduler without either becoming a
-  Caravan-global Manager;
+  manually driven `RunLoop` through its cheap `RunLoopScheduler` without either
+  becoming a Caravan-global Manager;
 - native completion on MPI/device authorities does not accidentally execute
   arbitrary application continuations there; execution transfer is explicit;
-- PMacc selects the dedicated FUNNELED MPI policy, but Caravan architecture does
-  not require that policy universally;
+- the MPI backend authority is exposed as `MpiContext`, not as a generic executor;
+  PMacc selects its dedicated FUNNELED policy, but Caravan architecture does not
+  require that policy universally;
+- normal typed MPI sender operations live in the normal public MPI layer, while
+  request/invoke/native-context facilities remain an explicit extension layer;
 - MPI request progress uses one generic native request engine rather than one
-  implementation per MPI operation;
+  implementation per MPI operation, and that engine stores no Event predecessor;
 - blocking MPI-context operations have only explicitly composed dependencies and
   never manufacture implicit global quiescence;
 - managed collectives preserve per-communicator initiation order independent of
