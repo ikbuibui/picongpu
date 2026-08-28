@@ -44,6 +44,16 @@ if(CARAVAN_BUILD_TESTING)
         alpaka_add_executable(caravan-alpaka-test test/alpaka.cpp)
         target_link_libraries(caravan-alpaka-test PRIVATE caravan::alpaka)
         add_test(NAME caravan-alpaka COMMAND caravan-alpaka-test)
+
+        alpaka_add_executable(caravan-alpaka-mpi-test test/alpaka_mpi.cpp)
+        target_link_libraries(caravan-alpaka-mpi-test PRIVATE caravan::alpaka caravan::mpi)
+        add_test(
+            NAME caravan-alpaka-mpi
+            COMMAND
+                ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 ${MPIEXEC_PREFLAGS}
+                $<TARGET_FILE:caravan-alpaka-mpi-test> ${MPIEXEC_POSTFLAGS}
+        )
+        set_tests_properties(caravan-alpaka-mpi PROPERTIES PROCESSORS 1 TIMEOUT 30)
     endif()
 
     add_executable(caravan-mpi-test test/mpi.cpp)
