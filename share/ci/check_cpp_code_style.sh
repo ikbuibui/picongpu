@@ -5,6 +5,21 @@ set -o pipefail
 
 
 #############################################################################
+# Keep native MPI calls inside the approved PMacc integration boundary      #
+#############################################################################
+directMpiCalls=$(grep -RInE \
+    --include='*.hpp' --include='*.tpp' --include='*.cpp' --include='*.cu' \
+    '(^|[^[:alnum:]_])MPI_[[:alnum:]_]+[[:space:]]*[(]' \
+    include/pmacc share/pmacc/examples || true)
+unauthorizedMpiCalls=$(printf '%s\n' "$directMpiCalls" \
+    | grep -Ev '^include/pmacc/mpi/(MPIReduce|MPI_StructAsArray)\.hpp:' || true)
+if [[ -n "$unauthorizedMpiCalls" ]]; then
+    echo "Native MPI calls outside the approved PMacc integration boundary:" >&2
+    echo "$unauthorizedMpiCalls" >&2
+    exit 1
+fi
+
+#############################################################################
 # Conformance with Alpaka: Do not write __global__ CUDA kernels directly    #
 #############################################################################
 test/hasCudaGlobalKeyword include/pmacc

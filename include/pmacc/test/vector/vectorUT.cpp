@@ -30,7 +30,6 @@
 #include <pmacc/math/isApprox.hpp>
 #include <pmacc/math/vector/VectorOps.hpp>
 #include <pmacc/memory/buffers/HostDeviceBuffer.hpp>
-#include <pmacc/test/PMaccFixture.hpp>
 #include <pmacc/verify.hpp>
 
 #include <cstdint>
@@ -46,9 +45,6 @@
  *
  *  This file is testing vector functionality
  */
-
-using MyPMaccFixture = pmacc::test::PMaccFixture<TEST_DIM>;
-static MyPMaccFixture fixture;
 
 TEST_CASE("vector constructor generator", "[vector]")
 {
