@@ -30,7 +30,7 @@
 
 #include <utility>
 
-#include <caravan/core/sender.hpp>
+#include <caravan/core.hpp>
 #include <caravan/mpi.hpp>
 #include <mpi.h>
 
