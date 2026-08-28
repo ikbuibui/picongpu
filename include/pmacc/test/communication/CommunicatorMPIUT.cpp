@@ -10,6 +10,7 @@
 
 #include <array>
 #include <stdexcept>
+#include <thread>
 
 #include <caravan/mpi.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -28,6 +29,14 @@ TEST_CASE("CommunicatorMPI consumes Caravan topology snapshots")
             processes.x() = topology.size;
             pmacc::Environment<TEST_DIM>::get().initDevices(mpi, processes, pmacc::DataSpace<TEST_DIM>::create(1));
             auto& communicator = pmacc::Environment<TEST_DIM>::get().GridController().getCommunicator();
+            auto progressUntil = [&communicator](auto const& completion)
+            {
+                while(completion.state() == caravan::CompletionState::pending)
+                {
+                    communicator.progressAsync();
+                    std::this_thread::yield();
+                }
+            };
 
             if(communicator.getRank() != topology.rank || communicator.getSize() != topology.size
                || communicator.getHostRank() != static_cast<uint32_t>(topology.hostLocalRank))
@@ -46,11 +55,14 @@ TEST_CASE("CommunicatorMPI consumes Caravan topology snapshots")
                 sizeof(signalInput),
                 caravan::ScalarType::uint32,
                 caravan::ReduceOperation::sum);
+            progressUntil(signalReduction);
             if(signalReduction.result().elements != signalInput.size()
                || signalOutput[0] != static_cast<std::uint32_t>(topology.size * (topology.size + 1) / 2)
                || signalOutput[1] != static_cast<std::uint32_t>(topology.size))
                 throw std::runtime_error("Signal all-reduce adapter failed");
-            communicator.startBarrierAsync().wait();
+            auto barrier = communicator.startBarrierAsync();
+            progressUntil(barrier);
+            barrier.wait();
 
             {
                 pmacc::mpi::MPIReduce reduce;
@@ -81,7 +93,9 @@ TEST_CASE("CommunicatorMPI consumes Caravan topology snapshots")
                 = communicator.startReceiveAsync(pmacc::LEFT, reinterpret_cast<char*>(&received), sizeof(int), 7u);
             auto send = communicator.startSendAsync(pmacc::RIGHT, reinterpret_cast<char*>(&sent), sizeof(int), 7u);
             std::array transfers{receive.event(), send.event()};
-            caravan::whenAll(transfers).wait();
+            auto transferred = caravan::whenAll(transfers);
+            progressUntil(transferred);
+            transferred.wait();
             if(received != (topology.rank + topology.size - 1) % topology.size || receive.result().bytes != sizeof(int)
                || send.result().bytes != sizeof(int))
                 throw std::runtime_error("Caravan point-to-point adapter failed");

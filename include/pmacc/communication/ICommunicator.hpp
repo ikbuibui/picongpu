@@ -97,6 +97,9 @@ namespace pmacc
 
         virtual bool usesMpiExecutor() const = 0;
 
+        /** Execute ready PMacc-side completions from asynchronous backends. */
+        virtual void progressAsync() = 0;
+
         virtual int getRank() = 0;
 
         /*! Return which of the three directions are periodic

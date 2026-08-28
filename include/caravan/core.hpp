@@ -27,13 +27,13 @@ namespace caravan
         pending,
         ready,
         failed,
-        cancelled
+        stopped
     };
 
-    class CancelledError : public std::runtime_error
+    class StoppedError : public std::runtime_error
     {
     public:
-        CancelledError() : std::runtime_error("Caravan operation was cancelled")
+        StoppedError() : std::runtime_error("Caravan operation was stopped")
         {
         }
     };
@@ -179,6 +179,8 @@ namespace caravan
     }
 
     class EventSource;
+    template<typename T_Receiver>
+    class EventOperation;
     template<typename T>
     class Promise;
     template<typename T>
@@ -234,13 +236,15 @@ namespace caravan
         {
             if(state() == CompletionState::failed)
                 std::rethrow_exception(error());
-            if(state() == CompletionState::cancelled)
-                throw CancelledError{};
+            if(state() == CompletionState::stopped)
+                throw StoppedError{};
         }
 
         std::shared_ptr<detail::State> m_state;
 
         friend class EventSource;
+        template<typename T_Receiver>
+        friend class EventOperation;
         friend Event whenAll(std::span<Event const>);
         template<typename T>
         friend class Future;
@@ -270,9 +274,9 @@ namespace caravan
             return m_state->complete(CompletionState::failed, std::move(error));
         }
 
-        bool cancel() const
+        bool setStopped() const
         {
-            return m_state->complete(CompletionState::cancelled);
+            return m_state->complete(CompletionState::stopped);
         }
 
     private:
@@ -299,9 +303,9 @@ namespace caravan
                     successor.setFailed(predecessor.error());
                     return;
                 }
-                if(predecessor.state() == CompletionState::cancelled)
+                if(predecessor.state() == CompletionState::stopped)
                 {
-                    successor.cancel();
+                    successor.setStopped();
                     return;
                 }
 
@@ -383,8 +387,8 @@ namespace caravan
                         m_result = CompletionState::failed;
                         m_error = event.error();
                     }
-                    else if(m_result == CompletionState::ready && event.state() == CompletionState::cancelled)
-                        m_result = CompletionState::cancelled;
+                    else if(m_result == CompletionState::ready && event.state() == CompletionState::stopped)
+                        m_result = CompletionState::stopped;
                 }
 
                 if(m_remaining.fetch_sub(1u, std::memory_order_acq_rel) == 1u)
@@ -494,9 +498,9 @@ namespace caravan
             return m_state->complete(CompletionState::failed, std::move(error));
         }
 
-        bool cancel() const
+        bool setStopped() const
         {
-            return m_state->complete(CompletionState::cancelled);
+            return m_state->complete(CompletionState::stopped);
         }
 
     private:
@@ -524,9 +528,9 @@ namespace caravan
                         successor.setFailed(predecessorEvent.error());
                         return;
                     }
-                    if(predecessorEvent.state() == CompletionState::cancelled)
+                    if(predecessorEvent.state() == CompletionState::stopped)
                     {
-                        successor.cancel();
+                        successor.setStopped();
                         return;
                     }
                     auto task = [predecessor, successor, work]
@@ -567,9 +571,9 @@ namespace caravan
                         successor.setFailed(predecessorEvent.error());
                         return;
                     }
-                    if(predecessorEvent.state() == CompletionState::cancelled)
+                    if(predecessorEvent.state() == CompletionState::stopped)
                     {
-                        successor.cancel();
+                        successor.setStopped();
                         return;
                     }
                     auto task = [predecessor, successor, work]
