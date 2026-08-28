@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <caravan/mpi.hpp>
+#include <caravan/sender.hpp>
 #include <mpi.h>
 
 namespace caravan
@@ -27,7 +28,7 @@ namespace caravan
         struct NativeAccess;
     } // namespace detail
 
-    /** Native requests and lifetime tokens transferred to the MPI executor.
+    /** Native requests and lifetime tokens transferred to the MPI context.
      *
      * Build the batch before starting requests. Until Caravan accepts the
      * returned batch, its destructor drains requests during exception cleanup.
@@ -131,14 +132,14 @@ namespace caravan
                 batch.release();
             }
 
-            static void submit(MpiExecutor& executor, Event predecessor, NativeSubmission submission);
-            static void invokeBlocking(MpiExecutor& executor, Event predecessor, NativeBlockingSubmission submission);
+            static void submit(MpiContext& context, Event predecessor, NativeSubmission submission);
+            static void invokeBlocking(MpiContext& context, Event predecessor, NativeBlockingSubmission submission);
         };
 
         struct NativeContextFactory;
     } // namespace detail
 
-    /** MPI-native access valid only for the duration of an executor hook. */
+    /** MPI-native access valid only for the duration of an MPI-context hook. */
     class NativeMpiContext
     {
     public:
@@ -282,12 +283,15 @@ namespace caravan
             static_assert(std::is_void_v<T> || (!std::is_reference_v<T> && !std::is_const_v<T>) );
 
         public:
+            using completion_signatures
+                = caravan::detail::DefaultCompletionSignatures<caravan::detail::ResultValueSignature<T>>;
+
             RequestSender(
-                MpiExecutor& executor,
+                MpiContext& context,
                 T_Start start,
                 T_Complete complete,
                 std::optional<CommunicatorId> collective)
-                : m_executor(&executor)
+                : m_context(&context)
                 , m_start(std::move(start))
                 , m_complete(std::move(complete))
                 , m_collective(collective)
@@ -299,12 +303,12 @@ namespace caravan
             {
             public:
                 Operation(
-                    MpiExecutor& executor,
+                    MpiContext& context,
                     T_Start start,
                     T_Complete complete,
                     T_Receiver receiver,
                     std::optional<CommunicatorId> collective)
-                    : m_executor(&executor)
+                    : m_context(&context)
                     , m_start(std::move(start))
                     , m_complete(std::move(complete))
                     , m_receiver(std::move(receiver))
@@ -323,7 +327,7 @@ namespace caravan
                         std::terminate();
 
                     detail::NativeAccess::submit(
-                        *m_executor,
+                        *m_context,
                         readyEvent(),
                         detail::NativeSubmission{
                             [this](NativeMpiContext& context) { return std::invoke(m_start, context); },
@@ -354,7 +358,7 @@ namespace caravan
                 }
 
             private:
-                MpiExecutor* m_executor;
+                MpiContext* m_context;
                 T_Start m_start;
                 T_Complete m_complete;
                 T_Receiver m_receiver;
@@ -366,7 +370,7 @@ namespace caravan
             auto connect(T_Receiver&& receiver) &&
             {
                 return Operation<std::decay_t<T_Receiver>>{
-                    *m_executor,
+                    *m_context,
                     std::move(m_start),
                     std::move(m_complete),
                     std::forward<T_Receiver>(receiver),
@@ -374,7 +378,7 @@ namespace caravan
             }
 
         private:
-            MpiExecutor* m_executor;
+            MpiContext* m_context;
             T_Start m_start;
             T_Complete m_complete;
             std::optional<CommunicatorId> m_collective;
@@ -387,20 +391,20 @@ namespace caravan
          */
         template<typename T, typename T_Start, typename T_Complete>
         auto request(
-            MpiExecutor& executor,
+            MpiContext& context,
             T_Start&& start,
             T_Complete&& complete,
             std::optional<CommunicatorId> collective = {})
         {
             return RequestSender<T, std::decay_t<T_Start>, std::decay_t<T_Complete>>{
-                executor,
+                context,
                 std::forward<T_Start>(start),
                 std::forward<T_Complete>(complete),
                 collective};
         }
 
         inline auto send(
-            MpiExecutor& executor,
+            MpiContext& context,
             BufferLease buffer,
             Peer destination,
             MessageTag tag,
@@ -408,28 +412,28 @@ namespace caravan
         {
             auto const bytes = buffer.bytes();
             return request<SendResult>(
-                executor,
+                context,
                 [buffer = std::move(buffer), destination, tag, communicator](NativeMpiContext& context)
                 { return detail::startSend(context, buffer, destination, tag, communicator); },
                 [bytes](std::span<MPI_Status const>) { return SendResult{bytes}; });
         }
 
         inline auto receive(
-            MpiExecutor& executor,
+            MpiContext& context,
             BufferLease buffer,
             Peer source,
             MessageTag tag,
             CommunicatorId communicator = worldCommunicator)
         {
             return request<ReceiveResult>(
-                executor,
+                context,
                 [buffer = std::move(buffer), source, tag, communicator](NativeMpiContext& context)
                 { return detail::startReceive(context, buffer, source, tag, communicator); },
                 [](std::span<MPI_Status const> statuses) { return detail::completeReceive(statuses); });
         }
 
         inline auto allReduce(
-            MpiExecutor& executor,
+            MpiContext& context,
             BufferLease input,
             BufferLease output,
             ScalarType type,
@@ -438,7 +442,7 @@ namespace caravan
         {
             auto elements = std::make_shared<std::size_t>(0u);
             return request<AllReduceResult>(
-                executor,
+                context,
                 [input = std::move(input), output = std::move(output), type, operation, communicator, elements](
                     NativeMpiContext& context)
                 { return detail::startAllReduce(context, input, output, type, operation, communicator, elements); },
@@ -447,7 +451,7 @@ namespace caravan
         }
 
         inline auto reduce(
-            MpiExecutor& executor,
+            MpiContext& context,
             BufferLease input,
             BufferLease output,
             ScalarType type,
@@ -457,7 +461,7 @@ namespace caravan
         {
             auto elements = std::make_shared<std::size_t>(0u);
             return request<ReduceResult>(
-                executor,
+                context,
                 [input = std::move(input), output = std::move(output), type, operation, root, communicator, elements](
                     NativeMpiContext& context)
                 { return detail::startReduce(context, input, output, type, operation, root, communicator, elements); },
@@ -466,7 +470,7 @@ namespace caravan
         }
 
         inline auto gather(
-            MpiExecutor& executor,
+            MpiContext& context,
             BufferLease input,
             BufferLease output,
             Peer root,
@@ -474,7 +478,7 @@ namespace caravan
         {
             auto resultBytes = std::make_shared<std::size_t>(0u);
             return request<GatherResult>(
-                executor,
+                context,
                 [input = std::move(input), output = std::move(output), root, communicator, resultBytes](
                     NativeMpiContext& context)
                 { return detail::startGather(context, input, output, root, communicator, resultBytes); },
@@ -483,7 +487,7 @@ namespace caravan
         }
 
         inline auto gatherV(
-            MpiExecutor& executor,
+            MpiContext& context,
             BufferLease input,
             BufferLease output,
             std::vector<std::size_t> receiveBytes,
@@ -493,7 +497,7 @@ namespace caravan
         {
             auto resultBytes = std::make_shared<std::size_t>(0u);
             return request<GatherResult>(
-                executor,
+                context,
                 [input = std::move(input),
                  output = std::move(output),
                  receiveBytes = std::move(receiveBytes),
@@ -516,10 +520,10 @@ namespace caravan
                 communicator);
         }
 
-        inline auto barrier(MpiExecutor& executor, CommunicatorId communicator = worldCommunicator)
+        inline auto barrier(MpiContext& context, CommunicatorId communicator = worldCommunicator)
         {
             return request<void>(
-                executor,
+                context,
                 [communicator](NativeMpiContext& context) { return detail::startBarrier(context, communicator); },
                 [](std::span<MPI_Status const>) {},
                 communicator);
@@ -531,8 +535,11 @@ namespace caravan
             static_assert(std::is_void_v<T> || (!std::is_reference_v<T> && !std::is_const_v<T>) );
 
         public:
-            ContextSender(MpiExecutor& executor, T_Operation operation, std::optional<CommunicatorId> collective = {})
-                : m_executor(&executor)
+            using completion_signatures
+                = caravan::detail::DefaultCompletionSignatures<caravan::detail::ResultValueSignature<T>>;
+
+            ContextSender(MpiContext& context, T_Operation operation, std::optional<CommunicatorId> collective = {})
+                : m_context(&context)
                 , m_operation(std::move(operation))
                 , m_collective(collective)
             {
@@ -543,11 +550,11 @@ namespace caravan
             {
             public:
                 Operation(
-                    MpiExecutor& executor,
+                    MpiContext& context,
                     T_Operation operation,
                     T_Receiver receiver,
                     std::optional<CommunicatorId> collective)
-                    : m_executor(&executor)
+                    : m_context(&context)
                     , m_operation(std::move(operation))
                     , m_receiver(std::move(receiver))
                     , m_collective(collective)
@@ -566,7 +573,7 @@ namespace caravan
 
                     if constexpr(T_Blocking)
                         detail::NativeAccess::invokeBlocking(
-                            *m_executor,
+                            *m_context,
                             readyEvent(),
                             detail::NativeBlockingSubmission{
                                 [this](NativeMpiContext& context) { complete(context); },
@@ -575,7 +582,7 @@ namespace caravan
                                 m_collective});
                     else
                         detail::NativeAccess::submit(
-                            *m_executor,
+                            *m_context,
                             readyEvent(),
                             detail::NativeSubmission{
                                 [](NativeMpiContext&) { return NativeRequestBatch{}; },
@@ -597,7 +604,7 @@ namespace caravan
                         m_receiver.set_value(std::invoke(m_operation, context));
                 }
 
-                MpiExecutor* m_executor;
+                MpiContext* m_context;
                 T_Operation m_operation;
                 T_Receiver m_receiver;
                 std::optional<CommunicatorId> m_collective;
@@ -608,46 +615,46 @@ namespace caravan
             auto connect(T_Receiver&& receiver) &&
             {
                 return Operation<std::decay_t<T_Receiver>>{
-                    *m_executor,
+                    *m_context,
                     std::move(m_operation),
                     std::forward<T_Receiver>(receiver),
                     m_collective};
             }
 
         private:
-            MpiExecutor* m_executor;
+            MpiContext* m_context;
             T_Operation m_operation;
             std::optional<CommunicatorId> m_collective;
         };
 
         /** Lazily invoke a short operation on the MPI authority. */
         template<typename T_Operation>
-        auto invoke(MpiExecutor& executor, T_Operation&& operation, std::optional<CommunicatorId> collective = {})
+        auto invoke(MpiContext& context, T_Operation&& operation, std::optional<CommunicatorId> collective = {})
         {
             using Operation = std::decay_t<T_Operation>;
             using Result
                 = std::remove_cv_t<std::remove_reference_t<std::invoke_result_t<Operation&, NativeMpiContext&>>>;
-            return ContextSender<Result, Operation, false>{executor, std::forward<T_Operation>(operation), collective};
+            return ContextSender<Result, Operation, false>{context, std::forward<T_Operation>(operation), collective};
         }
 
         /** Lazily invoke a blocking operation without draining unrelated requests. */
         template<typename T_Operation>
         auto invokeBlocking(
-            MpiExecutor& executor,
+            MpiContext& context,
             T_Operation&& operation,
             std::optional<CommunicatorId> collective = {})
         {
             using Operation = std::decay_t<T_Operation>;
             using Result
                 = std::remove_cv_t<std::remove_reference_t<std::invoke_result_t<Operation&, NativeMpiContext&>>>;
-            return ContextSender<Result, Operation, true>{executor, std::forward<T_Operation>(operation), collective};
+            return ContextSender<Result, Operation, true>{context, std::forward<T_Operation>(operation), collective};
         }
 
-        inline auto createCartesian(MpiExecutor& executor, std::vector<int> dimensions, std::vector<bool> periodic)
+        inline auto createCartesian(MpiContext& context, std::vector<int> dimensions, std::vector<bool> periodic)
         {
-            auto const topology = executor.topology();
+            auto const topology = context.topology();
             return invokeBlocking(
-                executor,
+                context,
                 [dimensions = std::move(dimensions),
                  periodic = std::move(periodic),
                  worldSize = topology.size,
@@ -663,32 +670,32 @@ namespace caravan
                 worldCommunicator);
         }
 
-        inline auto duplicateCommunicator(MpiExecutor& executor, CommunicatorId communicator = worldCommunicator)
+        inline auto duplicateCommunicator(MpiContext& context, CommunicatorId communicator = worldCommunicator)
         {
             return invokeBlocking(
-                executor,
+                context,
                 [communicator](NativeMpiContext& context)
                 { return detail::duplicateCommunicator(context, communicator); },
                 communicator);
         }
 
         inline auto splitCommunicator(
-            MpiExecutor& executor,
+            MpiContext& context,
             std::optional<int> color,
             int key,
             CommunicatorId communicator = worldCommunicator)
         {
             return invokeBlocking(
-                executor,
+                context,
                 [color, key, communicator](NativeMpiContext& context)
                 { return detail::splitCommunicator(context, color, key, communicator); },
                 communicator);
         }
 
-        inline auto destroyCommunicator(MpiExecutor& executor, CommunicatorId communicator)
+        inline auto destroyCommunicator(MpiContext& context, CommunicatorId communicator)
         {
             return invokeBlocking(
-                executor,
+                context,
                 [communicator](NativeMpiContext& context) { detail::destroyCommunicator(context, communicator); },
                 communicator);
         }
@@ -700,7 +707,7 @@ namespace caravan
      */
     template<typename T, typename T_Start, typename T_Complete>
     Future<T> nativeFuture(
-        MpiExecutor& executor,
+        MpiContext& context,
         Event predecessor,
         T_Start&& start,
         T_Complete&& complete,
@@ -712,7 +719,7 @@ namespace caravan
         Promise<T> output;
         auto result = output.future();
         detail::NativeAccess::submit(
-            executor,
+            context,
             std::move(predecessor),
             detail::NativeSubmission{
                 [startWork](NativeMpiContext& context) { return std::invoke(*startWork, context); },
@@ -735,7 +742,7 @@ namespace caravan
     /** Submit native nonblocking MPI requests without a result value. */
     template<typename T_Start, typename T_Complete>
     Event nativeEvent(
-        MpiExecutor& executor,
+        MpiContext& context,
         Event predecessor,
         T_Start&& start,
         T_Complete&& complete,
@@ -746,7 +753,7 @@ namespace caravan
         EventSource output;
         auto result = output.event();
         detail::NativeAccess::submit(
-            executor,
+            context,
             std::move(predecessor),
             detail::NativeSubmission{
                 [startWork](NativeMpiContext& context) { return std::invoke(*startWork, context); },
@@ -773,7 +780,7 @@ namespace caravan
      */
     template<typename T, typename T_Operation>
     Future<T> nativeBlockingFuture(
-        MpiExecutor& executor,
+        MpiContext& context,
         Event predecessor,
         T_Operation&& operation,
         std::optional<CommunicatorId> collective = {})
@@ -783,7 +790,7 @@ namespace caravan
         Promise<T> output;
         auto result = output.future();
         detail::NativeAccess::invokeBlocking(
-            executor,
+            context,
             std::move(predecessor),
             detail::NativeBlockingSubmission{
                 [work, output](NativeMpiContext& context) mutable { output.setValue(std::invoke(*work, context)); },
@@ -796,7 +803,7 @@ namespace caravan
     /** Run a blocking MPI call without a result or implicit global quiescence. */
     template<typename T_Operation>
     Event nativeBlockingEvent(
-        MpiExecutor& executor,
+        MpiContext& context,
         Event predecessor,
         T_Operation&& operation,
         std::optional<CommunicatorId> collective = {})
@@ -805,7 +812,7 @@ namespace caravan
         EventSource output;
         auto result = output.event();
         detail::NativeAccess::invokeBlocking(
-            executor,
+            context,
             std::move(predecessor),
             detail::NativeBlockingSubmission{
                 [work, output](NativeMpiContext& context) mutable

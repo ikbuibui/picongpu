@@ -95,7 +95,7 @@ namespace pmacc
             uint32_t tag)
             = 0;
 
-        virtual bool usesMpiExecutor() const = 0;
+        virtual bool usesMpiContext() const = 0;
 
         /** Execute ready PMacc-side completions from asynchronous backends. */
         virtual void progressAsync() = 0;

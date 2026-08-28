@@ -22,7 +22,7 @@ TEST_CASE("CommunicatorMPI consumes Caravan topology snapshots")
     auto const result = caravan::MpiRuntime::run(
         argc,
         argv,
-        [](caravan::MpiExecutor& mpi)
+        [](caravan::MpiContext& mpi)
         {
             auto const topology = mpi.topology();
             auto processes = pmacc::DataSpace<TEST_DIM>::create(1);
