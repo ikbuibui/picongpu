@@ -24,6 +24,10 @@
 
 #include "pmacc/dimensions/Definition.hpp"
 
+#include <thread>
+
+#include <caravan/mpi_native.hpp>
+#include <caravan/sender.hpp>
 #include <mpi.h>
 
 namespace pmacc
@@ -61,6 +65,18 @@ namespace pmacc
         };
 
     } // namespace detail
+
+    template<unsigned DIM>
+    CommunicatorMPI<DIM>::~CommunicatorMPI()
+    {
+        auto joined = asyncScope.join();
+        // ponytail: shutdown-only polling; add a run-loop wakeup wait if teardown latency matters.
+        while(joined.state() == caravan::CompletionState::pending)
+        {
+            runLoop.runReady();
+            std::this_thread::yield();
+        }
+    }
 
     template<unsigned DIM>
     void CommunicatorMPI<DIM>::init(DataSpace<DIM3> numberProcesses, DataSpace<DIM3> periodic)
@@ -126,10 +142,11 @@ namespace pmacc
             periods[dimension] = periodic[dimension] != 0;
         }
 
-        auto const snapshot
-            = executor.createCartesian(caravan::readyEvent(), std::move(dimensions), std::move(periods)).result();
+        auto const snapshot = caravan::syncWait<caravan::TopologySnapshot>(
+            caravan::mpi::createCartesian(executor, std::move(dimensions), std::move(periods)));
         communicatorId = snapshot.communicator;
-        signalCommunicatorId = executor.duplicateCommunicator(caravan::readyEvent(), communicatorId).result();
+        signalCommunicatorId = caravan::syncWait<caravan::CommunicatorId>(
+            caravan::mpi::duplicateCommunicator(executor, communicatorId));
         mpiRank = snapshot.rank;
         mpiSize = snapshot.size;
         hostRank = snapshot.hostLocalRank;
@@ -187,14 +204,14 @@ namespace pmacc
     {
         if(!mpiExecutor)
             throw std::logic_error("CommunicatorMPI is not attached to Caravan");
-        // ponytail: Exchange owns this allocation until its legacy task completes; use allocation leases in Phase 4.
-        auto lease = std::shared_ptr<void>{const_cast<char*>(sendData), [](void*) {}};
-        return mpiExecutor->send(
-            caravan::readyEvent(),
-            caravan::BufferLease{std::move(lease), const_cast<char*>(sendData), sendBytes},
-            caravan::Peer{ExchangeTypeToRank(ex)},
-            caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
-            communicatorId);
+        return asyncScope.spawnFuture<caravan::SendResult>(caravan::continuesOn(
+            caravan::mpi::send(
+                *mpiExecutor,
+                caravan::BufferLease::borrowed(const_cast<char*>(sendData), sendBytes),
+                caravan::Peer{ExchangeTypeToRank(ex)},
+                caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
+                communicatorId),
+            runLoop));
     }
 
     template<unsigned DIM>
@@ -206,14 +223,14 @@ namespace pmacc
     {
         if(!mpiExecutor)
             throw std::logic_error("CommunicatorMPI is not attached to Caravan");
-        // ponytail: Exchange owns this allocation until its legacy task completes; use allocation leases in Phase 4.
-        auto lease = std::shared_ptr<void>{receiveData, [](void*) {}};
-        return mpiExecutor->receive(
-            caravan::readyEvent(),
-            caravan::BufferLease{std::move(lease), receiveData, receiveBytes},
-            caravan::Peer{ExchangeTypeToRank(ex)},
-            caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
-            communicatorId);
+        return asyncScope.spawnFuture<caravan::ReceiveResult>(caravan::continuesOn(
+            caravan::mpi::receive(
+                *mpiExecutor,
+                caravan::BufferLease::borrowed(receiveData, receiveBytes),
+                caravan::Peer{ExchangeTypeToRank(ex)},
+                caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
+                communicatorId),
+            runLoop));
     }
 
     template<unsigned DIM>
@@ -226,16 +243,15 @@ namespace pmacc
     {
         if(!mpiExecutor)
             throw std::logic_error("CommunicatorMPI is not attached to Caravan");
-        // ponytail: Signal owns these buffers until its legacy task completes; use allocation leases in Phase 4.
-        auto inputLease = std::shared_ptr<void>{const_cast<void*>(input), [](void*) {}};
-        auto outputLease = std::shared_ptr<void>{output, [](void*) {}};
-        return mpiExecutor->allReduce(
-            caravan::readyEvent(),
-            caravan::BufferLease{std::move(inputLease), const_cast<void*>(input), bytes},
-            caravan::BufferLease{std::move(outputLease), output, bytes},
-            type,
-            operation,
-            signalCommunicatorId);
+        return asyncScope.spawnFuture<caravan::AllReduceResult>(caravan::continuesOn(
+            caravan::mpi::allReduce(
+                *mpiExecutor,
+                caravan::BufferLease::borrowed(const_cast<void*>(input), bytes),
+                caravan::BufferLease::borrowed(output, bytes),
+                type,
+                operation,
+                signalCommunicatorId),
+            runLoop));
     }
 
     template<unsigned DIM>
@@ -243,7 +259,7 @@ namespace pmacc
     {
         if(!mpiExecutor)
             throw std::logic_error("CommunicatorMPI is not attached to Caravan");
-        return mpiExecutor->barrier(caravan::readyEvent(), communicatorId);
+        return asyncScope.spawn(caravan::continuesOn(caravan::mpi::barrier(*mpiExecutor, communicatorId), runLoop));
     }
 
     // description in ICommunicator

@@ -60,6 +60,7 @@ namespace pmacc::eventSystem
             [&]()
             {
                 std::invoke(progress);
+                communicator.progressAsync();
                 if(barrier.state() == caravan::CompletionState::pending)
                     return false;
                 barrier.wait();
