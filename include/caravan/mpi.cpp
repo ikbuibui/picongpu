@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-#include <caravan/mpi_native.hpp>
+#include <caravan/mpi/native.hpp>
 #include <mpi.h>
 
 namespace caravan

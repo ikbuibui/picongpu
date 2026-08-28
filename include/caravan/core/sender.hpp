@@ -18,7 +18,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include <caravan/core.hpp>
+#include <caravan/core/eager.hpp>
 
 namespace caravan
 {

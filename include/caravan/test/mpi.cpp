@@ -16,9 +16,9 @@
 #include <utility>
 #include <vector>
 
+#include <caravan/core/sender.hpp>
 #include <caravan/mpi.hpp>
-#include <caravan/mpi_native.hpp>
-#include <caravan/sender.hpp>
+#include <caravan/mpi/native.hpp>
 
 namespace
 {
