@@ -49,9 +49,9 @@ The immediate implementation order is:
    loop as an "executor".
 3. **Implemented:** rename `MpiExecutor` to `MpiContext` and expose it as the MPI
    backend authority while keeping its dedicated worker and progress implementation;
-4. make the typed `mpi::send`, `receive`, collectives, and barrier sender factories
-   part of the normal public MPI header, leaving request/invoke/native context in
-   an extension/native header;
+4. **Implemented:** make the typed `mpi::send`, `receive`, collectives, and barrier
+   sender factories part of the normal public MPI header, leaving
+   request/invoke/native context in an extension/native header;
 5. remove predecessor handling from the MPI engine; temporary Event-taking PMacc
    wrappers compose or subscribe above the backend;
 6. implement the first real alpaka/device sender prototype as the second backend
@@ -555,6 +555,28 @@ optional future targets
     caravan::kokkos
     task-runtime adapters only when a real use case needs them
 ```
+
+The current public header layout mirrors these layers without introducing a
+`caravan::core` namespace:
+
+```text
+caravan/
+|-- core.hpp                 # public core umbrella
+|-- core/
+|   |-- sender.hpp           # sender vocabulary and generic algorithms
+|   |-- eager.hpp            # Event, Future, Promise, bridges, syncWait
+|   |-- run_loop.hpp         # RunLoop + RunLoopScheduler
+|   `-- async_scope.hpp      # AsyncScope
+|-- mpi.hpp                  # normal MPI public umbrella
+`-- mpi/
+    |-- context.hpp          # MpiContext and common MPI-facing types
+    |-- operations.hpp       # typed MPI sender factories
+    `-- native.hpp           # native request/invoke escape hatches
+```
+
+`core.hpp` includes the complete generic/eager API. `mpi.hpp` exposes the normal
+MPI context and typed operations; native integrations include `mpi/native.hpp`
+explicitly.
 
 Caravan targets must not include PMacc or PIConGPU headers.
 
@@ -1397,10 +1419,11 @@ with P2300 semantics and the clarified Caravan scope.
    worker/progress implementation.
 2. Preserve the current dedicated worker policy behavior and make the native
    nonblocking request engine the central implementation.
-3. Put normal typed sender factories (`mpi::send`, `receive`, reductions, gathers,
-   barrier, and peers) in the normal public MPI header.
-4. Keep generic `request`, `invoke`, `invokeBlocking`, `NativeMpiContext`, and raw
-   request/lifetime transfer in the native extension header.
+3. **Implemented:** put normal typed sender factories (`mpi::send`, `receive`,
+   reductions, gathers, barrier, and peers) in the normal public MPI header.
+4. **Implemented:** keep generic `request`, `invoke`, `invokeBlocking`,
+   `NativeMpiContext`, and raw request/lifetime transfer in the native extension
+   header.
 5. Ensure every primitive sender's `start()` performs MPI initiation in the valid
    authority and convenience operations remain thin factories over that path.
 6. Remove predecessor `Event` parameters from the MPI engine and its internal
