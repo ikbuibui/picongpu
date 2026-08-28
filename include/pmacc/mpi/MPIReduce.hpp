@@ -35,7 +35,7 @@
 #include <type_traits>
 #include <vector>
 
-#include <caravan/core/sender.hpp>
+#include <caravan/core.hpp>
 #include <caravan/mpi/native.hpp>
 #include <mpi.h>
 

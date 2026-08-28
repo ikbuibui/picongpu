@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-#include <caravan/core/sender.hpp>
+#include <caravan/core.hpp>
 #include <caravan/mpi.hpp>
 #include <caravan/mpi/native.hpp>
 

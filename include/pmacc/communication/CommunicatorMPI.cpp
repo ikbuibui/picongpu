@@ -26,7 +26,7 @@
 
 #include <thread>
 
-#include <caravan/core/sender.hpp>
+#include <caravan/core.hpp>
 #include <caravan/mpi/native.hpp>
 #include <mpi.h>
 

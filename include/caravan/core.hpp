@@ -4,5 +4,7 @@
  */
 #pragma once
 
+#include <caravan/core/async_scope.hpp>
 #include <caravan/core/eager.hpp>
+#include <caravan/core/run_loop.hpp>
 #include <caravan/core/sender.hpp>
