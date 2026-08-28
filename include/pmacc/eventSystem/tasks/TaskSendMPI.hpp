@@ -70,6 +70,7 @@ namespace pmacc
 
             if(future.valid())
             {
+                Environment<DIM>::get().EnvironmentController().getCommunicator().progressAsync();
                 if(future.state() == caravan::CompletionState::pending)
                     return false;
                 static_cast<void>(future.result());
