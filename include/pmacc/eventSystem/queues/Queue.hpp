@@ -47,6 +47,12 @@ namespace pmacc
          */
         ComputeDeviceQueue getAlpakaQueue() const;
 
+        /** Borrow the native queue for explicitly composed asynchronous work. */
+        ComputeDeviceQueue& borrowAlpakaQueue() noexcept
+        {
+            return queue;
+        }
+
         void waitOn(ComputeEventHandle const& ev);
 
     private:

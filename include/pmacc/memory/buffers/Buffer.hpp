@@ -99,7 +99,6 @@ namespace pmacc
          */
         virtual size_t size()
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
             return alpaka::getPtrNative(this->currentSizeBufferHost)[0];
         }
 

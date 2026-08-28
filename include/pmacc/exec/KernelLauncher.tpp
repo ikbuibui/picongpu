@@ -23,6 +23,7 @@
 
 
 #include "pmacc/Environment.hpp"
+#include "pmacc/async/Operations.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/exec/KernelLauncher.hpp"
 #include "pmacc/traits/GetNComponents.hpp"
@@ -76,6 +77,18 @@ namespace pmacc::exec::detail
             , m_gridExtent(gridExtent)
             , m_blockExtent(blockExtent)
         {
+        }
+
+        /** Lazily describe this kernel on an explicitly borrowed queue. */
+        template<typename T_Queue, typename... T_Args>
+        HINLINE auto sender(T_Queue& queue, T_Args... args) const
+        {
+            auto const gridExtent = m_gridExtent.toAlpakaKernelVec();
+            auto const blockExtent = m_blockExtent.toAlpakaKernelVec();
+            auto const elemExtent = math::Vector<IdxType, T_dim>::create(1).toAlpakaKernelVec();
+            auto const workDiv
+                = ::alpaka::WorkDivMembers<::alpaka::DimInt<T_dim>, IdxType>(gridExtent, blockExtent, elemExtent);
+            return pmacc::async::kernel<Acc<T_dim>>(queue, workDiv, m_kernel, std::move(args)...);
         }
 
         /** Enqueue the kernel functor with the given arguments for execution.

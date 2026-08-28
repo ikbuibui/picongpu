@@ -67,6 +67,7 @@ TEST_CASE("vector constructor generator", "[vector]")
     };
     PMACC_KERNEL(testKernel)(1, 1)(hostDeviceBuffer.getDeviceBuffer().data());
     hostDeviceBuffer.deviceToHost();
+    eventSystem::getTransactionEvent().waitForFinished();
 
     REQUIRE(hostDeviceBuffer.getHostBuffer().data()[0] == Vector<uint32_t, 3u>(0u, 1u, 2u).shrink<TEST_DIM>());
     REQUIRE(hostDeviceBuffer.getHostBuffer().data()[1] == Vector<uint32_t, 3u>(0u, 2u, 4u).shrink<TEST_DIM>());
@@ -505,6 +506,7 @@ TEST_CASE("vector ops", "[vector]")
     (1, 1)(hostDeviceBuffer.getDeviceBuffer().data(), numTestsBuffer.getDeviceBuffer().data());
     hostDeviceBuffer.deviceToHost();
     numTestsBuffer.deviceToHost();
+    eventSystem::getTransactionEvent().waitForFinished();
 
     REQUIRE(numTestsBuffer.getHostBuffer().data()[0] == numElements);
 
@@ -540,6 +542,7 @@ TEST_CASE("vector generic", "[vector]")
     (1, 1)(hostDeviceBuffer.getDeviceBuffer().data(), numTestsBuffer.getDeviceBuffer().data());
     hostDeviceBuffer.deviceToHost();
     numTestsBuffer.deviceToHost();
+    eventSystem::getTransactionEvent().waitForFinished();
     // check that all tests got executed and that the array is not too small.
     REQUIRE(numTestsBuffer.getHostBuffer().data()[0] == numElements);
 
