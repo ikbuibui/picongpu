@@ -25,6 +25,7 @@
 #include "pmacc/alpakaHelper/Device.hpp"
 #include "pmacc/alpakaHelper/acc.hpp"
 #include "pmacc/assert.hpp"
+#include "pmacc/async/Operations.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/eventSystem/eventSystem.hpp"
 #include "pmacc/eventSystem/tasks/Factory.hpp"
@@ -64,17 +65,22 @@ namespace pmacc
         BufferType1D as1DBuffer()
         {
             auto numElements = this->size();
-            eventSystem::startOperation(ITask::TASK_HOST);
             return BufferType1D(
                 alpaka::getPtrNative(*view),
                 alpaka::getDev(*hostBuffer),
                 MemSpace<DIM1>(numElements).toAlpakaMemVec());
         }
 
+        /** Borrowed view; the HostBuffer must outlive all native use. */
         ViewType getAlpakaView() const
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
             return *view;
+        }
+
+        /** View retaining the underlying allocation for asynchronous operation state. */
+        auto getOwnedAlpakaView() const
+        {
+            return async::OwnedView{*view, *hostBuffer};
         }
 
         /** allocate data accessible from the host
@@ -138,7 +144,6 @@ namespace pmacc
 
         T_Type* data() override
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
             PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
             return alpaka::getPtrNative(*view);
         }
@@ -170,7 +175,6 @@ namespace pmacc
 
         void setValue(T_Type const& value) override
         {
-            // getDataBox is notifying the event system, no need to do it manually
             auto memBox = this->getDataBox();
             // narrowing conversion, implicit assumption when using a DataSpace is that size fits in int.
             auto current_size = static_cast<int>(this->size());
@@ -185,7 +189,6 @@ namespace pmacc
 
         DataBoxType getDataBox() override
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
             auto pitchBytes = MemSpace<T_dim>(getPitchesInBytes(*view));
             return DataBoxType(PitchedBox<T_Type, T_dim>(alpaka::getPtrNative(*view), pitchBytes));
         }
@@ -202,7 +205,6 @@ namespace pmacc
         {
             PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
             size_t const size = this->capacityND().productOfComponents();
-            eventSystem::startOperation(ITask::TASK_HOST);
             return {alpaka::getPtrNative(*view), size};
         }
     };

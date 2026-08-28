@@ -64,6 +64,7 @@ namespace pmacc
         void synchronize() override
         {
             idBuffer.deviceToHost();
+            eventSystem::getTransactionEvent().waitForFinished();
         };
 
         SimulationDataId getUniqueId() override
@@ -82,6 +83,7 @@ namespace pmacc
         State getState()
         {
             idBuffer.deviceToHost();
+            eventSystem::getTransactionEvent().waitForFinished();
             return State{*idBuffer.getHostBuffer().data(), m_startId, m_maxNumProc};
         }
 
@@ -93,6 +95,7 @@ namespace pmacc
             { *nextId = idGenerator.fetchInc(worker); };
             PMACC_LOCKSTEP_KERNEL(kernel).config<1>(1)(getDeviceGenerator(), newIdBuf.getDeviceBuffer().data());
             newIdBuf.deviceToHost();
+            eventSystem::getTransactionEvent().waitForFinished();
             return *newIdBuf.getHostBuffer().data();
         }
 
