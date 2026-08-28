@@ -1364,6 +1364,13 @@ This phase occurs before adding more PMacc functionality. Reuse the working
 completion/MPI code, but change the conceptual/API boundaries so new work aligns
 with P2300 semantics and the clarified Caravan scope.
 
+**Current state:** the hardware-independent architecture work is implemented and
+covered by core, MPI, alpaka, and alpaka-to-MPI composition tests. The remaining
+exit-gate work requires an accelerator environment: run the representative chain
+on a target accelerator and validate HIP translation. The optional resource tracker
+is deliberately not implemented; the boundary specified in 2.10 is sufficient
+until a measured PMacc use case justifies Phase 11.
+
 ### 2.1 Complete the minimum typed sender vocabulary
 
 1. Define one coherent completion-signature representation for value, error, and
@@ -1456,8 +1463,9 @@ with P2300 semantics and the clarified Caravan scope.
 
 **Current state:** the lazy borrowed-queue batch sender, kernel/copy/fill CPU test,
 explicit capture-lifetime test, same-queue FIFO path, run-loop completion transfer,
-and CUDA translation-unit compile check are implemented. Target accelerator runtime
-and HIP translation validation remain open.
+and CUDA translation-unit compile checks for both the backend and cross-backend
+chain are implemented. Target accelerator runtime and HIP translation validation
+remain open.
 
 Implement this prototype before deepening generic abstractions or migrating PMacc
 polling chains. MPI validates native progress; alpaka must validate the genuinely
@@ -1486,6 +1494,12 @@ different accelerator half of the architecture.
 ### 2.9 P2300 feasibility and semantic-alignment spike
 
 This is now a design gate, not merely a future adapter experiment.
+
+**Current state:** a test composes a lazy alpaka batch into MPI send/receive and an
+explicit `RunLoopScheduler` host continuation, spawned through `AsyncScope`. It
+checks lazy start, the host-visible accelerator/MPI boundary, continuation thread
+placement, eager Event bridging, CPU runtime behavior, and CUDA translation. HIP
+translation and target-accelerator runtime validation remain open.
 
 1. Compose the Phase 2 alpaka prototype into one sender chain:
    accelerator operation -> MPI request -> host continuation.
