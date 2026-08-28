@@ -29,6 +29,10 @@ The implementation completed so far remains valuable and is not discarded:
   `whenAll`, sender/operation concepts, and Event/sender bridges;
 - the manually driven `RunLoop` now exposes a cheap `RunLoopScheduler`, and
   `continuesOn` consumes that scheduler;
+- the first alpaka prototype lazily submits caller-defined kernel/copy/fill batches
+  to a borrowed queue, retains explicit captures through native completion, preserves
+  same-queue FIFO without a host wait, and publishes completion through an alpaka
+  host callback;
 - legacy `TaskSendMPI` and `TaskReceiveMPI` can temporarily consume Caravan
   completion handles during migration.
 
@@ -56,8 +60,8 @@ The immediate implementation order is:
    request/invoke/native context in an extension/native header;
 5. **Implemented:** remove predecessor handling from the MPI engine; temporary
    Event-taking wrappers compose or subscribe above the backend;
-6. implement the first real alpaka/device sender prototype as the second backend
-   architecture test; and only then
+6. **CPU prototype implemented; target accelerator runtime validation remains:**
+   complete the first real alpaka/device sender architecture test; and only then
 7. replace PMacc polling task chains with local sender composition and retain Event
    only at unavoidable legacy boundaries.
 
@@ -1449,6 +1453,11 @@ with P2300 semantics and the clarified Caravan scope.
    run-loop/external scheduler (`continues_on`-style semantics).
 
 ### 2.7 Build the alpaka/device sender prototype
+
+**Current state:** the lazy borrowed-queue batch sender, kernel/copy/fill CPU test,
+explicit capture-lifetime test, same-queue FIFO path, run-loop completion transfer,
+and CUDA translation-unit compile check are implemented. Target accelerator runtime
+and HIP translation validation remain open.
 
 Implement this prototype before deepening generic abstractions or migrating PMacc
 polling chains. MPI validates native progress; alpaka must validate the genuinely
