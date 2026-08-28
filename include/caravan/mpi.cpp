@@ -97,7 +97,7 @@ namespace caravan
     class MpiContext::Impl
     {
     public:
-        Impl() : m_owner(std::this_thread::get_id()), m_continuations(*this)
+        Impl() : m_owner(std::this_thread::get_id())
         {
             m_topology.communicator = worldCommunicator;
             int const rankError = MPI_Comm_rank(MPI_COMM_WORLD, &m_topology.rank);
@@ -125,34 +125,32 @@ namespace caravan
             return m_topology;
         }
 
-        void submitNative(Event predecessor, detail::NativeSubmission submission)
+        void submitNative(detail::NativeSubmission submission)
         {
-            if(detail::executorDepth != 0u)
+            if(detail::nativeCallbackDepth != 0u)
             {
                 submission.setFailed(
                     std::make_exception_ptr(std::logic_error("Recursive native MPI submission is not allowed")));
                 return;
             }
             auto const collective = submission.collective;
-            submitAfter(
-                std::move(predecessor),
-                submission,
+            submit(
+                std::move(submission),
                 [this](detail::NativeSubmission output) { startNative(std::move(output)); },
                 collective);
         }
 
-        void invokeBlocking(Event predecessor, detail::NativeBlockingSubmission submission)
+        void invokeBlocking(detail::NativeBlockingSubmission submission)
         {
-            if(detail::executorDepth != 0u)
+            if(detail::nativeCallbackDepth != 0u)
             {
                 submission.setFailed(
                     std::make_exception_ptr(std::logic_error("Recursive native MPI submission is not allowed")));
                 return;
             }
             auto const collective = submission.collective;
-            submitAfter(
-                std::move(predecessor),
-                submission,
+            submit(
+                std::move(submission),
                 [this](detail::NativeBlockingSubmission output) { startBlocking(std::move(output)); },
                 collective);
         }
@@ -191,22 +189,6 @@ namespace caravan
         }
 
     private:
-        class ContinuationTarget
-        {
-        public:
-            explicit ContinuationTarget(Impl& owner) : m_owner(owner)
-            {
-            }
-
-            void post(std::function<void()> continuation)
-            {
-                m_owner.enqueue(std::move(continuation));
-            }
-
-        private:
-            Impl& m_owner;
-        };
-
         struct NativeGroup
         {
             detail::NativeSubmission output;
@@ -257,38 +239,24 @@ namespace caravan
         };
 
         template<typename T_Output, typename T_Start>
-        void submitAfter(Event predecessor, T_Output output, T_Start&& start, std::optional<CommunicatorId> collective)
+        void submit(T_Output output, T_Start&& start, std::optional<CommunicatorId> collective)
         {
             std::optional<CollectiveTicket> ticket;
             {
-                std::lock_guard lock(m_queueMutex);
+                std::unique_lock lock(m_queueMutex);
                 if(!m_accepting)
                 {
+                    lock.unlock();
                     output.setFailed(std::make_exception_ptr(std::runtime_error("MPI context is shutting down")));
                     return;
                 }
                 ++m_outstanding;
                 if(collective)
                     ticket = CollectiveTicket{*collective, m_collectiveSubmitted[collective->value]++};
-            }
-
-            predecessor.continueWith(
-                m_continuations,
-                [this, predecessor, output, start = std::forward<T_Start>(start), ticket](Event) mutable
-                {
-                    auto ready = [this, predecessor, output, start = std::move(start)]() mutable
+                m_queue.emplace_back(
+                    [this, output = std::move(output), start = std::forward<T_Start>(start), ticket]() mutable
                     {
-                        if(predecessor.state() == CompletionState::failed)
-                        {
-                            output.setFailed(predecessor.error());
-                            finishOperation();
-                        }
-                        else if(predecessor.state() == CompletionState::stopped)
-                        {
-                            output.setStopped();
-                            finishOperation();
-                        }
-                        else
+                        auto ready = [this, output = std::move(output), start = std::move(start)]() mutable
                         {
                             try
                             {
@@ -299,13 +267,14 @@ namespace caravan
                                 output.setFailed(std::current_exception());
                                 finishOperation();
                             }
-                        }
-                    };
-                    if(ticket)
-                        startCollective(*ticket, std::move(ready));
-                    else
-                        ready();
-                });
+                        };
+                        if(ticket)
+                            startCollective(*ticket, std::move(ready));
+                        else
+                            ready();
+                    });
+            }
+            m_queueReady.notify_one();
         }
 
         void startCollective(CollectiveTicket ticket, std::function<void()> start)
@@ -329,15 +298,6 @@ namespace caravan
         void assertOwner() const
         {
             assert(std::this_thread::get_id() == m_owner && "MPI operation executed outside the MPI owner thread");
-        }
-
-        void enqueue(std::function<void()> command)
-        {
-            {
-                std::lock_guard lock(m_queueMutex);
-                m_queue.emplace_back(std::move(command));
-            }
-            m_queueReady.notify_one();
         }
 
         void drainQueue()
@@ -565,7 +525,6 @@ namespace caravan
         std::vector<NativeCompletion> m_active;
         std::vector<int> m_completedIndices;
         std::vector<MPI_Status> m_statuses;
-        ContinuationTarget m_continuations;
     };
 
     MpiContext::MpiContext(std::unique_ptr<Impl> implementation) : m_implementation(std::move(implementation))
@@ -1043,27 +1002,24 @@ namespace caravan
         m_implementation->requestShutdown();
     }
 
-    void MpiContext::submitNative(Event predecessor, detail::NativeSubmission submission)
+    void MpiContext::submitNative(detail::NativeSubmission submission)
     {
-        m_implementation->submitNative(std::move(predecessor), std::move(submission));
+        m_implementation->submitNative(std::move(submission));
     }
 
-    void MpiContext::invokeBlocking(Event predecessor, detail::NativeBlockingSubmission submission)
+    void MpiContext::invokeBlocking(detail::NativeBlockingSubmission submission)
     {
-        m_implementation->invokeBlocking(std::move(predecessor), std::move(submission));
+        m_implementation->invokeBlocking(std::move(submission));
     }
 
-    void detail::NativeAccess::submit(MpiContext& context, Event predecessor, detail::NativeSubmission submission)
+    void detail::NativeAccess::submit(MpiContext& context, detail::NativeSubmission submission)
     {
-        context.submitNative(std::move(predecessor), std::move(submission));
+        context.submitNative(std::move(submission));
     }
 
-    void detail::NativeAccess::invokeBlocking(
-        MpiContext& context,
-        Event predecessor,
-        detail::NativeBlockingSubmission submission)
+    void detail::NativeAccess::invokeBlocking(MpiContext& context, detail::NativeBlockingSubmission submission)
     {
-        context.invokeBlocking(std::move(predecessor), std::move(submission));
+        context.invokeBlocking(std::move(submission));
     }
 
     int MpiRuntime::runImpl(int& argc, char**& argv, std::function<int(MpiContext&)> application)
