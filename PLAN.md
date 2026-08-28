@@ -1,212 +1,576 @@
-# PMacc Event System Replacement Plan
+# Caravan Library and PMacc Event-System Migration Plan
 
 ## Status
 
-Implementation is in progress. The Caravan completion core (Phase 1) is
-implemented and tested. The Phase 0 local inventory and CPU baseline are
-recorded in `docs/CARAVAN_PHASE0.md`; target GPU measurements remain open.
-Phase 2 has started with the dedicated `MpiRuntime`, nonblocking barrier,
-all-reduce, root-reduce, fixed-gather, and variable-gather progress,
-point-to-point futures, receive metadata, buffer leases, and MPI-owned Cartesian
-and split communicators with immutable
-topology snapshots. PMacc
-can now attach its environment to the runtime and initialize `CommunicatorMPI`
-from an immutable snapshot without application-thread topology calls. Its
-dedicated signal communicator, signal all-reductions, selected-rank reductions,
-and simulation/checkpoint barriers use the MPI thread when Caravan is attached.
-An unused MPI-calling
-memory diagnostic and an invalid pre-initialization example finalization were
-deleted instead of migrated. Legacy `TaskSendMPI` and `TaskReceiveMPI` can poll
-Caravan point-to-point futures while unchanged PMacc startup remains available
-during migration. The general native
-extension API now transfers arbitrary nonblocking requests and lifetimes to the
-executor, and exclusive blocking submissions wait for active requests before
-running. Caravan's point-to-point, collective, barrier, and communicator
-conveniences now use this single native progress path. The remaining PMacc MPI
-migration is next; target-GPU validation is deferred as described in the
-migration gate below.
+Caravan is being developed inside the PMacc/PIConGPU repository while the
+legacy PMacc event system is still in use.
 
-This plan targets the PMacc event system.
-Breaking PMacc and PIConGPU interfaces is allowed during the migration.
+The implementation completed so far remains valuable and is not discarded:
+
+- the completion core (`Event`, `Future<T>`, terminal-state handling, continuation
+  registration, blocking waits, and flat joins) is implemented and tested;
+- the Phase 0 PMacc inventory and CPU baseline are recorded in
+  `docs/CARAVAN_PHASE0.md`; target-GPU measurements remain open;
+- the current MPI implementation has a dedicated worker that owns the MPI
+  lifecycle and progresses nonblocking requests;
+- nonblocking barrier, all-reduce, root-reduce, fixed-gather, variable-gather,
+  point-to-point futures, receive metadata, communicator creation, topology
+  snapshots, and buffer lifetime retention exist;
+- PMacc can attach its environment to the current MPI runtime and routes several
+  signal, reduction, gather, barrier, and point-to-point paths through it;
+- the native MPI extension can transfer arbitrary nonblocking requests and their
+  retained lifetimes to the progress engine;
+- blocking MPI-context submissions already provide an escape path for blocking
+  MPI-enabled operations and third-party libraries;
+- legacy `TaskSendMPI` and `TaskReceiveMPI` can temporarily consume Caravan
+  completion handles during migration.
+
+The architecture described below changes the *role* of this implementation:
+the dedicated MPI worker becomes the first MPI progress/lifecycle policy rather
+than a defining property of Caravan, and the current `DeviceExecutor` direction
+becomes an alpaka backend policy rather than a universal execution model.
+
+Breaking PMacc and PIConGPU interfaces is allowed during the migration. Do not
+retain compatibility scaffolding merely to avoid porting users of the legacy
+system.
+
+---
+
+## Library vision
+
+Caravan is a lightweight C++ library for integrating and composing asynchronous
+operations across heterogeneous execution systems.
+
+The design is **sender-oriented and P2300-aligned from this migration onward**,
+even where the supported compiler/library stack still requires a small custom
+implementation. New backend primitives should be expressible as lazy operations
+whose native side effects begin only when the operation is started. Dependencies
+should normally be expressed by composition rather than by passing an `Event
+predecessor` argument into every backend call.
+
+Caravan defines or bridges common semantics for:
+
+- asynchronous operation start and terminal completion;
+- value, error, and stopped completion channels;
+- explicit composition and runtime-sized quiescent joins;
+- operation-state lifetime until terminal completion;
+- eager/type-erased completion handles at runtime boundaries;
+- completion subscription and execution-context transfer across runtime boundaries;
+- backend-local native dependency preservation;
+- interoperability with P2300/C++ standard execution and external task runtimes.
+
+Caravan does **not** generally own application resources merely because an
+operation refers to them. Application storage may be borrowed, explicitly owned
+by a particular operation, or retained by an application/backend-specific handle.
+The core guarantee is that Caravan-owned asynchronous operation state remains valid
+until that operation is terminal.
+
+Resource-access dependency inference is an optional layer, not a core invariant.
+A resource layer may accept declarations such as `read(A)` and `write(B)`, infer
+predecessor relationships, and produce ordinary sender/completion dependencies.
+It must remain pluggable and must not turn Caravan core into a mandatory
+resource-aware scheduler.
+
+Backend contexts, application async scopes, or external execution systems own
+shutdown and accounting for the work they submit. Caravan core does not maintain a
+global registry of all outstanding application work.
+
+Caravan should avoid owning how available parallelism is exploited. Scheduling,
+worker management, work stealing, CPU parallelism, accelerator execution, and
+native progress belong to pluggable execution systems and backend policies.
+Possible users or adapters include alpaka, SYCL, Kokkos, Taskflow, HPX, oneTBB,
+OpenMP tasks, and implementations of C++ standard execution.
+
+The intended long-term layering is:
+
+```text
+                 optional resource dependency layer
+                  read/write access declarations
+                    dependency inference only
+                              |
+                              v
+                         application
+                    PMacc / PIConGPU / other
+                              |
+                sender/P2300-style composition
+                 + async scopes / run loops
+                              |
+                     +--------+---------+
+                     |      Caravan     |
+                     |------------------|
+                     | backend senders  |
+                     | Event bridge     |
+                     | dynamic joins    |
+                     | interop          |
+                     +--------+---------+
+                              |
+               +--------------+----------------+
+               |              |                |
+              MPI         accelerator      CPU/task runtime
+               |              |                |
+        progress policy   alpaka/SYCL/      std::execution/
+                          Kokkos/...        HPX/TBB/Taskflow/...
+```
+
+`Event`/`Future<T>` remain useful during migration as eager, type-erased completion
+bridges for already-started work, runtime-sized containers, and imperative PMacc
+interfaces. They are not intended to become a second permanent async programming
+model that competes with senders.
+
+Caravan is not required to remain the highest-level composition API forever. If
+C++ `std::execution` or a production-quality P2300 implementation satisfies
+PMacc's generic composition, async-scope, run-loop, and dynamic-join needs,
+Caravan should be able to move underneath it and become primarily an
+interoperability/backend library plus optional resource-dependency utilities.
+
+---
 
 ## Goals
 
-1. Make dependencies explicit and locally understandable.
-2. Run every application MPI call on exactly one dedicated thread.
-3. Keep MPI progress active while simulation threads create work or perform CPU work.
-4. Allow task submission from multiple threads.
-5. Prevent arbitrary shared task mutation; mutable native state has one owner.
-6. Preserve native GPU queue concurrency and GPU-aware MPI support.
-7. Replace hand-written task state machines with operation chains.
-8. Propagate errors and retain buffer lifetimes correctly.
-9. Remove the global manager, transaction stack, observer system, and task IDs.
-10. Reduce scheduling overhead and total implementation size.
+1. Make asynchronous dependencies explicit and locally understandable.
+2. Make new asynchronous backend APIs sender-oriented/P2300-compatible: operation
+   description is separate from start, and dependencies are expressed primarily by
+   composition rather than predecessor parameters.
+3. Remove PMacc's global manager, transaction stack, task IDs, observer system,
+   polling task hierarchy, and hidden buffer-access side effects.
+4. Keep Caravan core responsible for the lifetime of its own async operation state,
+   not for generic ownership of application buffers/fields/particles.
+5. Support explicit application async scopes so dynamically spawned work can be
+   joined/quiesced without a global Caravan registry.
+6. Permit PMacc to use a single-threaded run-loop/control executor for host
+   continuations and progress integration without making that loop a Caravan
+   singleton or semantic manager.
+7. Keep generic task scheduling and CPU parallelism outside Caravan.
+8. Make resource-access dependency inference optional and pluggable; a resource
+   layer may generate dependencies but must not be required by backend APIs.
+9. Make accelerator support pluggable; alpaka is the first backend, not a core
+   architectural assumption.
+10. Make MPI integration pluggable; the dedicated-thread `MPI_THREAD_FUNNELED`
+    implementation is the first policy, not a universal requirement.
+11. Keep MPI progress active independently of simulation-thread polling in the
+    PMacc production configuration.
+12. Avoid reimplementing MPI. Centralize integration around native nonblocking
+    requests plus generic MPI-context invocation.
+13. Preserve backend-native accelerator dependency mechanisms so accelerator-to-
+    accelerator work does not unnecessarily synchronize through the host.
+14. Use portable host-visible completion at cross-backend boundaries initially;
+    add a generic native cross-backend dependency protocol only after at least one
+    real second interop path demonstrates the required semantics.
+15. Make borrowed/owned application-resource semantics explicit at operation or
+    PMacc API boundaries; retain storage only when the specific operation/API has
+    chosen ownership.
+16. Permit future integration with C++ standard execution without requiring a
+    rewrite of MPI or accelerator backends.
+17. Allow task runtimes to be attached as execution choices without translating
+    all application work into a Caravan-specific task type.
+18. Keep whole-application supervision and structured lifetime outside
+    `caravan::core`; backend contexts account only for native work they must finish
+    or destroy safely.
+19. Reduce scheduling/progress overhead and total PMacc event/communication code.
+20. Keep Caravan independent of PMacc and PIConGPU headers.
+
+---
 
 ## Non-goals
 
-- A general work-stealing task runtime.
+- A general work-stealing runtime.
+- A mandatory Caravan thread pool for arbitrary application work.
+- A Caravan-specific general `Task<T>` abstraction.
+- A Caravan-specific general scheduler hierarchy that competes with
+  `std::execution`.
+- A second incompatible sender/receiver model.
+- Owning all CPU parallelism used by PMacc or PIConGPU.
+- Replacing alpaka, SYCL, Kokkos, Taskflow, HPX, oneTBB, or similar systems.
+- A global Caravan `Manager` that owns every operation in the application.
+- Making one PMacc run loop the only valid execution/progress mechanism.
 - Automatic dependency discovery from arbitrary pointers.
-- Arbitrary concurrent mutation of submitted tasks.
-- Requiring `MPI_THREAD_SERIALIZED` or `MPI_THREAD_MULTIPLE`.
-- Adding HPX, Taskflow, oneTBB, stdexec, or another runtime dependency.
+- Mandatory resource-access dependency inference in Caravan core.
+- Making Caravan responsible for generic ownership/reclamation of application
+  buffers, fields, particle containers, or arbitrary user objects.
+- A new MPI API that mirrors every MPI routine with renamed Caravan types.
+- Hiding all native backend types merely for abstraction purity.
+- Requiring every backend to support the same native synchronization features.
+- Requiring one owner thread for every execution domain.
+- Requiring `MPI_THREAD_FUNNELED` for every possible Caravan MPI configuration.
+- Promising cancellation of already-submitted MPI or accelerator operations.
 - Preserving the current PMacc event-system API.
-- Supporting direct MPI calls from simulation or plugin threads.
+- Stabilizing a public ABI or extracting a separate package before the PMacc and
+  PIConGPU migration demonstrates a second real consumer or a stable boundary.
 
-## Fixed design decisions
+---
 
-### One MPI thread, using `MPI_THREAD_FUNNELED`
+## Architectural principles
 
-Caravan creates a dedicated MPI worker thread. That worker calls
-`MPI_Init_thread(..., MPI_THREAD_FUNNELED, ...)`, runs the MPI progress loop,
-and calls `MPI_Finalize()`. The process main thread remains the application
-thread.
+### 1. Separate operation description, start, completion, execution placement, progress, and ownership
 
-`MPI_THREAD_FUNNELED` is the minimum correct level for this process model:
-the process is multithreaded, but only the thread that initialized MPI calls
-MPI. MPI defines that initializer as its main thread even when it is not the
-process entry thread. `MPI_THREAD_SINGLE` is not sufficient for a multithreaded
-process, and `MPI_THREAD_SERIALIZED` is unnecessary because MPI calls never
-move between threads.
+These are distinct concepts and must not be conflated.
 
-The MPI executor thread owns all MPI operations, including:
+```text
+operation description
+    What asynchronous work would be performed?
 
-- initialization and finalization;
-- communicator and datatype creation and destruction;
-- topology queries;
-- point-to-point communication;
-- collectives and barriers;
-- signal collectives;
-- MPI-enabled third-party library entry points;
-- error handling that requires MPI, including `MPI_Abort`.
+start
+    When do externally visible/native side effects begin?
 
-No runtime mutex serializes MPI calls because there is only one caller.
-Providing a higher thread level does not change this contract.
+completion
+    How does the operation report value/error/stopped terminal state?
 
-The executable structure becomes conceptually:
+execution placement
+    Which execution system decides where runnable continuation/callable work runs?
+
+progress
+    What mechanism advances already-started native asynchronous work?
+
+operation-state lifetime
+    What implementation state must remain alive until completion?
+
+application-resource ownership
+    Who guarantees that borrowed or owned application storage remains valid?
+```
+
+Examples:
+
+- a sender describes work before `start()`;
+- Taskflow/HPX/oneTBB or a standard scheduler may decide where CPU work executes;
+- a SYCL/alpaka queue determines accelerator submission semantics;
+- an MPI progress policy may repeatedly call `MPI_Testsome`;
+- the sender operation state retains its `MPI_Request` bookkeeping and receiver;
+- a PMacc buffer allocation may be borrowed or explicitly captured by that
+  operation without becoming a generic Caravan-owned resource.
+
+No generic Caravan abstraction should imply that these responsibilities must be
+implemented by the same object or thread.
+
+### 2. Sender/P2300 semantics guide new APIs now
+
+New primitive async backend APIs should be designed as if they were sender
+factories even when the migration implementation is temporarily custom.
+
+Prefer:
 
 ```cpp
-int main(int argc, char** argv)
-{
-    return pmacc::MpiRuntime::run(
-        argc,
-        argv,
-        [&]
-        {
-            return runApplication();
-        });
-}
+auto s = caravan::mpi::send(buffer);
+auto work = previous | let_value([&] { return caravan::mpi::send(buffer); });
 ```
 
-`MpiRuntime::run()` performs this sequence:
+over:
+
+```cpp
+Event e = caravan::mpi::send(previous, buffer);
+```
+
+A primitive operation should normally be lazy: creating/composing it must not
+start MPI, enqueue device work, or otherwise create an externally visible side
+effect. Native initiation occurs when the connected operation state is started.
+
+Do not expose implementation-specific sender expression types from stable PMacc
+interfaces; use `auto`, local composition, type erasure, or an eager `Event` bridge
+where an imperative/runtime-dynamic boundary requires it.
+
+### 3. Submitted/started operation state is immutable in dependency shape
+
+Once an operation is started, its predecessor relation, operation parameters, and
+ownership/borrowing choices are fixed. Mutable native execution state has a
+backend-defined synchronization authority. That authority may be one dedicated
+thread, an external runtime, a thread-safe queue/runtime object, serialized caller
+access, or another documented mechanism.
+
+The generic Caravan invariant is **well-defined synchronization authority**, not
+**one owner thread per domain**.
+
+### 4. Dependencies are composition; resource inference is optional
+
+The default Caravan model uses explicit sender/completion composition. There is no
+implicit current transaction, global dependency cursor, hidden `startOperation()`
+call, or buffer accessor that silently changes scheduling.
+
+An optional resource layer may provide:
+
+```cpp
+submit(kernel(), read(A), write(B));
+```
+
+and infer the necessary predecessor set. That layer then produces ordinary
+sender/completion dependencies. It is a dependency planner/tracker, not the owner
+of generic execution placement.
+
+The resource layer must be pluggable: users must also be able to use Caravan with
+fully explicit composition and no resource registry.
+
+### 5. Generic task scheduling stays external
+
+Caravan must not require arbitrary CPU work to become a Caravan task. Do not
+introduce a public general abstraction such as `caravan::Task<T>`, a bespoke
+scheduler hierarchy, or a general Caravan thread pool unless a future type is a
+direct model/adapter of standard execution and has a concrete interoperability
+need.
+
+A task belongs to the runtime executing it. Caravan participates through senders,
+completion bridges, schedulers/run loops supplied by consumers, and backend
+adapters at boundaries.
+
+### 6. `std::execution` is the long-term generic composition target
+
+P2300-compatible semantics are an architectural constraint from Phase 2 onward,
+not merely a late optional adapter exercise.
+
+In particular:
+
+- backend primitives should be representable as senders;
+- operation state should naturally correspond to connect/start lifetime;
+- value/error/stopped should map directly to receiver completion channels;
+- execution placement must be explicit and separable from native progress;
+- use standard-style `starts_on`/`continues_on` concepts rather than relying on the
+  thread that happens to observe native completion;
+- use standard async scopes (`counting_scope`/`simple_counting_scope`-style
+  semantics or equivalent) for dynamic structured lifetime when practical;
+- use `run_loop`-style schedulers for manually driven single-thread execution when
+  practical;
+- make it possible to bridge an eager Caravan completion into a sender;
+- make it possible to spawn/retain a sender and obtain an eager completion handle
+  where runtime type erasure is useful;
+- keep MPI and accelerator backend logic independent of the composition syntax.
+
+A third-party P2300 implementation is optional during the migration. Caravan must
+not require one before the supported PMacc/PIConGPU toolchains can use it
+reliably, but custom APIs should not diverge semantically without a measured need.
+
+### 7. `Event` is an eager, type-erased completion bridge, not the universal async model
+
+`Event` represents terminal state of work that has already been started/spawned.
+It is deliberately different from a lazy sender expression.
+
+Use it where one or more of these properties are valuable:
+
+- cheap sharing;
+- runtime type erasure across MPI, accelerator, CPU-runtime, and host operations;
+- dynamic storage in containers;
+- runtime-sized quiescent joins;
+- migration of imperative PMacc APIs;
+- bridging already-started native work into another runtime.
+
+Required properties remain exactly-once terminal transition, thread-safe
+observation/registration, no user callback from destructors, no callback while
+holding an event-state lock, no recursive inline continuation chain, and an
+allocation-free already-ready fast path.
+
+`Future<T>` is similarly an eager/type-erased migration/interop facility for a
+shared immutable result. It should not grow into a competing general asynchronous
+value model if sender value channels satisfy the use case.
+
+### 8. Terminal completion protects Caravan/backend operation state, not arbitrary user storage
+
+A completion handle must not become terminal while native work represented by
+that handle can still access **operation state that the operation itself owns or
+has explicitly retained**.
+
+This does not imply that Caravan automatically owns every application object
+mentioned by an operation. Borrowed storage follows a documented lifetime
+precondition. Explicitly owned/captured storage remains alive because the
+operation state owns that handle. Backend-affine native resources remain owned and
+destroyed by the backend authority.
+
+`stopped` means the operation did not produce a successful result because stop was
+honored at a point where the backend could honor it. It does not promise physical
+revocation of an already-issued MPI request/kernel/device command.
+
+### 9. Runtime-sized quiescent joins are first-class
+
+PMacc has dynamic collections of asynchronous communication/device operations.
+Caravan must retain a flat runtime-sized join that waits until all inputs are
+terminal even after one fails or stops, then reports failed > stopped > ready.
+
+The eager migration form may remain:
+
+```cpp
+Event joinAll(std::span<Event const> events);
+```
+
+A sender-oriented form may later accept a runtime range/type-erased set of child
+operations. This is intentionally a quiescence primitive and need not have exactly
+the same sibling-stop semantics as standard `when_all`.
+
+### 10. `Flow` is a migration convenience, not a foundation
+
+`Flow` is a local imperative cursor for migrating PMacc transaction-style code.
+It must be layered on sender/Event operations and no backend API may require it.
+
+```cpp
+Flow main{stepStart};
+main.then(...);
+auto branch = main.fork();
+...
+main.join(branch.done());
+```
+
+Long term, sender pipelines, coroutines, async scopes, or an external task runtime
+should replace most generic `Flow` composition. If forgotten joins recur, provide
+a sealed `parallel()`/`forkJoin()` helper or move directly to scoped composition.
+
+### 11. Async scopes own dynamic structured lifetime; core does not globally supervise
+
+Dynamically spawned asynchronous work needs an explicit owner. PMacc should use an
+application/migration async scope with semantics comparable to standard execution
+scopes: spawn work into the scope, prevent destruction until spawned work is
+quiescent, and join at well-defined stage/shutdown boundaries.
+
+The scope is not a global Caravan singleton and is not required by backend APIs.
+A future standard `counting_scope`/`simple_counting_scope` or equivalent may replace
+the migration implementation without rewriting MPI/alpaka backends.
+
+Backend contexts still account for native work required to destroy that backend
+safely; application scopes account for application-level structured lifetime.
+
+### 12. A PMacc run loop is allowed and useful, but it is not the new Manager
+
+PMacc may use one manually driven, single-threaded `run_loop`-style executor for
+host continuations, control-plane work, and integration with blocking waits. If a
+usable standard/P2300 `run_loop` exists, prefer it; otherwise a small migration
+implementation should intentionally match that semantic shape.
+
+The loop may execute ready host continuations and invoke registered progress
+sources while waiting, but it must not:
+
+- own every Caravan operation globally;
+- become the dependency database;
+- scan all application operations by task ID;
+- execute all GPU/MPI work serially;
+- become required by Caravan MPI/alpaka APIs.
+
+The control plane may be single-threaded while GPU queues, MPI, and external CPU
+runtimes remain concurrently active.
+
+### 13. Resource-access dependency inference is a separate optional layer
+
+A future `caravan::resource`-style target may maintain stable resource identities,
+read/write access state, and access leases that remain active until the associated
+operation completes. It may infer dependencies such as writer->reader and
+readers->writer and then compose/submit ordinary Caravan/P2300-style operations.
+
+It must not implicitly imply ownership of underlying application storage. A resource control
+block may need to outlive an access lease; the field/buffer allocation itself may
+still be owned by PMacc, PIConGPU, a backend, or explicit operation state.
+
+Start conservatively with logical resources. Split compound objects such as
+`Buffer::data` and `Buffer::size` only when their semantics and measured overlap
+justify separate synchronization identities.
+
+### 14. Keep native dependency semantics backend-local until real cross-backend interop exists
+
+Portable correctness at a boundary between independent backends uses host-visible
+completion initially.
+
+A backend should preserve and exploit its own native dependency representation
+internally. For example, an alpaka backend may keep queue/event information needed
+for alpaka-to-alpaka ordering without exposing a generic `NativeDependency` type
+from `caravan::core`.
+
+Do not design a type-erased cross-backend dependency protocol during the initial
+migration. Such a protocol must account for completion, memory visibility, native
+resource lifetime, device/context identity, and target-consumption semantics; one
+backend is insufficient evidence for the right abstraction.
+
+Introduce a generic import/export capability only when a concrete second path can
+be implemented and tested.
 
 ```text
-process main / application            Caravan MPI worker
---------------------------            ------------------
-start MPI worker                -----> MPI_Init_thread(FUNNELED)
-wait for runtime readiness      <----- publish immutable topology
-initialize and run simulation   -----> submit MPI commands
-create GPU/MPI work             <----> progress active requests
-application returns             -----> receive shutdown request
-join MPI worker                 <----- finish or fail active work
-                                      free MPI-owned resources
-                                      MPI_Finalize
-return application result
+within one backend        -> backend-native dependency mechanism
+cross-backend boundary    -> portable host-visible completion
+future measured interop   -> smallest capability justified by real requirements
 ```
 
-If the MPI implementation provides less than `MPI_THREAD_FUNNELED`, startup
-fails. It must not warn and continue.
+Backends may expose different native capability levels.
 
-### Single-owner mutation
+---
 
-Commands are immutable after submission. Each native execution domain owns
-its mutable state:
+## Target library structure
 
-- the MPI thread owns MPI requests, communicators, and statuses;
-- a device executor owns alpaka queues, native device events, and pending
-  device completions;
-- producer threads own local `Flow` objects while constructing work.
-
-Multiple threads may submit commands and share completion handles. They may
-not directly mutate active commands or executor-native state. Cancellation or
-priority changes, if later needed, are commands sent to the owner.
-
-### Explicit dependencies
-
-Every operation accepts dependencies and returns a completion handle.
-Registering an operation must establish its predecessor relationship before
-any externally visible side effect starts.
-
-There is no implicit current transaction and no dependency behavior hidden in
-buffer accessors.
-
-### Caravan: PMacc-independent runtime
-
-The replacement library is named **Caravan**. It uses the C++ namespace
-`caravan` and is developed inside this repository as isolated CMake targets:
+Initial targets should remain small and independently usable:
 
 ```text
-caravan::core              Event, Future<T>, whenAll(), Flow, shutdown
-    +-- caravan::mpi       MPI owner/progress/resource core
-    |      +-- native      opt-in expert request and blocking-call extension
-    |      `-- portable    send, receive, collectives, communicators
-    `-- caravan::alpaka    DeviceExecutor; depends on alpaka
-             ^
-           PMacc           buffers, topology, fields, particles, exchanges
-             ^
-         PIConGPU
+caravan::core
+    Event / Future<T> eager completion bridges
+    runtime-sized joinAll()/readyEvent()
+    terminal/error/stopped semantics
+    operation-state/completion utilities
+    sender/completion bridge utilities
+    continuation dispatch hooks
+    optional migration Flow convenience
+
+caravan::mpi
+    sender-oriented native MPI async operations
+    generic request initiation/progress
+    generic MPI-context invocation
+    MPI progress/lifecycle policies
+
+caravan::alpaka
+    sender-oriented alpaka operation adapters
+    supplied queue/event adaptation
+    backend-local native dependency chaining
+
+optional future targets
+    caravan::resource
+        resource identities
+        read/write access leases
+        dependency inference only
+    caravan::stdexec_interop
+    caravan::sycl
+    caravan::kokkos
+    task-runtime adapters only when a real use case needs them
 ```
 
-The native extension is the implementation substrate for Caravan's portable
-MPI operations, not a parallel execution path. Generic send, receive, barrier,
-collective, and communicator conveniences remain in Caravan and are implemented
-through the same native request and quiescent-call machinery. Only MPI
-initialization/finalization, request progress, owner-thread enforcement, and
-native resource registries bypass that extension because they implement it.
+Caravan targets must not include PMacc or PIConGPU headers.
 
-PMacc contains only domain adapters and composition: exchange-direction and tag
-mapping, PMacc buffer leases, topology adaptation, signals, fields, particles,
-and simulation flows. It must not reimplement generic MPI operations merely to
-keep Caravan superficially small. Keep the native and portable layers in the
-single `caravan::mpi` target initially; split targets only when a real consumer
-needs the native core without the portable conveniences.
-
-The runtime targets must not include PMacc or PIConGPU headers. Their public
-interfaces use generic lifetime tokens, pointers, extents, and opaque native
-resource descriptors rather than PMacc buffer or topology types. PMacc owns
-the adapters for its buffers and topology and the composition of field,
-particle, and exchange operations.
-
-Do not promise a stable public ABI or create a separate package during the
-migration. External extraction is deferred until the migration is complete or
-a second real consumer needs it.
-
-## Target architecture
+PMacc owns domain-specific composition and application policy:
 
 ```text
-                         thread-safe completion states
-                      +-------------------------------+
-                      | Event, Future<T>, whenAll()   |
-                      +-------------------------------+
-                            ^                 ^
-                            |                 |
-producer threads            |                 |
-+------------------+        |                 |
-| simulation       |--MPSC--+--> DeviceExecutor --> alpaka queues/events
-| plugins          |        |
-| helper threads   |--MPSC------> MpiExecutor    --> MPI requests
-+------------------+
+PMacc
+    application async scopes
+    optional run_loop/control scheduler
+    optional choice/use of caravan::resource
+    buffer/allocation ownership policy
+    topology policy
+    exchange direction/tag mapping
+    buffer/view adaptation
+    fields
+    particles
+    signals
+    simulation flows
 ```
 
-There is no central scheduler that scans all tasks. Executors track only their
-own queued and active native operations. Completion directly releases
-successors to their target executor.
+PIConGPU builds on the PMacc APIs after PMacc migration is complete.
 
-## Core types
+---
 
-### `Event` and `Future<T>`
+## Core async/completion model
 
-`Event` is a direct handle to shared completion state. `Future<T>` adds an
-immutable result.
+### Sender-oriented primitive operations
+
+New backend primitives should be implementable as lazy operations. Constructing a
+primitive should not itself start MPI or enqueue device work. Starting the
+connected operation state initiates the native operation through the backend's
+synchronization authority.
+
+The implementation used during migration may be custom, but the conceptual model
+should remain:
+
+```text
+sender/factory
+    -> connect(receiver/environment)
+    -> operation state
+    -> start
+    -> native initiation
+    -> native progress/completion
+    -> value/error/stopped receiver completion
+```
+
+Do not add predecessor parameters merely because `Event` is currently convenient.
+Compose predecessor work outside the primitive. An eager `Event` API may be
+provided as a wrapper that spawns/starts a sender into an explicit scope.
+
+### `Event` and `Future<T>` eager bridge
+
+Representative migration interface:
 
 ```cpp
 enum class CompletionState : std::uint8_t
@@ -214,846 +578,1489 @@ enum class CompletionState : std::uint8_t
     pending,
     ready,
     failed,
-    cancelled
+    stopped
 };
 
 class Event;
-
-template<typename T>
-class Future;
+template<typename T> class Future;
 
 Event readyEvent();
-Event whenAll(std::span<Event const> events);
+Event joinAll(std::span<Event const> events);
 ```
 
 Required behavior:
 
 - exactly one terminal transition;
 - thread-safe observation and continuation registration;
-- error propagation to dependent work;
-- `whenAll()` completes only after every input is terminal, recording the first
-  failure or cancellation and publishing it after the final input completes;
-- a failed `whenAll()` is therefore still a quiescence boundary, not a
-  fail-fast notification;
-- a blocking wait for non-executor threads;
+- predecessor failure/stopped propagation in composition helpers by default;
+- `joinAll()` completes only after all inputs are terminal;
+- failed > stopped > ready precedence for quiescent joins;
+- no promise of race-defined first failure;
+- terminal completion implies represented native work no longer accesses
+  operation-owned/explicitly-retained state;
+- blocking waits are available to threads that do not provide required native
+  progress themselves, or are implemented by driving the configured PMacc run
+  loop/progress integration;
+- invalid blocking waits from a backend's own required progress authority are
+  diagnosed;
 - no task IDs or global lookup;
-- no user callback execution from a destructor;
-- no callback invocation while holding an event-state lock;
-- no recursive inline continuation chains;
-- an already-ready event requires no allocation.
+- no callback execution from destructors;
+- no callback invocation under an internal event-state lock;
+- no recursive inline continuation chains.
 
-Initial implementation:
+Initial `Event` implementation may continue using `std::shared_ptr`, a mutex,
+condition variable, and compact terminal state. Optimization comes only after
+profiling. `Future<T>` remains a shared immutable eager result for migration and
+runtime boundaries, not a replacement for sender value channels.
 
-- `std::shared_ptr` for state ownership;
-- `std::mutex` for subscriber registration;
-- `std::condition_variable` for blocking waits;
-- one atomic terminal state;
-- one flat counter for `whenAll()`.
+### Completion/continuation placement
 
-Prompt fatal-error notification, if needed, must use a separate runtime failure
-signal rather than weakening `whenAll()` completion semantics. Initially retain
-the first observed error; aggregate multiple errors only if diagnostics require
-it. Do not begin with a lock-free state machine or custom allocator. Add a slab or
-intrusive ownership only if profiles identify shared-state allocation as a
-material cost.
+Native completion and continuation execution are separate. An MPI request may
+finish on the MPI progress authority without running arbitrary PIConGPU code on
+that thread. Sender composition should use receiver environment/scheduler transfer
+or an explicit `continues_on`-style boundary to place application continuations on
+the PMacc run loop or another chosen runtime.
 
-### Completion phases for native device work
+For the eager Event bridge, continuation registration similarly accepts a target
+dispatch mechanism; completion only makes the continuation eligible.
 
-A device event may be usable by another device queue before it has completed
-on the host. Device completion state therefore has two milestones:
+### Async scopes and backend-local accounting
+
+`caravan::core` does not maintain a global registry of all submitted operations.
+Each backend context accounts for native work/resources it must finish or destroy
+safely.
+
+PMacc owns an explicit application async scope during migration. Dynamically
+spawned sender work is attached to that scope, and stage/shutdown code joins the
+scope. Prefer standard/P2300 async-scope semantics where supported; a temporary
+PMacc implementation must remain replaceable by them.
+
+A PMacc `run_loop`-style executor may drive host continuations and progress while
+waiting. It is an execution choice owned by PMacc, not a Caravan global manager.
+
+---
+
+## MPI integration
+
+### Scope
+
+`caravan::mpi` is an asynchronous integration layer over native MPI, not a new MPI
+API and not a general scheduler.
+
+The hard part is implemented once:
 
 ```text
-created -> submitted/native fence available -> completed
-                                      `-------> failed
+lazy MPI operation description
+       |
+start operation state in MPI-valid context
+       |
+initiate native nonblocking operation
+       |
+store one or more MPI_Request values in backend-owned state
+       |
+progress requests
+       |
+decode copied completion/status information
+       |
+publish value/error/stopped completion
 ```
 
-A device consumer may use the native fence at `submitted`. MPI and host
-consumers require `completed` unless a future stream-aware transport explicitly
-supports native device dependencies.
+Common send/receive/collective helpers are thin sender factories over the generic
+request engine, not independent progress state machines.
 
-### `Flow`
+### Native MPI types
 
-`Flow` replaces the useful part of transactions: a local cursor into the
-explicit dependency graph. It is not a structured-concurrency nursery: it does
-not own forked work, automatically join children, cancel siblings, or wait when
-destroyed.
+The MPI target may use native MPI concepts such as `MPI_Comm`, `MPI_Datatype`,
+`MPI_Op`, `MPI_Status`, and `MPI_Request` where appropriate. Do not create a
+parallel Caravan hierarchy mirroring the complete MPI type system.
+
+PMacc may still expose opaque IDs or topology snapshots at its own boundary to
+prevent direct MPI access from simulation code.
+
+### Generic nonblocking request sender
+
+The central primitive should support one or more requests created by arbitrary
+native initiation code without taking an explicit predecessor argument.
+
+Conceptually:
 
 ```cpp
-class Flow
-{
-public:
-    explicit Flow(Event start = readyEvent());
-
-    Flow(Flow const&) = delete;
-    Flow& operator=(Flow const&) = delete;
-    Flow(Flow&&) = default;
-    Flow& operator=(Flow&&) = default;
-
-    Flow fork() const;
-    void join(Event event);
-    Event done() const;
-
-    template<typename T_Executor, typename T_Operation>
-    Event then(T_Executor& executor, T_Operation&& operation);
-
-private:
-    Event m_tail;
-};
+auto request(Initiate initiate, Complete complete /* + explicit captures */);
 ```
 
-Rules:
+The returned object is sender-like. `connect` constructs operation state; `start`
+posts initiation to the selected MPI synchronization authority. The initiate hook
+creates `MPI_Request` values and transfers native request ownership into the MPI
+progress engine. Completion decodes copied status/result information and completes
+the receiver.
 
-- `Flow` is a local value and is not shared concurrently;
-- ordinary copying is disabled so a branch is created only by an explicit
-  `fork()`;
-- `fork()` creates an independent cursor at the current frontier but does not
-  register that cursor with its parent;
-- `join()` uses `whenAll()` and is required for forked work on which the parent
-  depends;
-- `done()` returns a snapshot of the current frontier; work appended to the
-  `Flow` later is not represented by an earlier snapshot;
-- `then()` explicitly submits an operation after the current frontier and
-  advances it;
-- destroying a `Flow` neither blocks nor cancels work;
-- low-level code may pass `Event` dependencies directly without using `Flow`;
-- no global or thread-local transaction stack exists.
+Any application storage needed by the request is either borrowed under an explicit
+lifetime precondition or explicitly captured/owned by the operation state. This is
+not represented by a generic mandatory `LifetimeSet` in Caravan core.
 
-Example:
+A migration wrapper may spawn this sender into a PMacc async scope and return an
+`Event`/`Future<T>` for imperative code.
+
+### Immediate MPI-context invocation
+
+Some MPI operations do not produce a request. Provide one lazy sender-like context
+invocation mechanism for short operations that must execute where MPI calls are
+permitted:
 
 ```cpp
-Flow main{stepStart};
-
-auto communication = main.fork();
-communication.then(device, packBoundary);
-communication.then(mpi, sendBoundary);
-
-main.then(device, updateCore);
-main.join(communication.done());
-main.then(device, updateBorder);
+auto invoke(Callable&& mpiCall);  // sender of T
 ```
 
-The Caravan runtime, rather than `Flow`, is the root supervision boundary: it
-accounts for all submitted operations during failure and shutdown even when a
-local `Flow` is no longer available. Buffer and native-resource lifetimes remain
-attached to submitted commands until native completion.
+Use it for topology/resource queries or communicator setup when no nonblocking
+request representation exists. It must not become an escape hatch for arbitrary
+expensive application work.
 
-Do not initially add a nursery or task-group abstraction. If migration shows
-that omitted joins are a recurring defect, add one callback-based `parallel()`
-or `forkJoin()` composition helper that registers every branch and advances the
-parent to `whenAll()` of the sealed branch tails. Such a helper structures graph
-construction without blocking at callback exit or promising cancellation of
-already-submitted native work. Branches must not escape the callback, and an
-exception during graph construction must still leave already-submitted work
-under runtime shutdown and error accounting.
+### Blocking MPI-context invocation
 
-## MPI executor
-
-### Public API
-
-The portable API uses opaque communicator, peer, tag, and datatype descriptors.
-Its generic operations are thin adapters over the native extension, so all
-requests use one ownership, progress, lifetime, error, and completion path.
-Raw MPI types appear only in the opt-in expert header `caravan/mpi_native.hpp`
-and are valid only inside MPI-owner-thread start, completion, or quiescent-call
-hooks. They never become producer-thread resources. This native extension is
-the escape hatch for operations not covered by Caravan's convenience API and
-prevents the convenience layer from growing into a function-for-function MPI
-wrapper.
-
-Representative API:
+Keep one sender-like mechanism for blocking MPI operations and MPI-enabled
+third-party libraries that cannot expose nonblocking requests:
 
 ```cpp
-class MpiExecutor
-{
-public:
-    Future<SendResult> send(
-        Event dataReady,
-        BufferLease buffer,
-        Peer destination,
-        MessageTag tag,
-        CommunicatorId communicator);
-
-    Future<ReceiveResult> receive(
-        Event bufferAvailable,
-        BufferLease buffer,
-        Peer source,
-        MessageTag tag,
-        CommunicatorId communicator);
-
-    template<typename T>
-    Future<T> allReduce(
-        Event dataReady,
-        BufferLease input,
-        BufferLease output,
-        ReduceOperation operation,
-        CommunicatorId communicator);
-
-    Event barrier(Event predecessor, CommunicatorId communicator);
-};
+auto invokeBlocking(Callable&& blockingMpiCall);  // sender of T
 ```
 
-`ReceiveResult` owns copied status information such as source, tag, and byte or
-element count. It is not a pointer borrowed during a callback.
+Dependencies are composed outside the primitive. The MPI backend must not silently
+wait for every previously active request: doing so can create dependency cycles.
+If a third-party call requires specific outstanding operations to finish, PMacc
+composes those dependencies explicitly before the blocking invocation.
 
-### Submission queue
+Once a blocking call enters a one-thread MPI authority, no other MPI call can run
+on that authority until it returns. This physical exclusion is a policy consequence,
+not an implicit dependency on unrelated active MPI operations.
 
-Use a mutex-protected `std::deque` plus `std::condition_variable` first.
-Producers push commands and the MPI thread drains them in batches. This is
-simpler than a custom lock-free MPSC queue and should already remove the
-current map, set, allocation, and polling overhead. Replace it only with
-benchmark evidence.
+### MPI progress and lifecycle are policies
 
-Commands whose dependencies are incomplete register a continuation that
-posts the command when ready. They do not occupy the active MPI request list.
-Receives should depend only on availability of their destination buffer so
-they can be posted as early as correctness permits.
+Separate operation semantics, request storage/completion decoding, progress
+strategy, and MPI lifecycle strategy.
+
+The first production policy remains the current dedicated worker:
+
+```text
+DedicatedThreadMpiPolicy
+    worker calls MPI_Init_thread(..., MPI_THREAD_FUNNELED, ...)
+    worker performs all MPI calls
+    worker progresses active requests
+    worker frees owned MPI resources
+    worker calls MPI_Finalize()
+```
+
+This remains the PMacc production configuration during migration because it
+provides independent progress and a simple MPI threading contract. The architecture
+must not prevent future attach/MULTIPLE/external-runtime/Sessions-based policies,
+but do not implement them without a consumer.
+
+### The MPI progress thread is not a scheduler
+
+The progress thread is an implementation authority for MPI initiation/progress and
+native MPI resource destruction. It must not be exposed as the place arbitrary
+`then` callbacks execute.
+
+When MPI completes a receiver, application continuation execution is transferred
+to the scheduler/environment selected by composition (for PMacc, often its
+run-loop/control scheduler or another runtime). This is a required P2300 alignment
+property to test explicitly.
 
 ### Active request storage and progress
 
-Store `MPI_Request` by value in contiguous executor-owned storage. Use
-`MPI_Testsome` to progress active requests in batches.
+For the dedicated-thread policy:
+
+- keep `MPI_Request` by value in contiguous owner-controlled storage;
+- use batched progress such as `MPI_Testsome`;
+- drain newly startable submissions in batches;
+- do not keep dependency-blocked application operations in the active native
+  request set; composition decides when their operation state is started;
+- post receives as early as their destination/lifetime contract allows;
+- spin while active requests exist where a core is reserved;
+- optionally yield/back off for oversubscribed development systems;
+- sleep only when no progress-requiring request is active.
+
+Do not replace simple queues with lock-free structures without measurement.
+
+### MPI resource handling and collective ordering
+
+The dedicated policy may centrally create/free communicators and other MPI-native
+resources to enforce its one-caller contract. Generic Caravan MPI APIs should not
+pretend those resources are backend-neutral.
+
+Collective ordering remains an application correctness responsibility across
+ranks, but managed helpers must not reorder collective initiation within one
+communicator merely because later sender dependencies become ready first. Maintain
+an initiation sequence/lane per managed communicator. Point-to-point operations
+need not be serialized behind that lane. Expert invocation that executes
+collectives must participate in a documented ordering mechanism or explicitly be
+caller-managed.
+
+---
+
+## Accelerator backend model
+
+### No universal `DeviceExecutor`
+
+Caravan core must not require all accelerators to be controlled by one
+Caravan-owned submission thread. Each accelerator backend documents native
+resources, ownership/borrowing, synchronization authority, operation start,
+completion representation, backend-local dependency capabilities, and portable
+host-completion fallback.
+
+### alpaka is the first backend
+
+Start with sender-oriented adaptation of caller-supplied alpaka queues/events. The
+native alpaka queue is already an asynchronous execution/submission mechanism, so
+Caravan should not add another owner thread/queue by default.
+
+A primitive kernel/copy/fill operation should be describable lazily and enqueue
+native work when its operation state is started. If current alpaka APIs force some
+eager preparation, keep externally visible queue submission on `start()`.
+
+Preserve:
 
 ```text
-drain newly ready commands
-start MPI_Isend/Irecv/Iallreduce/Ibarrier operations
-MPI_Testsome(active requests)
-process statuses and receive counts
-complete futures
-compact inactive entries
-repeat
+same queue dependency           -> queue FIFO/no host wait
+different queue, same device    -> native device wait/event where supported
+cross backend unsupported       -> host-visible completion then start consumer
+host/MPI completion             -> start after host-visible completion unless
+                                   measured native interop exists
 ```
 
-Completion only publishes event state and posts ready successor commands. It
-does not run simulation code on the MPI thread. Opt-in native extension hooks
-are the exception: their bounded start and status-decoding hooks execute on the
-MPI owner thread and must not run application work.
+Do not require accelerator sender completion to execute arbitrary application
+continuations on a device completion/progress authority; transfer continuation
+execution to the scheduler/environment chosen by composition.
 
-The progress policy is configurable:
+### Completion milestones and execution domains
 
-- default: spin while requests are active, assuming one CPU core is reserved;
-- optional: spin, then yield, for oversubscribed development systems;
-- sleep on the condition variable only when no MPI requests are active.
-
-The default and backoff values must be benchmarked on target systems. Do not
-use `MPI_Waitsome` in the main loop because it can prevent newly submitted
-commands from being started.
-
-### Communicator ownership
-
-The MPI thread creates and owns all communicators. Application threads receive
-plain immutable topology data and opaque `CommunicatorId` values.
-
-`GridController` data needed outside the MPI thread is copied into an
-immutable snapshot:
+An accelerator operation may have at least two useful milestones:
 
 ```text
-global rank
-world size
-Cartesian coordinates
-neighbor ranks
-periodicity
-host-local rank
+submitted/backend-native dependency available
+                |
+                +---- same backend may consume directly
+                |
+          host-visible terminal completion
 ```
 
-No accessor returns a raw MPI communicator.
+Do not collapse these if it forces same-device work through the host. Keep native
+milestones backend-local initially.
 
-Collective submission order remains the application's responsibility. The MPI
-executor preserves FIFO submission order per communicator and adds debug
-sequence checks, but it cannot make inconsistent collective control flow
-between ranks correct.
+The P2300 spike should test whether an alpaka execution domain/scheduler or a
+smaller sender transformation can preserve native queue/event dependencies across
+sender composition without putting backend types in `caravan::core`.
 
-### Native extension and MPI-enabled third-party libraries
+### Future SYCL and Kokkos support
 
-`caravan/mpi_native.hpp` provides the general extension boundary. A managed
-native asynchronous operation still obeys Caravan's dependency, lifetime,
-error, shutdown, and completion contracts: a bounded owner-thread hook starts
-one or more requests, transfers them to the executor, and a bounded completion
-hook converts copied statuses into an Event or Future result. Native
-communicators created by an extension are adopted into the executor's resource
-registry and returned as opaque `CommunicatorId` values.
+Do not add speculative backends. A SYCL adapter should be able to retain
+`sycl::event`-style dependencies where appropriate; a Kokkos adapter may expose
+coarser capabilities. Capability differences are acceptable.
 
-Inventory openPMD, ADIOS, HDF5, and other libraries that may call MPI
-internally. Any MPI-enabled entry point must execute on the MPI thread. Calls
-that cannot expose nonblocking requests use an exclusive quiescent submission:
-the marker waits for requests already active ahead of it, prevents later MPI
-commands from starting, invokes the blocking call on the MPI thread, and then
-releases queued work. Submission itself returns an Event or Future immediately;
-it does not block the producer thread. Shutdown, invalid resources, and invalid
-recursive use fail the returned completion rather than crashing. Once entered,
-an arbitrary blocking call is not cancellable and inconsistent collective
-control flow remains a fatal application error.
+---
 
-### Enforcement
+## Task-runtime interoperability
 
-After MPI migration, CI rejects MPI usage outside an explicit allowlist under
-the MPI implementation directory. This includes direct calls hidden in
-plugins and tests.
+Task runtimes are independent execution choices. Caravan must permit integration
+with Taskflow, HPX, oneTBB, OpenMP tasks, or a `std::execution` implementation
+without requiring them to execute a Caravan-specific task object.
 
-Debug builds record the MPI owner thread ID and assert it at every internal
-MPI entry point.
-
-`MPI_Abort` is requested through the MPI executor. If the MPI thread itself is
-unusable, the fallback is process termination, not an MPI call from another
-thread.
-
-## Device executor
-
-Use one device executor owner per accelerator initially. It owns:
-
-- alpaka queues;
-- native device events;
-- event pooling;
-- queued launch commands;
-- pending device completions.
-
-All producer threads may submit work. Only the owner calls backend queue and
-event APIs. This avoids relying on backend thread-safety and avoids driver
-contention from many submitters.
-
-Dependency lowering:
+Prefer direct sender/scheduler interoperability when a runtime provides it.
+Otherwise keep adapters local:
 
 ```text
-same queue dependency       -> FIFO ordering, no host wait
-different queue, same device -> native queue wait
-MPI or host dependency      -> post command after Event completion
+external runtime sender/task
+        |
+        +---- completion bridge if needed
+        |
+Caravan MPI/alpaka sender
+        |
+        +---- continues_on(external scheduler)
 ```
 
-The executor must continue submitting work ahead of device completion. A GPU
-operation must not host-wait merely because its predecessor is unfinished on
-the device.
+Do not treat MPI/device progress authorities as public schedulers merely because
+they execute backend code.
 
-Initially record a completion event for each exported asynchronous operation.
-After correctness is established, coalesce events within a same-queue `Flow`
-and record fences only at cross-queue, cross-domain, join, and host-wait
-boundaries.
+---
 
-CPU alpaka backends need a separate policy because a queue operation may run
-work on the submitting thread. Reuse the same event API, but do not assume the
-GPU executor's polling and thread-count policy is optimal for CPU execution.
+## PMacc run-loop and async-scope model
 
-## Buffer lifetime and access
+PMacc may use two explicit application-level control objects during migration:
 
-Every asynchronous command retains the underlying allocation until native
-completion.
+```text
+PmaccRunLoop
+    single-thread host/control scheduler
+    executes ready continuations
+    may integrate progress callbacks while blocking
+
+PmaccAsyncScope
+    owns dynamically spawned application operations
+    prevents stage/shutdown completion until spawned work is quiescent
+```
+
+If a supported P2300/standard implementation provides usable `run_loop` and
+counting-scope facilities, prefer them directly. Otherwise implement only the
+small semantic subset required for migration and keep the replacement boundary
+clear.
+
+Neither object is a global Caravan singleton. The run loop does not own dependency
+state or every native operation. The async scope does not decide where work runs.
+Backends remain independently capable of native progress.
+
+Blocking PMacc boundaries should prefer a scope/run-loop-aware wait that continues
+to run eligible host continuations/progress instead of recreating
+`Manager::waitForFinished()` task scanning.
+
+---
+
+## Optional resource-access dependency layer
+
+Resource-aware dependency inference is explicitly optional.
+
+A future target may provide a model such as:
+
+```cpp
+auto e = resources.submit(
+    kernel_sender(),
+    read(fieldE),
+    write(fieldB));
+```
+
+The resource tracker maintains logical resource identities and access leases,
+infers conflicting predecessor operations, and composes/starts the supplied sender
+only after those predecessors permit it. It does not execute kernels/MPI itself
+and does not own a general worker pool.
+
+The minimum initial access model should be read/write unless a real application
+requires more. Access leases remain logically active until the associated
+operation completes. The resource control state may need retained identity/state,
+but the underlying application allocation is not thereby Caravan-owned.
+
+Do not infer accesses from arbitrary pointers. Declarations are explicit. Debug
+hazard diagnostics may be added independently of release-build dependency
+inference.
+
+The resource layer must be removable: explicit sender composition remains a fully
+supported Caravan use mode.
+
+---
+
+## Standard execution / P2300 direction
+
+P2300 alignment is now an architectural rule, while direct dependency on a
+particular implementation remains optional during migration.
+
+### Sender-first backend APIs
+
+MPI and accelerator primitive operations should be sender-like and lazy. Eager
+`Event`/`Future` APIs are wrappers/bridges for imperative and runtime-dynamic code,
+not the primary backend abstraction.
+
+### Async scopes and dynamic spawning
+
+Use standard-style async scopes for dynamic work such as communication branches or
+particle chunk loops when toolchain support permits. Migration scope semantics
+should map mechanically to `counting_scope`/`simple_counting_scope`-style
+facilities or their eventual standard equivalents.
+
+Use spawn/spawn-future/ensure-started-style boundaries when eager operation is
+required. Caravan `Event` may serve as the type-erased eager result of such a
+spawn during migration.
+
+### Run loops and execution transfer
+
+Use `run_loop`-style schedulers for the PMacc single-thread control plane. Model
+execution-resource transitions explicitly (`starts_on`/`continues_on` semantics)
+so native completion on MPI/device authorities does not accidentally execute
+application code there.
+
+### Runtime dynamic boundaries
+
+Retain `Event`, dynamic `joinAll`, or other deliberate type-erasure firebreaks
+where fully typed sender expressions would cause awkward runtime storage or
+unacceptable compile-time/type complexity. Such boundaries are compatible with a
+sender-first architecture.
+
+### Long-term outcomes
+
+1. Current custom core implements P2300-compatible semantics and bridges.
+2. Standard/P2300 composition replaces most `Flow`/continuation code while keeping
+   Caravan MPI/alpaka implementations.
+3. If standard facilities satisfy eager spawning, scopes, waits, value/error/stopped
+   channels, and dynamic composition needs, shrink Caravan core to backend and
+   interoperability utilities plus optional resource-dependency support.
+
+No migration step may require rewriting native MPI progress or accelerator
+integration merely because the composition syntax changes.
+
+---
+
+## Buffer, resource, and ownership model
+
+PMacc owns high-level buffer/allocation lifetime policy. Caravan core does not
+provide a mandatory generic `KeepAlive` ownership system.
+
+An async PMacc view may be borrowed:
 
 ```cpp
 struct BufferView
 {
-    AllocationHandle allocation;
+    void* data;
+    Extents extents;
+    // lifetime guaranteed by enclosing PMacc scope/object
+};
+```
+
+or explicitly owning/retaining at the PMacc/backend boundary:
+
+```cpp
+struct OwnedBufferView
+{
+    AllocationHandle allocation;   // PMacc/backend-specific ownership handle
     void* data;
     Extents extents;
 };
 ```
 
-`BufferLease` or `AllocationHandle` should be intrusive or shared ownership of
-the allocation, not ownership of the high-level simulation object.
+A particular sender operation captures whatever ownership handle it requires in
+its operation state. If the storage is borrowed, the API documents the required
+lifetime. Backend-affine allocations/resources are finally released through the
+backend authority required by that resource.
 
 Consequences:
 
-- MPI sends cannot outlive their source allocation;
-- receives cannot outlive their destination allocation;
-- buffer destruction waits only when required by that allocation, not on a
-  global frontier;
-- GPU-aware MPI explicitly depends on the last use of its device buffer;
-- buffer accessors no longer call a global `startOperation()`.
+- MPI sends/receives cannot access storage after the operation reports terminal;
+- callers may choose borrowed storage when an enclosing scope already guarantees
+  lifetime;
+- operations may explicitly capture allocations when they need independent
+  lifetime;
+- destruction does not wait on a hidden global frontier;
+- resource dependency tracking, if enabled, tracks access hazards separately from
+  ownership;
+- GPU-aware MPI dependencies remain explicit;
+- buffer accessors no longer mutate a hidden global transaction.
 
-Do not initially implement automatic release-build hazard scheduling. Add a
-debug-only read/write access annotation system after the explicit dependency
-API is stable. It should detect unordered overlapping accesses without adding
-release-build serialization.
+---
 
 ## Communication composition
 
-### Send
+Communication remains ordinary explicit composition; it is not represented by
+hand-written polling task state machines.
 
-A host-staged send is an ordinary chain:
-
-```text
-data ready
--> pack/copy into contiguous device buffer
--> copy to host buffer
--> MPI_Isend
--> send complete
-```
-
-A GPU-aware send omits the host copy:
+### Host-staged send
 
 ```text
 data ready
--> pack into contiguous device buffer if needed
--> wait for device completion on MPI thread
--> MPI_Isend(device pointer)
--> send complete
+    -> pack/copy into contiguous device buffer
+    -> device-to-host copy
+    -> native nonblocking MPI send
+    -> send completion
 ```
 
-There is no `TaskSend`, child observer, or `TaskSendMPI` state machine.
+### GPU-aware send
+
+```text
+data ready
+    -> pack if required
+    -> satisfy GPU->MPI dependency using best available interop
+       (host completion fallback initially)
+    -> native nonblocking MPI send of device pointer
+    -> send completion
+```
 
 ### Receive
 
 ```text
-receive buffer available
--> MPI_Irecv
--> immutable ReceiveResult with received count
--> resize metadata
--> host-to-device copy if needed
--> unpack into destination view
--> receive complete
+destination lifetime contract satisfied + explicit dependency ready
+    -> post native MPI receive as early as correctness permits
+    -> immutable receive metadata/count
+    -> host-to-device transfer if required
+    -> unpack/insert
+    -> completion
 ```
 
-The receive may be posted independently of unrelated compute work. GPU-aware
-MPI receives depend on destination-buffer availability rather than the whole
-simulation frontier.
-
-### Fields
-
-Field exchange becomes:
+### Field exchange
 
 ```text
-fork one Flow per direction
-send direction: pack -> send
-receive direction: receive -> unpack/insert
-whenAll(direction completions)
+one branch per direction
+    send:    pack -> send
+    receive: receive -> unpack/insert
+joinAll(direction tails)
 ```
 
-The caller joins communication with core computation before border work.
-There is no parent field task that polls child IDs.
+Core computation can proceed in parallel and joins communication before border
+work that depends on it.
 
-### Particles
+### Particle exchange
 
-Particle exchange retains its required dynamic chunk loop:
+Keep the dynamic chunk loop, expressed with explicit continuation/coroutine/
+standard-execution composition rather than enum-driven polling task objects:
 
 ```text
 pack chunk
--> obtain count
--> send chunk
--> repeat if chunk was full
+ -> obtain count
+ -> send
+ -> repeat if full
 ```
 
 and:
 
 ```text
 receive chunk
--> insert chunk
--> repeat if chunk was full
--> fill border gaps after all directions finish
+ -> insert
+ -> repeat if full
+ -> fill border gaps after all receive directions are terminal
 ```
 
-Implement the first version with explicit continuations. `Future<T>` may gain a
-C++20 coroutine adapter later to express these loops as normal control flow,
-but the coroutine adapter must use the same event and executor core rather
-than introduce another scheduler.
+The initial migration may use explicit continuations. A coroutine or P2300
+composition layer must use the same backend operations rather than introducing
+another progress engine.
+
+---
 
 ## Error handling and shutdown
 
-Executor operations complete as ready, failed, or cancelled. Dependent work
-propagates predecessor failure by default and does not execute. Failure in one
-`Flow` branch does not implicitly mutate sibling branches; an explicit join
-remains pending until all inputs are terminal and then reports the retained
-failure.
+Operations become `ready`, `failed`, or `stopped`.
 
-Cancellation initially means rejecting or skipping work that has not started
-where the executor can do so. Already-submitted GPU work and active MPI
-operations are allowed to reach a terminal state; Caravan does not promise that
-MPI collectives or native device commands can be revoked. Prompt fatal-error
-notification is separate from the quiescent completion event.
+Default sender-composition failure/stopped propagation prevents dependent operations
+from starting unless an operation explicitly handles that terminal state.
+
+A quiescent `joinAll()` waits for every branch to become terminal before
+publishing the retained failure/stopped result.
 
 Rules:
 
-- no exception escapes an executor thread;
-- `Future<T>::result()` and blocking waits report stored errors;
-- no blocking wait is allowed from an executor on work that requires that
-  executor;
-- communicator error handlers use `MPI_ERRORS_RETURN` where possible;
-- shutdown rejects new application submissions;
-- executors drain or explicitly fail queued work;
-- active MPI requests are completed or handled by the documented fatal path;
-- device queues finish before native resources are destroyed;
-- MPI resources are freed and `MPI_Finalize` runs on the MPI thread;
-- cooperative tasks cannot escape shutdown accounting.
+- no exception escapes a backend progress/owner thread;
+- blocking result access reports stored errors;
+- blocking on work that requires the calling backend's own progress authority is
+  forbidden/diagnosed;
+- shutting down a backend context rejects new submissions to that context;
+- each backend context resolves its queued-but-not-started operations as
+  failed/stopped according to its documented shutdown policy;
+- active native operations are allowed to reach a safe terminal state unless the
+  backend has a supported cancellation mechanism;
+- backend-native resources are destroyed only after represented operations are
+  resource-safe terminal, and destruction occurs through the required backend
+  authority;
+- MPI lifecycle cleanup occurs in the context required by the selected MPI
+  policy;
+- arbitrary blocking native calls already entered are not promised cancellable;
+- fatal MPI/process failures have a documented process-termination path.
 
-Application-thread failure is sent to the MPI thread. The MPI thread then
-coordinates clean shutdown or invokes `MPI_Abort` according to failure type.
+Prompt fatal-error notification, if required by PIConGPU, is separate from the
+quiescent completion object.
 
-## Legacy components to remove
+---
 
-The completed migration removes:
+## PMacc architectural boundary
 
-- `pmacc::Manager`;
-- `TransactionManager` and `Transaction`;
-- the global transaction API;
-- `ITask`, `DeviceTask`, and `MPITask`;
-- `Factory`, `FieldFactory`, and `ParticleFactory` task allocation;
-- `EventNotify`, `IEvent`, `IEventData`, and `EventType`;
-- integer `EventTask` IDs;
-- `TaskLogicalAnd`;
-- `TaskSendMPI` and `TaskReceiveMPI`;
-- `TaskSend` and `TaskReceive`;
-- field and particle parent polling tasks;
-- direct MPI access from `CommunicatorMPI` callers;
-- heap-allocated `MPI_Request` objects;
-- `mpiBlocking()` and manual event-system pumping around collectives.
+PMacc should become the first major consumer of Caravan, not part of Caravan's
+implementation.
 
-The native queue and event wrappers may be retained temporarily, but ownership
-moves into `DeviceExecutor` and manual intrusive event handling should be
-simplified where possible.
+PMacc owns:
 
-## Migration phases
+- process/application policy selecting the dedicated MPI configuration;
+- an explicit application async scope for dynamically spawned PMacc work;
+- a selected single-thread `run_loop`-style control scheduler when useful;
+- topology representation exposed to simulation code;
+- communication direction and tag mapping;
+- buffer/allocation ownership and borrowed-view policy;
+- the decision whether to enable/use an optional resource dependency tracker;
+- field and particle operation composition;
+- signals and simulation-stage composition;
+- decisions about which CPU/task runtime, if any, to use.
 
-The migration has a hard project boundary:
+PMacc must not:
 
-- Phases 0 through 6 change only the Caravan targets, PMacc, PMacc
-  tests, and `share/pmacc/examples/gameOfLife2D` and
-  `share/pmacc/examples/heatEquation2D`.
-- No migration work is done under `include/picongpu` or `share/picongpu`
-  during these phases. PIConGPU compatibility is not preserved: its build may
-  break as legacy PMacc interfaces are removed.
-- Do not add or retain adapters solely to keep untouched PIConGPU code working.
-  Delete each legacy component as soon as its last migrated PMacc user is gone.
-- Phase 7 cannot start until the PMacc completion gate at the end of Phase 6
-  passes. Phase 7 then restores PIConGPU by porting it to the new APIs rather
-  than restoring removed compatibility interfaces.
+- reimplement generic MPI request progress;
+- expose a global transaction stack;
+- require Caravan-specific general tasks;
+- hide dependency creation in buffer accessors;
+- make the PMacc run loop a Caravan-global manager;
+- rely on arbitrary application callbacks executing on MPI/device progress
+  authorities;
+- assume Caravan owns application resources merely because an async operation uses
+  them;
+- directly mutate active backend-native state.
 
-Each phase's in-scope runtime, PMacc, and PMacc-example targets must build and
-test before the next phase starts. Target-GPU measurements may remain pending
-through implementation, but must be collected from the recorded baseline
-revision before the Phase 6 exit gate and performance comparison. This deferral
-does not relax CPU tests, available CUDA compile checks, or phase-local
-correctness gates. PIConGPU is required to build again only at the end of
-Phase 7. Do not maintain two independent long-lived runtimes; adapters are
-temporary PMacc migration tools and are deleted immediately after their last
-in-scope user is ported.
+PIConGPU is ported only after the PMacc migration gate passes.
 
-### Phase 0: PMacc inventory and baseline
+---
+
+# Migration plan
+
+## Hard migration boundary
+
+Until the PMacc gate passes:
+
+- modify Caravan, PMacc, PMacc tests, and the selected PMacc examples;
+- do not migrate `include/picongpu` or `share/picongpu` source;
+- PIConGPU is allowed to stop building as legacy PMacc interfaces are removed;
+- do not retain old interfaces solely for untouched PIConGPU code;
+- keep one implementation of each runtime/progress mechanism; compatibility
+  adapters are temporary and deleted after their last PMacc user is migrated.
+
+PIConGPU migration begins only after PMacc and its examples run without the
+legacy event system.
+
+---
+
+## Phase 0: Inventory and baselines
+
+**Current state:** implementation baseline largely complete; target-GPU
+measurements still required before the PMacc exit gate.
 
 1. Inventory every direct MPI call in PMacc, PMacc examples, and PMacc tests.
-   Defer the PIConGPU and enabled third-party inventory to Phase 7.
-2. Classify calls as bootstrap, topology, point-to-point, collective, signal,
-   shutdown, or error handling.
-3. Inventory every `EventTask`, transaction, manager wait, and custom task
-   state machine used by PMacc and its examples.
-4. Record CPU-serial and CUDA compile baselines for PMacc and both target
-   examples. Also record one untouched PIConGPU build, behavior, and full-step
-   performance baseline for later comparison, without inventorying or changing
-   PIConGPU source.
-5. Add focused current-behavior integration tests for:
-   - device operation ordering;
-   - fork/join halo exchange;
-   - host-staged MPI exchange;
-   - GPU-aware MPI exchange where hardware is available;
-   - field exchange;
-   - multi-chunk particle exchange;
-   - signal barriers;
-   - shutdown with outstanding work.
-6. Record reproducible output checks for `gameOfLife2D` and `heatEquation2D`,
-   including their multi-rank paths.
-7. Benchmark current host submission cost, manager CPU time, MPI ping-pong,
-   halo exchange overlap, and both example runtimes.
+2. Classify calls as bootstrap/lifecycle, topology/resource, request-based,
+   immediate invocation, collective, signal, shutdown, error, or third-party
+   MPI use.
+3. Inventory every transaction, `EventTask`, manager wait, observer, task ID, and
+   custom polling state machine in PMacc and target examples.
+4. Record CPU-serial and CUDA compile baselines.
+5. Record an untouched PIConGPU build/behavior/performance reference without
+   modifying PIConGPU source.
+6. Perform a read-only PIConGPU requirements inventory now: identify direct MPI,
+   legacy event-system use, custom async state machines, MPI-enabled third-party
+   libraries/plugins, lifecycle assumptions, and unusual communicator/collective
+   patterns. Do not modify or migrate PIConGPU source; use the inventory only to
+   prevent Caravan/PMacc design choices that would make Phase 8 impossible.
+7. Add focused regression tests for device ordering, fork/join halo exchange,
+   host-staged and GPU-aware MPI, field exchange, particle multi-chunk exchange,
+   signals, and shutdown with outstanding work.
+8. Record reproducible output for `gameOfLife2D` and `heatEquation2D`, including
+   multi-rank paths.
+9. Benchmark submission cost, manager CPU cost, MPI ping-pong, halo overlap, and
+   example runtimes.
+10. Before the Phase 7 PMacc gate, collect deferred target-GPU and GPU-aware MPI
+   baselines from the recorded baseline revision.
 
-Implementation exit criterion: the CPU behavior baseline, inventories,
-migration paths, and hardware-independent regression tests are recorded. This
-permits PMacc migration work to proceed.
+**Exit criterion:** hardware-independent behavior baseline and inventories are
+recorded; deferred target measurements are explicitly tracked.
 
-Deferred target criterion: target CUDA and GPU-aware MPI behavior and
-performance baselines are recorded from the baseline revision before the
-Phase 6 exit gate. Phase 7 cannot begin without them.
+---
 
-### Phase 1: Completion core
+## Phase 1: Completion core
 
-1. Implement `Event`, `Future<T>`, failure propagation, and `whenAll()` in
-   `caravan::core`.
-2. Implement target-executor continuation posting without inline recursive
-   callback execution.
-3. Add a deterministic inline test executor.
-4. Add multithreaded tests for completion/registration races.
-5. Add blocking-wait deadlock guards.
+**Current state:** implemented and tested; preserve behavior while adjusting the
+architecture in Phase 2.
 
-Exit criterion: ThreadSanitizer passes completion-core tests, every state
-transition is exactly once, and `whenAll()` uses one node rather than a tree.
+1. Maintain exactly-once completion state.
+2. Maintain thread-safe continuation registration/completion races.
+3. Maintain flat runtime-sized join implementation.
+4. Maintain failure propagation and blocking-wait guards.
+5. Maintain deterministic inline/fake execution support for tests.
+6. Keep allocation/state representation simple until profiling justifies custom
+   ownership or a slab.
 
-### Phase 2: Dedicated MPI runtime
+**Exit criterion:** current completion-core tests and ThreadSanitizer coverage
+continue to pass.
 
-1. Keep the simulation on the process main thread and create a dedicated
-   Caravan worker that owns the complete MPI lifecycle.
-2. Request and require `MPI_THREAD_FUNNELED` from the MPI worker.
-3. Implement the MPI submission queue, executor loop, contiguous active request
-   storage, and `MPI_Testsome` progress in `caravan::mpi`.
-4. Move MPI initialization, topology setup, communicator management, and
-   finalization into the MPI thread.
-5. Expose immutable topology snapshots and opaque communicator IDs.
-6. Implement point-to-point futures and receive results.
-7. Implement nonblocking collective and barrier futures.
-8. Implement the opt-in native extension for managed request batches, adopted
-   communicators, typed completion, and exclusive quiescent blocking calls.
-9. Reimplement Caravan's generic point-to-point, barrier, collective, and
-   communicator conveniences on that extension, deleting their duplicate
-   request-storage and completion paths. Keep bootstrap, progress, and resource
-   registries in the core.
-10. Route PMacc signal handling through the MPI executor.
-11. Temporarily adapt legacy `TaskSendMPI` and `TaskReceiveMPI` to submit to the
-    MPI executor and poll only the returned future.
-12. Route remaining direct MPI operations in PMacc and its examples through
-    Caravan conveniences or narrowly scoped native extensions on the MPI thread.
-13. Add a PMacc-scoped CI direct-MPI allowlist. PIConGPU is out of scope until
-    Phase 7 and receives no compatibility exemption.
+---
 
-Exit criterion: no PMacc example, PMacc task, or PMacc helper thread calls MPI directly;
-the dedicated Caravan worker continues progressing requests while the process
-main application thread sleeps or computes.
+## Phase 2: Migrate the existing Caravan implementation to the sender-oriented library architecture
 
-### Phase 3: Device executor
+This phase occurs before adding more PMacc functionality. Reuse the working
+completion/MPI code, but change the conceptual/API boundaries so new work aligns
+with P2300 semantics and the clarified Caravan scope.
 
-1. Implement one device executor owner and thread-safe submission in
-   `caravan::alpaka`.
-2. Move alpaka queue and native event ownership into it.
-3. Implement same-queue FIFO and cross-queue native-wait dependency lowering.
-4. Implement device completion publication and cross-domain completion.
-5. Adapt existing kernel, copy, fill, and size operations to return new Events.
-6. Preserve CPU backend behavior with an explicit backend policy.
+### 2.1 Separate operation description, start, completion, execution, and progress
 
-Exit criterion: producer threads can submit device work concurrently, native
-GPU dependencies do not host-wait, and device event completion on migrated
-PMacc paths does not depend on the legacy manager.
+1. Remove assumptions from `caravan::core` that every backend is a Caravan-owned
+   executor thread.
+2. Introduce an internal sender-like contract/prototype where construction is lazy,
+   connect owns operation state, and start performs native initiation.
+3. Make continuation dispatch/execution placement explicit; completion on an MPI or
+   device authority must not imply arbitrary continuation execution there.
+4. Ensure backend APIs do not consume `Flow` internals.
+5. Keep `Flow` optional and layered above sender/Event bridges.
 
-### Phase 4: Explicit `Flow` and buffer leases
+### 2.2 Reposition `Event`/`Future` as eager bridges
 
-1. Implement local `Flow` sequencing, fork, and join.
-2. Remove event-system hooks from buffer accessors.
-3. Add allocation leases to asynchronous buffer views.
-4. Port basic kernel, copy, set-value, and size-transfer call sites.
-5. Add debug checks for executor-thread blocking waits and invalid lifetimes.
+1. Preserve exactly-once terminal state and thread-safe registration.
+2. Preserve flat runtime-sized quiescent joins.
+3. Keep `Event` useful for already-started work, runtime containers, and imperative
+   PMacc migration boundaries.
+4. Do not make new backend primitives require predecessor `Event` parameters.
+5. Provide/prototype `Event -> sender` and sender -> spawned `Event` bridges.
+6. Keep `Future<T>` as an eager shared-result migration boundary, not a competing
+   general asynchronous value model.
 
-Exit criterion: a representative PMacc example step uses explicit Flows and
-no global transaction state for device ordering.
+### 2.3 Narrow lifetime responsibility to operation state and explicit captures
 
-### Phase 5: Generic PMacc communication and examples
+1. Caravan core owns/retains only its own operation/completion state.
+2. Remove the architectural requirement for generic core `KeepAlive`/`LifetimeSet`
+   ownership of arbitrary application resources. These can live in the optional caravan::resource layer.
+3. Define borrowed-resource preconditions for primitive operations.
+4. Allow particular operation state to explicitly capture PMacc/backend ownership
+   handles when independent storage lifetime is required.
+5. Keep MPI communicators/requests, accelerator events/queues, and other
+   backend-affine native resources owned and destroyed by their backend authority.
+6. Ensure terminal completion means native work can no longer access operation-owned
+   or explicitly captured state.
 
-1. Port `Exchange` send and receive to operation chains.
-2. Preserve host staging, device double buffering, and GPU-aware MPI.
-3. Return immutable receive counts.
-4. Port `GridBuffer::asyncCommunication` to direction Flows and flat joins.
-5. Validate per-direction buffer-reuse dependencies across time steps.
-6. Port `gameOfLife2D` to explicit fork/join Flows.
-7. Port `heatEquation2D` to explicit communication and compute Flows, including
-   gather and reduction operations.
-8. Run both examples on their CPU paths and compile their CUDA paths. Exercise
-   the existing multi-rank configurations.
+### 2.4 Refactor MPI around lazy sender-like native operations
 
-Exit criterion: both PMacc examples use the new runtime and pass their recorded
-behavior checks. Legacy send and receive tasks are retained only if a remaining
-Phase 6 PMacc migration step still needs them, never for PIConGPU compatibility.
+1. Rename/reframe current MPI executor/runtime concepts as MPI context/backend plus
+   progress/lifecycle policy, not a general scheduler.
+2. Preserve the current dedicated worker policy behavior.
+3. Make the native nonblocking request engine the central implementation.
+4. Prototype/implement a sender-like generic request primitive whose `start()`
+   performs MPI initiation in the valid authority.
+5. Reimplement send/receive/collective helpers as thin factories over that path.
+6. Replace predecessor-taking `invoke`/`invokeBlocking` APIs with composable
+   sender-like operations; caller dependencies are composed outside them.
+7. Preserve per-communicator collective initiation ordering.
+8. Avoid Caravan replicas of MPI types unless they express a Caravan-specific
+   safety property.
 
-### Phase 6: Complete PMacc and pass the PIConGPU entry gate
+### 2.5 Separate MPI completion from continuation execution
 
-1. Replace PMacc field send/receive parent tasks with direction Flows.
-2. Replace PMacc particle send/receive tasks with continuation-based chunk
-   loops.
+1. Isolate request initiation/storage/completion decoding from worker-loop policy.
+2. Isolate MPI init/finalize ownership into the dedicated policy.
+3. Preserve FUNNELED production behavior.
+4. Ensure the MPI worker never becomes a public scheduler for arbitrary
+   continuations.
+5. Prototype an explicit execution-transfer path from MPI completion to a PMacc
+   run-loop/external scheduler (`continues_on`-style semantics).
+
+### 2.6 Preserve accelerator-native dependency information
+
+1. Ensure `caravan::core` does not erase backend-local dependency information.
+2. Do not add a generic cross-backend `NativeDependency` protocol yet.
+3. Use host-visible completion at independent backend boundaries initially.
+4. Revisit generic native interop only with a real second path.
+
+### 2.7 P2300 feasibility and semantic-alignment spike
+
+This is now a design gate, not merely a future adapter experiment.
+
+1. With a viable implementation/toolchain, prototype one sender chain:
+   accelerator operation -> MPI request -> host continuation.
+2. Verify lazy construction/start semantics.
+3. Verify MPI completion can feed a receiver without exposing the MPI thread as an
+   application scheduler.
+4. Prototype explicit `continues_on`/scheduler transfer to a single-thread
+   `run_loop`-style PMacc scheduler.
+5. Prototype a small async scope with spawn/join semantics comparable to
+   `counting_scope`/`simple_counting_scope` or the available implementation.
+6. Test an eager/type-erased bridge from a spawned sender to `Event`.
+7. Check CUDA/HIP translation-unit constraints, compiler support, compile-time/type
+   complexity, failure/stopped mapping, and runtime-dynamic join gaps.
+8. Record concrete blockers if the ecosystem is unsuitable; preserve the same
+   semantics in the custom migration layer instead of inventing incompatible
+   concepts.
+
+### 2.8 Define the optional resource-layer boundary
+
+1. Specify a minimal pluggable interface around stable resource identity and
+   explicit `read`/`write` access declarations.
+2. Specify access-lease lifetime until operation completion.
+3. Specify that inferred dependencies are lowered to ordinary sender/Event
+   composition.
+4. Specify that underlying application storage ownership is outside the resource
+   tracker.
+5. Do not require or fully implement the resource tracker for the PMacc migration
+   unless a representative use case shows clear value.
+
+### 2.9 Preserve current PMacc integration during refactor
+
+1. Update temporary PMacc attachment and legacy MPI adapters to the revised MPI
+   context/API.
+2. Preserve currently migrated signal, reduction, gather, barrier, communicator,
+   topology, and point-to-point functionality.
+3. Do not expand the migrated PMacc feature set until this architecture passes the
+   existing tests.
+
+**Exit criterion:** existing Caravan/PMacc functionality still works; new primitive
+async APIs have sender/P2300-compatible semantics; `Event` is explicitly an eager
+bridge; core no longer promises generic application-resource ownership; MPI
+completion is separable from continuation placement; the dedicated MPI thread is
+an explicit progress/lifecycle policy; a run-loop and async-scope prototype is
+documented; resource dependency inference has a pluggable non-core boundary; no
+global Caravan supervisor or general task/scheduler hierarchy has been introduced.
+
+---
+
+## Phase 3: Complete the dedicated-thread MPI backend and PMacc MPI migration
+
+1. Finish the dedicated-thread submission queue and batched active-request
+   progress path.
+2. Complete point-to-point operations, receive status/count metadata, required
+   collectives, barriers, communicator creation/destruction, and topology setup
+   through the generic MPI mechanisms.
+3. Route all remaining PMacc direct MPI operations and target PMacc examples
+   through `caravan::mpi` or narrowly scoped generic native invocation.
+4. Route PMacc signal operations through the same MPI context.
+5. Inventory PMacc-relevant MPI-enabled third-party calls and route blocking
+   cases through `invokeBlocking()` after composing the required safety/quiescence
+   dependencies outside the primitive.
+6. Implement and test per-communicator collective initiation ordering for managed
+   collective helpers; dependency-ready later collectives must not pass earlier
+   submitted collectives on the same communicator.
+7. Preserve early receive posting where explicit dependencies and the destination lifetime contract permit.
+8. Add a PMacc-scoped CI rule/allowlist rejecting direct MPI calls outside the
+   approved MPI integration layer during this migration stage.
+9. Verify progress continues while the process application thread sleeps or does
+   CPU work.
+10. Verify startup/shutdown, failure propagation, communicator lifetime, and
+   in-flight request handling.
+
+**Exit criterion:** no PMacc example, task, helper, or simulation thread directly
+calls MPI; the selected production configuration uses the dedicated FUNNELED
+worker and progresses independently of application polling.
+
+---
+
+## Phase 4: Alpaka accelerator backend
+
+1. Implement `caravan::alpaka` as the first accelerator backend.
+2. Make kernel/copy/fill/size primitives sender-oriented/lazy at the public/internal
+   composition boundary; native queue submission occurs on operation start.
+3. Adapt caller-supplied alpaka queues/events directly; define whether each native
+   resource is borrowed or backend-owned.
+4. Do not introduce a Caravan submission thread/queue by default.
+5. Implement same-queue FIFO dependency lowering.
+6. Implement cross-queue native waits where backend support permits.
+7. Publish host-visible completion independently from backend-native dependency
+   availability.
+8. Keep alpaka-native dependency/event information inside `caravan::alpaka` for
+   alpaka-to-alpaka chaining; use host completion for MPI/cross-backend edges at
+   this stage.
+9. Prototype the smallest P2300 execution-domain/scheduler transformation needed
+   to preserve native dependency chaining across composed accelerator senders.
+10. Preserve CPU alpaka backend behavior with an explicit policy rather than GPU-
+    specific polling assumptions.
+11. Test continuation transfer so completion observation does not accidentally run
+    arbitrary PMacc code on a backend authority.
+12. Test concurrent submission to supported caller-supplied queue configurations.
+
+**Exit criterion:** PMacc can start accelerator operations through sender-like
+alpaka primitives; native accelerator-only chains do not host-wait unnecessarily;
+no legacy Manager is required for migrated completion paths.
+
+---
+
+## Phase 5: Explicit PMacc dependencies, async scope, run loop, and ownership migration
+
+1. Introduce/select the PMacc application async scope used to own dynamically
+   spawned migration work.
+2. Introduce/select a single-thread `run_loop`-style PMacc control scheduler for
+   host continuations and wait/progress integration where useful.
+3. Prefer standard/P2300 implementations for scope/run loop if the supported
+   toolchain is viable; otherwise keep migration implementations intentionally
+   replaceable by those semantics.
+4. Implement/finalize `Flow` only as temporary PMacc-friendly graph-construction
+   sugar over sender/Event APIs.
+5. Remove global transaction state from a representative PMacc simulation step.
+6. Remove event-system hooks from buffer accessors.
+7. Port PMacc buffer/view ownership semantics: borrowed views where enclosing
+   lifetime is sufficient; explicit allocation-handle capture by operation state
+   where asynchronous work must extend storage lifetime.
+8. Port basic kernel, copy, fill/set, and size-transfer call sites.
+9. Replace Manager-style blocking progress on migrated paths with scope/run-loop-
+   aware waits rather than global task scanning.
+10. Add debug checks for invalid waits and borrowed-lifetime violations where
+    practical.
+11. Keep resource-access dependency inference disabled/optional at this stage;
+    explicit composition is the correctness baseline.
+12. Add a structured fork/join helper if forgotten manual joins prove to be a
+    recurring migration defect.
+
+**Exit criterion:** a representative PMacc example uses explicit local sender/Event
+composition, an explicit async scope, and selected run-loop execution; application
+resource ownership is explicit rather than a generic Caravan `KeepAlive` rule; no
+buffer accessor mutates global scheduling state and no Caravan-global Manager has
+been introduced.
+
+---
+
+## Phase 6: PMacc communication and target examples
+
+1. Port `Exchange` send and receive to explicit operation chains.
+2. Preserve host staging, double buffering, and GPU-aware MPI.
+3. Use the generic MPI request API beneath all send/receive convenience code.
+4. Return immutable receive metadata/counts.
+5. Port `GridBuffer::asyncCommunication` to explicit per-direction branches and
+   one flat runtime-sized join.
+6. Validate buffer-reuse dependencies across time steps and directions.
+7. Port `gameOfLife2D` to explicit communication/compute composition.
+8. Port `heatEquation2D`, including gather and reduction paths.
+9. Run CPU paths, multi-rank configurations, and available CUDA compile/runtime
+   validation.
+10. Compare behavior against Phase 0 outputs.
+
+**Exit criterion:** both target PMacc examples use Caravan backends and explicit sender/Event
+composition and pass recorded behavior checks. Legacy send/receive task classes
+remain only if a still-unmigrated Phase 7 PMacc path requires them.
+
+---
+
+## Phase 7: Complete PMacc and pass the PIConGPU entry gate
+
+1. Replace remaining field parent send/receive polling tasks with explicit
+   direction composition.
+2. Replace particle send/receive enum/polling tasks with continuation-based,
+   coroutine-based, or standard-execution-compatible chunk loops using the same
+   Caravan backend operations.
 3. Join all receive directions before field insertion or particle gap filling.
-4. Add exact-capacity and multi-chunk stress tests.
-5. Port remaining PMacc reductions, gather operations, signals, examples, and
-   tests.
+4. Add exact-capacity, empty, partial, and multi-chunk stress tests.
+5. Port remaining reductions, gathers, signals, examples, tests, and helper
+   operations.
 6. Remove `FieldFactory`, `ParticleFactory`, and their task classes as soon as
-   their migrated PMacc replacements pass, without retaining PIConGPU
-   compatibility wrappers.
-7. Delete Manager, transactions, legacy tasks, observers, IDs, factories,
-   event pumping, and all PMacc migration adapters after their last PMacc use.
-8. Run the complete PMacc unit and integration test suite, `gameOfLife2D`, and
-   `heatEquation2D` with CPU execution and CUDA compile validation.
-9. Compare PMacc and example behavior and performance with the Phase 0
-   baselines.
+   migrated replacements pass.
+7. Delete Manager, transactions, legacy task IDs, observers, logical-and tasks,
+   event pumping, legacy MPI/device task classes, and PMacc migration adapters
+   after their last use.
+8. Run complete PMacc unit/integration tests and target examples.
+9. Collect the deferred target GPU/GPU-aware MPI baseline if not already done.
+10. Compare behavior and performance with Phase 0.
+11. Verify Caravan core and backends still contain no PMacc/PIConGPU headers.
 
-Exit criterion and PIConGPU entry gate: PMacc and both target examples use the
-new runtime without manager polling or global transaction state, all PMacc
-tests pass, MPI progress is owned by the dedicated Caravan worker, and the
-legacy runtime has been deleted. No PIConGPU source has been changed, and PIConGPU may
-be broken by the removed PMacc interfaces. Only then may Phase 7 begin.
+**Exit criterion / PIConGPU entry gate:** PMacc and target examples use the new
+Caravan architecture without global transaction/manager task scanning; PMacc
+uses explicit scope/run-loop policy where required; direct MPI is
+restricted to the integration layer; the production MPI policy progresses on
+its dedicated worker; accelerator work uses the alpaka backend; legacy event
+system code required by PMacc has been deleted; and the agreed performance gates
+are met or deviations are explicitly understood and accepted.
 
-### Phase 7: PIConGPU inventory and migration
+Only then may PIConGPU source migration begin.
 
-1. Inventory and classify every direct MPI call, event-system use, manager
-   wait, transaction, and custom task state machine in PIConGPU and enabled
-   third-party integrations.
-2. Use the untouched Phase 0 PIConGPU baseline as the migration reference; do
-   not restore deleted legacy interfaces merely to reproduce it.
-3. Port PIConGPU field and particle call sites to the already tested PMacc
-   operation-chain APIs.
-4. Port reductions, gather, checkpoints, signals, plugins, diagnostics,
+---
+
+## Phase 8: PIConGPU inventory and migration
+
+1. Refresh the read-only PIConGPU requirements inventory from Phase 0 and resolve
+   any changes since it was recorded.
+2. Classify any newly discovered MPI use into generic request-based, immediate
+   MPI-context, blocking third-party, lifecycle/error, managed collective ordering,
+   or application composition.
+3. Use the untouched Phase 0 PIConGPU baseline as the reference; do not restore
+   removed PMacc compatibility APIs merely to reproduce it.
+4. Port field and particle code to the already-tested PMacc asynchronous
+   operation APIs.
+5. Port reductions, gathers, signals, checkpoints, plugins, diagnostics,
    examples, and tests.
-5. Move MPI-enabled external-library calls onto the MPI thread at documented
-   quiescence points or replace them with async operations.
-6. Remove all raw communicator access from public APIs.
-7. Enable the final CI rule forbidding MPI outside the implementation layer.
+6. Route MPI-enabled external-library calls through the documented Caravan MPI
+   context or replace them with native nonblocking integration when available.
+7. Keep PIConGPU task-runtime choices independent of Caravan. Do not introduce a
+   Caravan task hierarchy during the port.
+8. Remove raw MPI calling capability from ordinary PIConGPU simulation/plugin
+   code; native handles may exist only where needed to submit through the MPI
+   integration boundary.
+9. Enable the final CI rule forbidding MPI calls outside the approved integration
+   layer.
+10. Validate CPU, threaded CPU, CUDA, multi-rank, checkpoint, plugin, field, and
+    particle configurations according to available CI/hardware.
 
-Exit criterion: all supported PMacc and PIConGPU configurations use the new
-runtime and obey single-thread MPI ownership.
+**Exit criterion:** all supported PMacc/PIConGPU paths use explicit asynchronous
+composition and Caravan backend integration; PIConGPU contains no dependency on
+the removed event runtime.
 
-### Phase 8: Final cleanup and documentation
+---
 
-1. Remove any migration-only wrappers introduced while porting PIConGPU.
-2. Remove stale legacy includes, tests, documentation, and build rules.
-3. Update PMacc and PIConGPU documentation and examples.
-4. Verify shutdown no longer depends on singleton destruction order.
+## Phase 9: Cleanup, documentation, and library boundary validation
 
-Exit criterion: no legacy event-system source, compatibility API, or migration
-wrapper remains.
+1. Remove all migration-only wrappers and compatibility aliases.
+2. Remove stale legacy includes, tests, documentation, build rules, and dead
+   state-machine code.
+3. Document Caravan independently from PMacc:
+   - completion semantics;
+   - operation-state lifetime, borrowed/owned application-resource contracts, and backend-affine resources;
+   - backend contract;
+   - backend-local native dependency handling and the criteria for introducing
+     future cross-backend interop;
+   - MPI generic request API;
+   - dedicated-thread MPI policy;
+   - accelerator backend rules;
+   - sender/P2300 semantics, async scopes, run-loop integration, and standard-execution direction;
+   - optional resource-access dependency inference boundary.
+4. Document PMacc's selected production policies separately from Caravan's
+   generic capabilities.
+5. Verify shutdown does not depend on singleton destruction order.
+6. Verify one can unit-test `caravan::core` without MPI/alpaka and test
+   `caravan::mpi` without PMacc.
+7. Review whether target boundaries justify splitting packages/CMake targets or
+   external extraction. Do not extract solely for appearance.
 
-### Phase 9: Profile-driven optimization
+**Exit criterion:** no legacy event-system or migration scaffold remains and the
+Caravan/PMacc boundary matches the library vision.
+
+---
+
+## Phase 10: Standard execution and task-runtime interoperability
+
+This phase is optional for the PMacc migration, but the API constraints were
+already established in Phase 2.
+
+1. Revisit the Phase 2 sender/run-loop/scope spike against the then-current C++
+   standard execution implementation ecosystem and supported compiler/toolchain
+   matrix.
+2. Replace custom sender-like primitives with direct standard/P2300 models where
+   this is mechanical and does not harm supported device compilation.
+3. Implement/retain the smallest useful `Event`/`Future` <-> sender bridges.
+4. Express one representative chain:
+
+   ```text
+   accelerator pack -> MPI send -> continues_on(PMacc scheduler) -> CPU continuation
+   ```
+
+   with both migration composition and standard-execution composition.
+5. Replace the migration PMacc run loop with standard/P2300 `run_loop` if practical.
+6. Replace the migration async scope with standard/P2300 counting-scope semantics
+   if practical.
+7. Compare allocations, compile-time/type complexity, CUDA/HIP/SYCL toolchain
+   impact, error/stopped behavior, dynamic-join behavior, and runtime overhead.
+8. Add task-runtime adapters only for real application needs; prefer existing
+   sender/scheduler integration.
+9. Keep MPI progress/device native integration unchanged regardless of composition
+   syntax.
+10. Do not expose MPI/device progress authorities as general schedulers.
+
+**Exit criterion:** Caravan either directly models the useful standard execution
+concepts or has documented toolchain/performance reasons for retaining a thin
+compatible implementation; no competing Caravan scheduler/task framework has
+appeared.
+
+---
+
+## Phase 11: Optional resource-access dependency layer
+
+Implement this phase only if PMacc/PIConGPU or another consumer benefits from
+inferred resource dependencies beyond explicit composition.
+
+1. Implement stable logical resource identity/control state independent of the
+   underlying application allocation ownership.
+2. Implement the minimal `read`/`write` access model and access leases lasting
+   until operation completion.
+3. Infer writer->reader, writer->writer, and readers->writer dependencies.
+4. Lower inferred predecessors to ordinary sender/completion composition; do not
+   introduce a second executor or global task scheduler.
+5. Support externally supplied/borrowed resources without transferring allocation
+   ownership to Caravan.
+6. Start with compound logical resources; split subresources such as buffer data
+   and device-side size only where semantics and measurements justify it.
+7. Keep explicit composition fully supported and test that all backends work
+   without the resource layer.
+8. Add optional debug hazard diagnostics that can be enabled independently of
+   release-build dependency scheduling.
+9. Benchmark graph bookkeeping and concurrency gains against explicit PMacc flows.
+
+**Exit criterion:** if implemented, the resource layer is a removable dependency
+planner over sender-style operations, not a prerequisite of `caravan::core`, MPI,
+or accelerator backends. If no measured use case justifies it, document that and
+leave the phase unimplemented.
+
+---
+
+## Phase 12: Additional accelerator backends when required
+
+Add SYCL, Kokkos, or another backend only for a real consumer.
+
+For each backend:
+
+1. implement sender/P2300-compatible operation start/completion semantics;
+2. define native resource ownership/borrowing policy;
+3. define synchronization/progress authority;
+4. define backend-local native dependency capabilities; add cross-backend
+   import/export only if a real supported pair requires it;
+5. provide host-completion fallback at independent backend boundaries;
+6. define continuation execution transfer away from backend progress authorities;
+7. do not emulate unsupported fine-grained semantics at disproportionate cost;
+8. test cross-domain composition with MPI and at least one CPU composition path;
+9. keep backend-specific types out of `caravan::core`.
+
+---
+
+## Phase 13: Profile-driven optimization
 
 Only after correctness and migration:
 
-1. Batch executor queue drains and native submissions.
-2. Coalesce same-queue device events at dependency boundaries.
-3. Replace shared-state allocation with a slab if profiles justify it.
-4. Replace mutex queues only if contention is measured.
-5. Tune and document MPI polling, yielding, and CPU affinity.
-6. Evaluate more than one device submission owner only if one owner is a
-   measured bottleneck.
+1. batch producer queue drains and native submissions where measured useful;
+2. coalesce accelerator completion events at dependency boundaries;
+3. replace shared-state allocation with a slab/intrusive scheme only if profiles
+   show material cost;
+4. replace mutex-protected queues only if contention is measured;
+5. tune MPI polling/yield/affinity policy on target systems;
+6. evaluate alternate MPI progress policies only with a concrete use case;
+7. tune PMacc run-loop batching/wakeup behavior only from measurements;
+8. evaluate multiple accelerator submission authorities only if a single authority
+   is a measured bottleneck;
+9. evaluate/optimize cross-domain native dependency paths only after a real
+   supported interop pair demonstrates the needed abstraction;
+10. profile optional resource-dependency bookkeeping separately from backend
+    execution overhead;
+11. preserve backend independence while optimizing implementation internals.
 
-Exit criterion: no full-step performance regression and measured scheduling or
-communication improvements over the Phase 0 baseline.
+**Exit criterion:** no unacceptable full-step regression, measurable host/runtime
+improvements over the legacy baseline, and no optimization has expanded Caravan
+into a general scheduler/runtime or mandatory resource manager.
 
-## Testing strategy
+---
 
-### Unit tests
+# Testing strategy
+
+## Core tests
 
 - completion before and after continuation registration;
-- simultaneous completion and registration from many threads;
-- exactly-once continuation scheduling;
-- flat `whenAll()` for zero, one, and many dependencies;
-- `whenAll()` waits for all inputs after an early failure or cancellation;
-- failure propagation;
-- executor shutdown with queued commands;
-- buffer lease lifetime;
-- invalid wait from owner executor thread;
-- Flow move-only, explicit fork/join, and `done()` snapshot semantics;
-- runtime shutdown accounting for submitted work from an unjoined Flow branch.
+- simultaneous completion/registration races from many threads;
+- exactly-once terminal transition;
+- exactly-once continuation dispatch;
+- zero-, one-, and many-input flat joins;
+- runtime-sized join from dynamically built vectors;
+- join waits for all inputs after early failure/stopped completion;
+- join precedence failed > stopped > ready and no promise of race-defined first
+  failure;
+- predecessor failure/stopped propagation;
+- terminal completion implies represented native work no longer accesses retained
+  operation state;
+- ready-event fast path/allocation behavior;
+- blocking-wait guards;
+- operation-state lifetime through start -> terminal completion;
+- borrowed-resource lifetime precondition tests and explicit operation capture tests;
+- sender construction is lazy and native side effects begin on start;
+- Event <-> sender eager bridge behavior;
+- async-scope spawn/join/quiescence and shutdown behavior;
+- PMacc run-loop continuation placement and progress-aware waits;
+- no global outstanding-operation registry is required by `caravan::core`;
+- `Flow` move-only/local semantics if retained;
+- forgotten-fork tests/documentation or structured-helper tests;
+- adapter tests proving core does not require a backend owner thread or global run loop;
+- no arbitrary continuation execution on MPI/device progress authorities;
+- ThreadSanitizer coverage where supported.
 
-### MPI integration tests
+## Optional resource-layer tests
 
-Run with at least one, two, and four ranks:
+If the resource layer is implemented:
 
-- thread ownership assertion for every MPI operation;
+- read/read overlap is permitted;
+- writer->reader, writer->writer, and readers->writer dependencies are inferred;
+- access leases remain active until asynchronous completion;
+- resource control-state lifetime is independent of application allocation
+  ownership;
+- explicit composition and resource-derived composition produce equivalent
+  correctness;
+- compound vs split resource identities behave as documented;
+- disabling the resource layer leaves MPI/alpaka/core functionality unchanged.
+
+## MPI tests
+
+Run with at least one, two, and four ranks where applicable:
+
+- dedicated-policy thread ownership assertion for every MPI entry point;
+- startup/finalization on the dedicated worker;
+- generic one-request submission;
+- generic multi-request submission;
+- request-start exception cleanup after partial initiation;
 - eager and rendezvous-sized send/receive;
-- wildcard receive status and received count;
+- wildcard receive copied status/count;
 - bidirectional neighbor exchange;
-- nonblocking collectives;
-- separate signal communicator;
-- progress while the application thread sleeps or performs CPU work;
+- nonblocking collectives/barriers;
+- repeated communicator/resource creation/destruction;
+- progress while application thread sleeps or computes;
 - new submissions while requests are active;
-- shutdown with requests in flight;
-- propagated MPI failure where practical;
-- repeated communicator creation/destruction on the MPI thread;
-- native multi-request submission and copied completion statuses;
-- native-start exception cleanup after a request has started;
-- exclusive blocking invocation behind active requests and recursive-submission rejection.
+- `invokeBlocking()` starts only after dependencies explicitly composed before it;
+  it does not wait for unrelated active requests;
+- a regression case where an earlier receive requires a later send, proving
+  blocking invocation does not manufacture an implicit quiescence deadlock;
+- per-communicator managed collective initiation order despite out-of-order
+  dependency readiness;
+- point-to-point progress is not unnecessarily serialized by the collective lane;
+- recursive/invalid MPI-context invocation rejection;
+- blocking third-party invocation path with explicit quiescence dependency;
+- shutdown with queued and active requests;
+- propagated MPI errors where practical;
+- no arbitrary application callback execution on the progress thread;
+- thin convenience wrappers use the same generic request engine.
 
-### Device integration tests
+## Accelerator tests
 
 - same-queue ordering;
-- cross-queue waits;
-- GPU-to-MPI and MPI-to-GPU dependencies;
-- host-staged and GPU-aware paths;
-- producer contention from multiple threads;
-- event and allocation lifetime after high-level buffer destruction.
+- cross-queue native waits where supported;
+- backend-native dependency availability before host completion;
+- alpaka-to-alpaka native chaining remains backend-local;
+- accelerator -> MPI and MPI -> accelerator use correct host-completion fallback
+  until a concrete native interop path is implemented;
+- host-staged and GPU-aware communication paths;
+- concurrent submissions using supported caller-supplied queues;
+- no extra submission thread/queue is required in the default alpaka adapter;
+- owned and borrowed native-resource policy where supported;
+- backend-affine native resources are destroyed on the required authority;
+- explicitly captured application allocations survive until operation completion;
+- borrowed allocation lifetime violations are diagnosed where practical;
+- sender creation does not enqueue native work before start;
+- CPU backend behavior without GPU-only polling assumptions.
 
-### PMacc example regression tests
+## PMacc regression tests
 
-These gate all PIConGPU source changes:
+These gate PIConGPU source changes:
 
 - `gameOfLife2D` fork/join and multi-rank halo exchange;
-- `heatEquation2D` communication, gather, reduction, and multi-rank output;
+- `heatEquation2D` communication, gather, reduction, and output;
 - field halo exchange;
-- particle exchange with empty, partial, exact-capacity, and multi-chunk data.
+- particle exchange with empty, partial, exact-capacity, and multi-chunk data;
+- signal/checkpoint barriers;
+- buffer reuse across steps/directions;
+- shutdown with outstanding PMacc work.
 
-### PIConGPU regression tests
+## PIConGPU regression tests
 
-These start only after the Phase 6 PMacc gate passes:
+After the PMacc gate:
 
 - field and particle communication;
-- checkpoint and plugin synchronization;
-- CPU serial backend runtime tests;
-- CPU threaded backend tests;
-- CUDA compile-only validation on the local no-GPU machine;
-- CUDA runtime tests in CI or on suitable hardware.
+- reductions/gathers/signals;
+- checkpoints and plugin synchronization;
+- diagnostics using MPI-enabled third-party libraries;
+- CPU serial backend;
+- threaded CPU backend/runtime configurations;
+- CUDA compile validation on no-GPU machines;
+- CUDA runtime tests on suitable hardware/CI;
+- supported GPU-aware MPI configurations;
+- full-step behavior/performance comparison with baseline.
 
-Use ThreadSanitizer on the completion core, submission queues, fake executors,
-and CPU backend where supported.
+---
 
-## Performance acceptance criteria
+# Performance acceptance criteria
 
-1. MPI makes progress while simulation threads do not call the runtime.
-2. MPI ping-pong latency and bandwidth remain within 5 percent of equivalent
-   direct nonblocking MPI for representative message sizes.
-3. No full simulation-step regression greater than 2 percent on the primary
-   GPU configuration without an understood and accepted cause.
-4. Host scheduling time is lower than the legacy manager for representative
-   kernel and exchange counts.
-5. No scan cost proportional to all outstanding operations.
-6. Join cost is linear in the submitted dependencies with one completion node,
-   not a heap-allocated binary task tree.
-7. GPU operations depending only on GPU work are enqueued without waiting for
-   host-observed completion.
-8. The final implementation has a net reduction in event/communication runtime
-   code and removes all legacy task classes.
+1. The PMacc production MPI policy makes progress while application threads do
+   not call Caravan.
+2. MPI ping-pong latency and bandwidth remain within 5% of equivalent direct
+   nonblocking MPI for representative message sizes unless a measured,
+   understood platform-specific reason is accepted.
+3. No full PIConGPU simulation-step regression greater than 2% on the primary GPU
+   configuration without an understood and accepted cause.
+4. Host scheduling/progress overhead of the PMacc run-loop/scope configuration is lower than the legacy PMacc manager for
+   representative kernel and exchange counts.
+5. No central scan proportional to all outstanding application operations.
+6. Runtime-sized join uses one flat completion node rather than a heap-allocated
+   binary task tree.
+7. Accelerator operations depending only on work in the same backend can be
+   enqueued using backend-native dependencies without host-observed completion
+   where supported.
+8. Independent backend boundaries use correct host completion until a concrete
+   native interop implementation is justified; `caravan::core` contains no
+   speculative cross-backend event protocol.
+9. MPI convenience operations do not create separate request/progress state
+   machines.
+10. Final PMacc/PIConGPU runtime code is smaller and conceptually simpler than the
+    removed event/task hierarchy.
+11. Optional standard-execution/task-runtime adapters do not materially regress
+    native paths merely by being enabled in the build.
+12. Sender-oriented primitive APIs do not introduce a host synchronization boundary
+    between same-backend accelerator operations.
+13. Optional resource dependency inference, if enabled, has measured value relative
+    to its bookkeeping cost and remains absent from backends when disabled.
 
-## Main risks and mitigations
+---
 
-### MPI initialization runs on a Caravan worker
+# Main risks and mitigations
 
-Mitigation: the dedicated worker performs the complete MPI lifecycle, including
-`MPI_Init_thread` and `MPI_Finalize`, while the process main thread waits for
-startup before entering the application. Test this conforming FUNNELED model on
-Open MPI, MPICH, and target system MPI implementations.
+## Scope creep into another general task runtime
 
-### Dedicated progress consumes a CPU core
+**Risk:** Caravan accumulates task types, schedulers, worker pools, structured
+execution primitives, allocator propagation, and composition algorithms already
+provided by `std::execution` or task runtimes.
 
-Mitigation: reserve and optionally pin one core per rank in production. Provide
-a yield policy for oversubscribed development runs. Benchmark before selecting
-poll defaults.
+**Mitigation:** require a concrete heterogeneous-backend/interoperability need
+before adding generic execution abstractions. Treat standard execution as the
+preferred future generic composition model.
 
-### MPI-enabled external libraries may block progress
+## The current MPI implementation is too coupled to its worker thread
 
-Mitigation: inventory them before implementation, execute them only on the MPI
-thread, require MPI quiescence for blocking calls, and prefer asynchronous
-library APIs where available.
+**Risk:** request objects, public API, lifecycle, and completion logic assume one
+specific worker implementation, making future integration policies expensive.
 
-### Cross-domain dependencies can accidentally host-synchronize GPU work
+**Mitigation:** Phase 2 explicitly separates request semantics from lifecycle and
+progress while retaining identical FUNNELED behavior for PMacc.
 
-Mitigation: represent native device submission separately from host completion
-and lower device-to-device dependencies to native queue waits.
+## Accidentally reimplementing MPI
 
-### Executor queues can become a launch bottleneck
+**Risk:** Caravan grows one wrapper/type/state machine per MPI API.
 
-Mitigation: batch drain, retain a single owner for correctness, and add shards
-only after profiling. Do not start with lock-free queues.
+**Mitigation:** make generic request submission and generic MPI-context invocation
+the central primitives. Keep native MPI types in the MPI-specific layer. Add
+convenience functions only as thin forwarding/composition helpers.
 
-### Buffer views may outlive high-level objects
+## Dedicated MPI progress consumes a CPU core
 
-Mitigation: every asynchronous command owns an allocation lease until native
-completion. Add focused lifetime tests.
+**Risk:** one reserved core per rank can be expensive on some systems.
 
-### Collective ordering can still deadlock
+**Mitigation:** retain the dedicated policy for correctness and overlap first;
+provide configurable spin/yield behavior; benchmark affinity/reservation; add an
+alternative policy only when a real deployment needs it.
 
-Mitigation: preserve FIFO order per communicator, use nonblocking collectives,
-add debug sequence metadata, and keep collective control flow explicit in the
-simulation stages.
+## MPI lifecycle constraints conflict with external runtimes
 
-## Definition of done
+**Risk:** an externally initialized MPI environment may be incompatible with a
+worker making MPI calls under the provided thread-support level.
 
-The replacement is complete when:
+**Mitigation:** treat lifecycle/thread-support as an explicit policy contract.
+The current PMacc policy owns initialization/finalization on the FUNNELED worker.
+Future attach modes must validate their MPI threading contract rather than
+silently reusing the worker.
 
-- one Caravan worker initializes MPI and is the sole MPI-calling thread under
-  `MPI_THREAD_FUNNELED`;
-- no other source file can call MPI directly;
-- MPI progresses independently of simulation-thread polling;
-- task submission is safe from multiple threads;
-- submitted commands are immutable and executor-owned;
-- all dependencies are explicit Events or Futures;
-- no global transaction stack or task manager remains;
-- no destructor drives task completion;
-- no field or particle enum state machine exists solely for async sequencing;
-- errors and buffer lifetimes propagate through completion objects;
-- CPU and GPU test matrices pass;
-- performance meets the acceptance criteria;
-- legacy event-system code is deleted rather than retained as compatibility
-  scaffolding;
-- the runtime targets have no dependency on PMacc or PIConGPU headers.
+## Implicit MPI quiescence creates dependency cycles
+
+**Risk:** a blocking invocation waits for every active request even when
+completion of one of those requests requires a later MPI operation to be
+initiated, manufacturing a deadlock that was not present in the application.
+
+**Mitigation:** `invokeBlocking()` waits only for an explicit predecessor supplied
+by the caller. Application-required quiescence is built with explicit joins; the
+MPI backend never silently adds a dependency on all active requests.
+
+## Dependency readiness reorders MPI collectives
+
+**Risk:** a later collective becomes ready before an earlier submitted collective
+on the same communicator and is initiated first, violating the application's MPI
+collective ordering.
+
+**Mitigation:** managed collective helpers use a per-communicator initiation
+sequence/lane. Point-to-point work remains independent. Expert invocation that
+executes collectives has an explicit caller-managed or integrated ordering
+contract.
+
+## Cross-domain dependencies cause hidden host synchronization
+
+**Risk:** reducing every same-backend accelerator dependency to host-ready
+completion destroys queue concurrency and overlap.
+
+**Mitigation:** preserve backend-native dependency information inside each backend.
+Use host-visible completion at independent backend boundaries until a measured
+second interop path justifies a generic protocol.
+
+## Premature native dependency abstraction becomes a backend-type registry
+
+**Risk:** core gains a speculative type-erased protocol or direct knowledge of
+alpaka/SYCL/CUDA/HIP/Kokkos event semantics before their common requirements are
+known.
+
+**Mitigation:** define no generic cross-backend native-event abstraction during the
+initial migration. Learn from a real second interop pair first; keep concrete
+native types in backend targets.
+
+## `Flow::fork()` allows forgotten joins
+
+**Risk:** imperative graph construction can accidentally let a branch escape a
+required synchronization point.
+
+**Mitigation:** keep backend-context shutdown independent of `Flow`; let PMacc or
+an explicit application scope own whole-application structured lifetime; add a
+sealed `parallel()`/`forkJoin()` helper if migration shows recurring mistakes;
+plan for eventual standard-execution/scoped composition.
+
+## Operation lifetime and application-resource ownership are conflated
+
+**Risk:** Caravan starts retaining arbitrary application objects by default, adding
+reference-counting overhead and obscuring ownership, or borrowed resources die
+while native work is still using them.
+
+**Mitigation:** core owns only operation state. Borrowed storage has explicit
+preconditions; operations capture application/backend ownership handles only when
+needed. Resource dependency tracking does not imply storage ownership. Native
+backend resources are destroyed through their required authority.
+
+## PMacc run loop or async scope recreates the PMacc Manager
+
+**Risk:** the migration run loop/scope accumulates global dependency state, task-ID
+lookup, native-operation ownership, and backend polling until it becomes a renamed
+Manager.
+
+**Mitigation:** the run loop schedules ready host/control continuations only and may
+invoke narrow progress hooks; the async scope tracks structured application work
+only. Dependencies live in sender composition or the optional resource layer;
+backends own native progress/state. Neither object is a Caravan singleton.
+
+## Sender/P2300 template complexity harms PIConGPU toolchains
+
+**Risk:** deeply typed sender expressions increase compile time, diagnostics, or
+CUDA/HIP compiler fragility enough to outweigh architectural benefits.
+
+**Mitigation:** verify representative chains in Phase 2; use deliberate eager/type-
+erased `Event` boundaries as compile-time firebreaks; keep native backend code
+independent of composition syntax; require measured benefit before increasing
+sender-expression depth.
+
+## Optional resource layer grows into a mandatory scheduler
+
+**Risk:** resource identities, access tables, and ready queues become coupled to
+MPI/alpaka execution so all Caravan users are forced through a RedGrapes-like
+runtime.
+
+**Mitigation:** the resource layer only infers predecessor relationships and emits
+ordinary async composition. Backends and explicit sender composition must remain
+usable with the layer completely absent.
+
+## Task-runtime adapters execute work on the wrong authority
+
+**Risk:** a generic adapter accidentally schedules arbitrary callbacks on MPI
+progress or device-owner threads.
+
+**Mitigation:** distinguish native progress/context authority from public
+schedulers. Cross a boundary by posting completion to the chosen external
+runtime, not by treating every backend authority as a scheduler.
+
+## Backend capability differences complicate abstraction
+
+**Risk:** SYCL, alpaka, Kokkos, MPI, and CPU task runtimes offer different
+fine-grained synchronization semantics.
+
+**Mitigation:** define a minimal portable completion contract plus optional
+capabilities. Do not require unsupported native features to be emulated.
+
+---
+
+# Definition of done
+
+The PMacc/PIConGPU migration is complete when:
+
+- no global PMacc event manager, transaction stack, observer system, task-ID lookup,
+  or polling task hierarchy remains;
+- new primitive Caravan MPI/alpaka operations have sender/P2300-compatible lazy
+  start/completion semantics, even if the implementation is still custom;
+- dependencies are explicit composition relationships, or are produced by an
+  optional pluggable resource layer rather than hidden buffer-access side effects;
+- buffer accessors no longer mutate scheduling state;
+- Caravan core owns async operation-state lifetime only; application resource
+  ownership is explicit/borrowed at PMacc/backend boundaries;
+- terminal completion means represented native work no longer accesses
+  operation-owned or explicitly retained state;
+- PMacc has an explicit async scope for dynamic structured work and may use a
+  single-thread `run_loop`-style control scheduler without either becoming a
+  Caravan-global Manager;
+- native completion on MPI/device authorities does not accidentally execute
+  arbitrary application continuations there; execution transfer is explicit;
+- PMacc selects the dedicated FUNNELED MPI policy, but Caravan architecture does
+  not require that policy universally;
+- MPI request progress uses one generic native request engine rather than one
+  implementation per MPI operation;
+- blocking MPI-context operations have only explicitly composed dependencies and
+  never manufacture implicit global quiescence;
+- managed collectives preserve per-communicator initiation order independent of
+  dependency-ready timing;
+- native MPI types are not duplicated by an unnecessary full Caravan type system;
+- no ordinary PMacc/PIConGPU thread calls MPI outside the approved integration
+  boundary;
+- MPI progresses independently of simulation-thread polling in the production
+  configuration;
+- accelerator support is provided through sender-oriented alpaka adapters, not a
+  universal Caravan device-owner model;
+- same-backend accelerator dependency chains avoid host waits where native support
+  exists; independent backend boundaries have a correct host-completion path;
+- `Event`/`Future` are eager/type-erased bridges rather than mandatory primitive
+  backend APIs, and `Flow`, if retained, is migration convenience only;
+- `caravan::core` contains no speculative generic cross-backend native-event
+  protocol, global outstanding-operation supervisor, required task type, worker
+  pool, work-stealing scheduler, or competing scheduler hierarchy;
+- optional resource dependency inference, if implemented, is a removable layer
+  over async composition and does not own application storage or backend execution;
+- the Phase 2 P2300 spike constrains the implementation, including async scopes,
+  run-loop semantics, continuation placement, and sender lifecycle;
+- migration to a production standard-execution implementation remains possible
+  without rewriting MPI progress or accelerator-native integration;
+- PMacc and PIConGPU CPU/GPU/multi-rank test matrices pass;
+- agreed performance criteria are met or deviations are explicitly accepted;
+- legacy event/runtime code and temporary migration adapters are deleted;
+- Caravan targets contain no PMacc or PIConGPU headers;
+- the resulting Caravan library is independently useful as a heterogeneous async
+  interoperability/backend layer, while PMacc remains free to choose its tasking,
+  resource-dependency, and parallel execution systems.
