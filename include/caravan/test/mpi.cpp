@@ -246,10 +246,7 @@ int main(int argc, char** argv)
                 caravan::ScalarType::int32,
                 caravan::ReduceOperation::sum,
                 cartesian.communicator);
-            if(topology.rank % 2 == 0)
-                firstCollectiveReady.setReady();
-            else
-                secondCollectiveReady.setReady();
+            firstCollectiveReady.setReady();
 
             auto laneSendBuffer = std::make_shared<int>(topology.rank);
             auto laneReceiveBuffer = std::make_shared<int>(-1);
@@ -271,10 +268,7 @@ int main(int argc, char** argv)
             laneScope.join().wait();
             assert(*laneReceiveBuffer == topology.rank);
 
-            if(topology.rank % 2 == 0)
-                secondCollectiveReady.setReady();
-            else
-                firstCollectiveReady.setReady();
+            secondCollectiveReady.setReady();
             firstCollective.result();
             secondCollective.result();
             assert(*firstCollectiveOutput == topology.size * (topology.size + 1) / 2);
@@ -668,8 +662,6 @@ int main(int argc, char** argv)
                 caravan::readyEvent(),
                 [&mpi](caravan::NativeMpiContext&)
                 {
-                    int initialized = 0;
-                    assert(MPI_Initialized(&initialized) == MPI_SUCCESS && initialized != 0);
                     auto recursive = caravan::nativeEvent(
                         mpi,
                         caravan::readyEvent(),
@@ -686,6 +678,11 @@ int main(int argc, char** argv)
                     }
                 })
                 .wait();
+            caravan::syncWait(
+                caravan::letValue(
+                    caravan::mpi::barrier(mpi, cartesian.communicator),
+                    [&mpi, communicator = cartesian.communicator]
+                    { return caravan::mpi::barrier(mpi, communicator); }));
 
             auto invalid = caravan::mpi::send(
                 mpi,

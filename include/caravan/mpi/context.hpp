@@ -213,8 +213,8 @@ namespace caravan
 
         void run();
         void requestShutdown();
-        void submitNative(Event predecessor, detail::NativeSubmission submission);
-        void invokeBlocking(Event predecessor, detail::NativeBlockingSubmission submission);
+        void submitNative(detail::NativeSubmission submission);
+        void invokeBlocking(detail::NativeBlockingSubmission submission);
 
         std::unique_ptr<Impl> m_implementation;
 

@@ -125,6 +125,29 @@ namespace caravan
             }
         };
 
+        inline thread_local std::size_t nativeCallbackDepth = 0u;
+
+        class NativeCallbackGuard
+        {
+        public:
+            NativeCallbackGuard()
+            {
+                ++nativeCallbackDepth;
+            }
+
+            ~NativeCallbackGuard()
+            {
+                --nativeCallbackDepth;
+            }
+        };
+
+        template<typename T_Callable, typename... T_Args>
+        decltype(auto) invokeNative(T_Callable&& callable, T_Args&&... args)
+        {
+            NativeCallbackGuard guard;
+            return std::invoke(std::forward<T_Callable>(callable), std::forward<T_Args>(args)...);
+        }
+
         struct NativeAccess
         {
             static void release(NativeRequestBatch& batch)
@@ -132,9 +155,50 @@ namespace caravan
                 batch.release();
             }
 
-            static void submit(MpiContext& context, Event predecessor, NativeSubmission submission);
-            static void invokeBlocking(MpiContext& context, Event predecessor, NativeBlockingSubmission submission);
+            static void submit(MpiContext& context, NativeSubmission submission);
+            static void invokeBlocking(MpiContext& context, NativeBlockingSubmission submission);
         };
+
+        class EventAdapterExecutor
+        {
+        public:
+            void post(std::function<void()> continuation)
+            {
+                std::invoke(std::move(continuation));
+            }
+        };
+
+        inline EventAdapterExecutor eventAdapterExecutor;
+
+        inline void submitWhenReady(MpiContext& context, Event predecessor, NativeSubmission submission)
+        {
+            static_cast<void>(predecessor.continueWith(
+                eventAdapterExecutor,
+                [&context, submission = std::move(submission)](Event ready) mutable
+                {
+                    if(ready.state() == CompletionState::failed)
+                        submission.setFailed(ready.error());
+                    else if(ready.state() == CompletionState::stopped)
+                        submission.setStopped();
+                    else
+                        NativeAccess::submit(context, std::move(submission));
+                }));
+        }
+
+        inline void submitWhenReady(MpiContext& context, Event predecessor, NativeBlockingSubmission submission)
+        {
+            static_cast<void>(predecessor.continueWith(
+                eventAdapterExecutor,
+                [&context, submission = std::move(submission)](Event ready) mutable
+                {
+                    if(ready.state() == CompletionState::failed)
+                        submission.setFailed(ready.error());
+                    else if(ready.state() == CompletionState::stopped)
+                        submission.setStopped();
+                    else
+                        NativeAccess::invokeBlocking(context, std::move(submission));
+                }));
+        }
 
         struct NativeContextFactory;
     } // namespace detail
@@ -328,9 +392,8 @@ namespace caravan
 
                     detail::NativeAccess::submit(
                         *m_context,
-                        readyEvent(),
                         detail::NativeSubmission{
-                            [this](NativeMpiContext& context) { return std::invoke(m_start, context); },
+                            [this](NativeMpiContext& context) { return detail::invokeNative(m_start, context); },
                             [this](NativeMpiContext& context, std::span<MPI_Status const> statuses)
                             {
                                 if constexpr(std::is_void_v<T>)
@@ -339,18 +402,18 @@ namespace caravan
                                                      T_Complete&,
                                                      NativeMpiContext&,
                                                      std::span<MPI_Status const>>)
-                                        std::invoke(m_complete, context, statuses);
+                                        detail::invokeNative(m_complete, context, statuses);
                                     else
-                                        std::invoke(m_complete, statuses);
+                                        detail::invokeNative(m_complete, statuses);
                                     m_receiver.set_value();
                                 }
                                 else if constexpr(std::is_invocable_v<
                                                       T_Complete&,
                                                       NativeMpiContext&,
                                                       std::span<MPI_Status const>>)
-                                    m_receiver.set_value(std::invoke(m_complete, context, statuses));
+                                    m_receiver.set_value(detail::invokeNative(m_complete, context, statuses));
                                 else
-                                    m_receiver.set_value(std::invoke(m_complete, statuses));
+                                    m_receiver.set_value(detail::invokeNative(m_complete, statuses));
                             },
                             [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
                             [this] { m_receiver.set_stopped(); },
@@ -448,7 +511,6 @@ namespace caravan
                     if constexpr(T_Blocking)
                         detail::NativeAccess::invokeBlocking(
                             *m_context,
-                            readyEvent(),
                             detail::NativeBlockingSubmission{
                                 [this](NativeMpiContext& context) { complete(context); },
                                 [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
@@ -457,7 +519,6 @@ namespace caravan
                     else
                         detail::NativeAccess::submit(
                             *m_context,
-                            readyEvent(),
                             detail::NativeSubmission{
                                 [](NativeMpiContext&) { return NativeRequestBatch{}; },
                                 [this](NativeMpiContext& context, std::span<MPI_Status const>) { complete(context); },
@@ -471,11 +532,11 @@ namespace caravan
                 {
                     if constexpr(std::is_void_v<T>)
                     {
-                        std::invoke(m_operation, context);
+                        detail::invokeNative(m_operation, context);
                         m_receiver.set_value();
                     }
                     else
-                        m_receiver.set_value(std::invoke(m_operation, context));
+                        m_receiver.set_value(detail::invokeNative(m_operation, context));
                 }
 
                 MpiContext* m_context;
@@ -543,20 +604,20 @@ namespace caravan
         auto completeWork = std::make_shared<std::decay_t<T_Complete>>(std::forward<T_Complete>(complete));
         Promise<T> output;
         auto result = output.future();
-        detail::NativeAccess::submit(
+        detail::submitWhenReady(
             context,
             std::move(predecessor),
             detail::NativeSubmission{
-                [startWork](NativeMpiContext& context) { return std::invoke(*startWork, context); },
+                [startWork](NativeMpiContext& context) { return detail::invokeNative(*startWork, context); },
                 [completeWork, output](NativeMpiContext& context, std::span<MPI_Status const> statuses) mutable
                 {
                     if constexpr(std::is_invocable_v<
                                      std::decay_t<T_Complete>&,
                                      NativeMpiContext&,
                                      std::span<MPI_Status const>>)
-                        output.setValue(std::invoke(*completeWork, context, statuses));
+                        output.setValue(detail::invokeNative(*completeWork, context, statuses));
                     else
-                        output.setValue(std::invoke(*completeWork, statuses));
+                        output.setValue(detail::invokeNative(*completeWork, statuses));
                 },
                 [output](std::exception_ptr error) mutable { output.setFailed(std::move(error)); },
                 [output]() mutable { output.setStopped(); },
@@ -577,20 +638,20 @@ namespace caravan
         auto completeWork = std::make_shared<std::decay_t<T_Complete>>(std::forward<T_Complete>(complete));
         EventSource output;
         auto result = output.event();
-        detail::NativeAccess::submit(
+        detail::submitWhenReady(
             context,
             std::move(predecessor),
             detail::NativeSubmission{
-                [startWork](NativeMpiContext& context) { return std::invoke(*startWork, context); },
+                [startWork](NativeMpiContext& context) { return detail::invokeNative(*startWork, context); },
                 [completeWork, output](NativeMpiContext& context, std::span<MPI_Status const> statuses) mutable
                 {
                     if constexpr(std::is_invocable_v<
                                      std::decay_t<T_Complete>&,
                                      NativeMpiContext&,
                                      std::span<MPI_Status const>>)
-                        std::invoke(*completeWork, context, statuses);
+                        detail::invokeNative(*completeWork, context, statuses);
                     else
-                        std::invoke(*completeWork, statuses);
+                        detail::invokeNative(*completeWork, statuses);
                     output.setReady();
                 },
                 [output](std::exception_ptr error) mutable { output.setFailed(std::move(error)); },
@@ -614,11 +675,12 @@ namespace caravan
         auto work = std::make_shared<std::decay_t<T_Operation>>(std::forward<T_Operation>(operation));
         Promise<T> output;
         auto result = output.future();
-        detail::NativeAccess::invokeBlocking(
+        detail::submitWhenReady(
             context,
             std::move(predecessor),
             detail::NativeBlockingSubmission{
-                [work, output](NativeMpiContext& context) mutable { output.setValue(std::invoke(*work, context)); },
+                [work, output](NativeMpiContext& context) mutable
+                { output.setValue(detail::invokeNative(*work, context)); },
                 [output](std::exception_ptr error) mutable { output.setFailed(std::move(error)); },
                 [output]() mutable { output.setStopped(); },
                 collective});
@@ -636,13 +698,13 @@ namespace caravan
         auto work = std::make_shared<std::decay_t<T_Operation>>(std::forward<T_Operation>(operation));
         EventSource output;
         auto result = output.event();
-        detail::NativeAccess::invokeBlocking(
+        detail::submitWhenReady(
             context,
             std::move(predecessor),
             detail::NativeBlockingSubmission{
                 [work, output](NativeMpiContext& context) mutable
                 {
-                    std::invoke(*work, context);
+                    detail::invokeNative(*work, context);
                     output.setReady();
                 },
                 [output](std::exception_ptr error) mutable { output.setFailed(std::move(error)); },
