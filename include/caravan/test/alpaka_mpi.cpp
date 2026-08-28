@@ -8,10 +8,23 @@
 #include <cassert>
 #include <cstddef>
 #include <thread>
+#include <utility>
 
 #include <caravan/alpaka.hpp>
 #include <caravan/core.hpp>
 #include <caravan/mpi.hpp>
+
+namespace
+{
+    struct Preserve
+    {
+        template<typename T_Acc>
+        ALPAKA_FN_ACC void operator()(T_Acc const&, int* value) const
+        {
+            *value += 0;
+        }
+    };
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -34,23 +47,28 @@ int main(int argc, char** argv)
             auto const device = alpaka::getDevByIdx(alpaka::Platform<Acc>{}, 0u);
             auto const host = alpaka::getDevByIdx(alpaka::PlatformCpu{}, 0u);
             Queue queue{device};
-            auto deviceValue = alpaka::allocBuf<int, Idx>(device, alpaka::Vec<Dim, Idx>{1u});
-            auto hostValue = alpaka::allocBuf<int, Idx>(host, alpaka::Vec<Dim, Idx>{1u});
+            auto const one = alpaka::Vec<Dim, Idx>{1u};
+            auto deviceValue = alpaka::allocBuf<int, Idx>(device, one);
+            auto hostValue = alpaka::allocBuf<int, Idx>(host, one);
             int received = -1;
             hostValue[0] = mpi.topology().rank;
 
             bool acceleratorStarted = false;
             bool mpiStarted = false;
             bool continued = false;
+            auto accelerator = caravan::alpaka::then(
+                caravan::alpaka::then(
+                    caravan::alpaka::submit(queue, [&](Queue&) { acceleratorStarted = true; }),
+                    caravan::alpaka::copy(queue, deviceValue, hostValue, one)),
+                caravan::alpaka::then(
+                    caravan::alpaka::kernel<Acc>(
+                        queue,
+                        alpaka::WorkDivMembers<Dim, Idx>{one, one, one},
+                        Preserve{},
+                        alpaka::getPtrNative(deviceValue)),
+                    caravan::alpaka::copy(queue, hostValue, deviceValue, one)));
             auto chain = caravan::letValue(
-                caravan::alpaka::submit(
-                    queue,
-                    [&](Queue& nativeQueue)
-                    {
-                        acceleratorStarted = true;
-                        alpaka::memcpy(nativeQueue, deviceValue, hostValue);
-                        alpaka::memcpy(nativeQueue, hostValue, deviceValue);
-                    }),
+                std::move(accelerator),
                 [&]
                 {
                     mpiStarted = true;
