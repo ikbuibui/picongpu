@@ -5,4 +5,4 @@
 #pragma once
 
 #include <caravan/mpi/context.hpp>
-#include <caravan/mpi/native.hpp>
+#include <caravan/mpi/operations.hpp>
