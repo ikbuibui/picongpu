@@ -22,10 +22,7 @@
 #pragma once
 
 #include "pmacc/Environment.hpp"
-#include "pmacc/communication/manager_common.hpp"
 #include "pmacc/simulationControl/signal.hpp"
-
-#include <mpi.h>
 
 namespace pmacc
 {
@@ -58,40 +55,18 @@ namespace pmacc
                 m_sendSignals[doCheckpointing] = signal::createCheckpoint();
                 m_sendSignals[stopSimulation] = signal::stopSimulation();
 
-                if(communicator.usesMpiContext())
-                {
-                    m_timeStepFuture = communicator.startSignalAllReduce(
-                        &m_processSignalAtStep,
-                        &m_globalCommonTimestep,
-                        sizeof(m_processSignalAtStep),
-                        caravan::ScalarType::uint32,
-                        caravan::ReduceOperation::maximum);
-                    m_signalFuture = communicator.startSignalAllReduce(
-                        m_sendSignals.data(),
-                        m_globalSignalCounts.data(),
-                        sizeof(m_sendSignals),
-                        caravan::ScalarType::uint32,
-                        caravan::ReduceOperation::sum);
-                }
-                else
-                {
-                    MPI_CHECK(MPI_Iallreduce(
-                        &m_processSignalAtStep,
-                        &m_globalCommonTimestep,
-                        1,
-                        MPI_UINT32_T,
-                        MPI_MAX,
-                        communicator.getMPISignalComm(),
-                        &m_reduceTimeStepRequest));
-                    MPI_CHECK(MPI_Iallreduce(
-                        m_sendSignals.data(),
-                        m_globalSignalCounts.data(),
-                        m_globalSignalCounts.size(),
-                        MPI_UINT32_T,
-                        MPI_SUM,
-                        communicator.getMPISignalComm(),
-                        &m_signalRequest));
-                }
+                m_timeStepFuture = communicator.startSignalAllReduce(
+                    &m_processSignalAtStep,
+                    &m_globalCommonTimestep,
+                    sizeof(m_processSignalAtStep),
+                    caravan::ScalarType::uint32,
+                    caravan::ReduceOperation::maximum);
+                m_signalFuture = communicator.startSignalAllReduce(
+                    m_sendSignals.data(),
+                    m_globalSignalCounts.data(),
+                    sizeof(m_sendSignals),
+                    caravan::ScalarType::uint32,
+                    caravan::ReduceOperation::sum);
 
                 m_state = WaitForMpiReduce;
             }
@@ -104,38 +79,14 @@ namespace pmacc
 
             if(m_state == WaitForMpiReduce)
             {
-                if(m_timeStepFuture.valid())
+                auto& communicator = Environment<T_dim>::get().GridController().getCommunicator();
+                communicator.progressAsync();
+                if(m_timeStepFuture.state() != caravan::CompletionState::pending
+                   && m_signalFuture.state() != caravan::CompletionState::pending)
                 {
-                    auto& communicator = Environment<T_dim>::get().GridController().getCommunicator();
-                    communicator.progressAsync();
-                    if(m_timeStepFuture.state() != caravan::CompletionState::pending
-                       && m_signalFuture.state() != caravan::CompletionState::pending)
-                    {
-                        static_cast<void>(m_timeStepFuture.result());
-                        static_cast<void>(m_signalFuture.result());
-                        m_state = HandleSignals;
-                    }
-                }
-                else
-                {
-                    if(m_reduceTimeStepRequest != MPI_REQUEST_NULL)
-                    {
-                        MPI_Status status;
-                        int flag = 0;
-                        MPI_CHECK(MPI_Test(&m_reduceTimeStepRequest, &flag, &status));
-                        if(flag != 0)
-                            m_reduceTimeStepRequest = MPI_REQUEST_NULL;
-                    }
-                    else if(m_signalRequest != MPI_REQUEST_NULL)
-                    {
-                        MPI_Status status;
-                        int flag = 0;
-                        MPI_CHECK(MPI_Test(&m_signalRequest, &flag, &status));
-                        if(flag != 0)
-                            m_signalRequest = MPI_REQUEST_NULL;
-                    }
-                    if(m_reduceTimeStepRequest == MPI_REQUEST_NULL && m_signalRequest == MPI_REQUEST_NULL)
-                        m_state = HandleSignals;
+                    static_cast<void>(m_timeStepFuture.result());
+                    static_cast<void>(m_signalFuture.result());
+                    m_state = HandleSignals;
                 }
             }
 
@@ -203,10 +154,6 @@ namespace pmacc
         caravan::Future<caravan::AllReduceResult> m_timeStepFuture;
         caravan::Future<caravan::AllReduceResult> m_signalFuture;
 
-        /** MPI Request to check the status for the common time step MPI call */
-        MPI_Request m_reduceTimeStepRequest = MPI_REQUEST_NULL;
-        /** MPI Request to check the status for the common category MPI call */
-        MPI_Request m_signalRequest = MPI_REQUEST_NULL;
 
         /** Signal categories to send
          *

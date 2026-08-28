@@ -40,6 +40,8 @@
 #include <iostream>
 #include <limits>
 
+#include <caravan/mpi.hpp>
+
 namespace pmacc
 {
     namespace test
@@ -277,15 +279,18 @@ namespace pmacc
 
 int main(int argc, char** argv)
 {
-    using namespace pmacc;
-    using namespace test::random;
+    return caravan::MpiRuntime::run(
+        argc,
+        argv,
+        [&](caravan::MpiContext& mpi)
+        {
+            using namespace pmacc;
+            using namespace test::random;
 
-    Environment<2>::get().initDevices(Space2D::create(1), Space2D::create(0));
-
-    uint32_t const numSamples = (argc > 1) ? atoi(argv[1]) : 100;
-
-    runTest<random::methods::AlpakaRand<pmacc::Acc<DIM1>>>(numSamples);
-
-    /* finalize the pmacc context */
-    Environment<>::get().finalize();
+            Environment<2>::get().initDevices(mpi, Space2D::create(1), Space2D::create(0));
+            uint32_t const numSamples = (argc > 1) ? atoi(argv[1]) : 100;
+            runTest<random::methods::AlpakaRand<pmacc::Acc<DIM1>>>(numSamples);
+            Environment<>::get().finalize();
+            return 0;
+        });
 }

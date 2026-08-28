@@ -26,7 +26,6 @@
 #include "pmacc/types.hpp"
 
 #include <caravan/mpi.hpp>
-#include <mpi.h>
 
 namespace pmacc
 {
@@ -54,33 +53,6 @@ namespace pmacc
          */
         virtual bool setStateAfterSlides(size_t numSlides) = 0;
 
-        //!\todo Interface should not depend on MPI!
-
-        /*! starts sending via MPI (non-blocking)
-         *
-         * @param[in] ex                direction to send (enum ExchangeType)
-         * @param[in] send_data         pointer to data; should have at least send_data_count bytes
-         * @param[in] send_data_count   message size in bytes to sent
-         * @param[in] tag               user-defined tag; only message with the same tag can be exchanged (i.e.
-         * startSend and startReceive must use the same tag) @returns an request for testing if this operation has
-         * already finished
-         */
-        virtual MPI_Request* startSend(uint32_t ex, char const* send_data, size_t send_data_count, uint32_t tag) = 0;
-
-        /*! starts receiving via MPI (non-blocking)
-         *
-         * If recv_data_max is less then send_data_count (on other host) multiple startReceive are needed!
-         *
-         * @param[in] ex                direction to send (enum ExchangeType)
-         * @param[in] recv_data         pointer to data; should have at least recv_data_max bytes
-         * @param[in] recv_data_max     maximum message size in bytes to receive
-         * @param[in] tag               user-defined tag; only message with the same tag can be exchanged (i.e.
-         * startSend and startReceive must use the same tag) @returns an request for testing if this operation has
-         * already finished
-         */
-        virtual MPI_Request* startReceive(uint32_t ex, char* recv_data, size_t recv_data_max, uint32_t tag) = 0;
-
-        /** Temporary adapters used while legacy PMacc MPI tasks are migrated. */
         virtual caravan::Future<caravan::SendResult> startSendAsync(
             uint32_t ex,
             char const* sendData,
@@ -94,8 +66,6 @@ namespace pmacc
             size_t receiveBytes,
             uint32_t tag)
             = 0;
-
-        virtual bool usesMpiContext() const = 0;
 
         /** Execute ready PMacc-side completions from asynchronous backends. */
         virtual void progressAsync() = 0;
