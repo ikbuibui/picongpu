@@ -28,7 +28,6 @@
 
 #include <caravan/core.hpp>
 #include <caravan/mpi/native.hpp>
-#include <mpi.h>
 
 namespace pmacc
 {
@@ -79,50 +78,6 @@ namespace pmacc
     }
 
     template<unsigned DIM>
-    void CommunicatorMPI<DIM>::init(DataSpace<DIM3> numberProcesses, DataSpace<DIM3> periodic)
-    {
-        this->periodic = periodic;
-
-        // check if parameters are correct
-        MPI_CHECK(MPI_Comm_size(MPI_COMM_WORLD, &mpiSize));
-
-        if(numberProcesses.productOfComponents() != mpiSize)
-        {
-            throw std::invalid_argument(
-                "Wrong configuration of processes or wrong MPI launch call: MPI_COMM_WORLD has "
-                + std::to_string(mpiSize) + " ranks, but process configuration " + std::to_string(numberProcesses[0])
-                + "x" + std::to_string(numberProcesses[1]) + "x" + std::to_string(numberProcesses[2])
-                + " was requested");
-        }
-
-        // 1. create Communicator (computing_comm) of computing nodes (ranks 0...n)
-        MPI_Comm computing_comm = MPI_COMM_WORLD;
-
-        yoffset = 0;
-
-        // 2. create topology
-
-        dims[0] = numberProcesses.x();
-        dims[1] = numberProcesses.y();
-        dims[2] = numberProcesses.z();
-
-        topology = MPI_COMM_NULL;
-
-        int periods[] = {periodic.x(), periodic.y(), periodic.z()};
-
-        /*create new communicator based on cartesian coordinates*/
-        MPI_CHECK(MPI_Cart_create(computing_comm, DIM, dims, periods, 0, &topology));
-        // create communicator for signal handling
-        MPI_CHECK(MPI_Comm_dup(topology, &commSignal));
-
-        // 3. update Host rank
-        updateHostRank();
-
-        // 4. update Coordinates
-        updateCoordinates();
-    }
-
-    template<unsigned DIM>
     void CommunicatorMPI<DIM>::init(
         caravan::MpiContext& context,
         DataSpace<DIM3> numberProcesses,
@@ -156,54 +111,12 @@ namespace pmacc
     }
 
     template<unsigned DIM>
-    MPI_Request* CommunicatorMPI<DIM>::startSend(
-        uint32_t ex,
-        char const* send_data,
-        size_t send_data_count,
-        uint32_t tag)
-    {
-        auto* request = new MPI_Request;
-
-        MPI_CHECK(MPI_Isend(
-            (void*) send_data,
-            static_cast<int>(send_data_count),
-            MPI_CHAR,
-            ExchangeTypeToRank(ex),
-            gridExchangeTag + tag,
-            topology,
-            request));
-
-        return request;
-    }
-
-    // description in ICommunicator
-
-    template<unsigned DIM>
-    MPI_Request* CommunicatorMPI<DIM>::startReceive(uint32_t ex, char* recv_data, size_t recv_data_max, uint32_t tag)
-    {
-        auto* request = new MPI_Request;
-
-        MPI_CHECK(MPI_Irecv(
-            recv_data,
-            static_cast<int>(recv_data_max),
-            MPI_CHAR,
-            ExchangeTypeToRank(ex),
-            gridExchangeTag + tag,
-            topology,
-            request));
-
-        return request;
-    }
-
-    template<unsigned DIM>
     caravan::Future<caravan::SendResult> CommunicatorMPI<DIM>::startSendAsync(
         uint32_t ex,
         char const* sendData,
         size_t sendBytes,
         uint32_t tag)
     {
-        if(!mpiContext)
-            throw std::logic_error("CommunicatorMPI is not attached to Caravan");
         return asyncScope.spawnFuture<caravan::SendResult>(caravan::continuesOn(
             caravan::mpi::send(
                 *mpiContext,
@@ -221,8 +134,6 @@ namespace pmacc
         size_t receiveBytes,
         uint32_t tag)
     {
-        if(!mpiContext)
-            throw std::logic_error("CommunicatorMPI is not attached to Caravan");
         return asyncScope.spawnFuture<caravan::ReceiveResult>(caravan::continuesOn(
             caravan::mpi::receive(
                 *mpiContext,
@@ -241,8 +152,6 @@ namespace pmacc
         caravan::ScalarType type,
         caravan::ReduceOperation operation)
     {
-        if(!mpiContext)
-            throw std::logic_error("CommunicatorMPI is not attached to Caravan");
         return asyncScope.spawnFuture<caravan::AllReduceResult>(caravan::continuesOn(
             caravan::mpi::allReduce(
                 *mpiContext,
@@ -257,8 +166,6 @@ namespace pmacc
     template<unsigned DIM>
     caravan::Event CommunicatorMPI<DIM>::startBarrierAsync()
     {
-        if(!mpiContext)
-            throw std::logic_error("CommunicatorMPI is not attached to Caravan");
         return asyncScope.spawn(
             caravan::continuesOn(caravan::mpi::barrier(*mpiContext, communicatorId), runLoop.scheduler()));
     }
@@ -272,7 +179,6 @@ namespace pmacc
         if constexpr(DIM < DIM2)
             return false;
 
-        // MPI_Barrier(topology);
         yoffset--;
         if(yoffset == -dims[1])
             yoffset = 0;
@@ -303,35 +209,13 @@ namespace pmacc
     }
 
     template<unsigned DIM>
-    void CommunicatorMPI<DIM>::updateHostRank()
-    {
-        MPI_CHECK(MPI_Comm_size(MPI_COMM_WORLD, &mpiSize));
-        MPI_CHECK(MPI_Comm_rank(MPI_COMM_WORLD, &mpiRank));
-
-        // Determine the node-local rank, used to assign one GPU per rank on a node.
-        MPI_Comm nodeComm;
-        MPI_CHECK(MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, mpiRank, MPI_INFO_NULL, &nodeComm));
-        MPI_CHECK(MPI_Comm_rank(nodeComm, &hostRank));
-        MPI_CHECK(MPI_Comm_free(&nodeComm));
-    }
-
-    template<unsigned DIM>
     void CommunicatorMPI<DIM>::updateCoordinates()
     {
         // get own coordinates
         int coords[DIM];
         int rank = mpiRank;
-
-        if(mpiContext)
-        {
-            for(unsigned dimension = 0; dimension < DIM; ++dimension)
-                coords[dimension] = baseCoordinates[dimension];
-        }
-        else
-        {
-            MPI_CHECK(MPI_Comm_rank(topology, &rank));
-            MPI_CHECK(MPI_Cart_coords(topology, rank, DIM, coords));
-        }
+        for(unsigned dimension = 0; dimension < DIM; ++dimension)
+            coords[dimension] = baseCoordinates[dimension];
 
         if(DIM >= DIM2)
         {
@@ -390,19 +274,14 @@ namespace pmacc
                 if(dims[1] > 1)
                     mcoords[1] = (mcoords[1] - yoffset) % dims[1];
 
-                if(mpiContext)
+                ranks[i] = 0;
+                for(unsigned dimension = 0; dimension < DIM; ++dimension)
                 {
-                    ranks[i] = 0;
-                    for(unsigned dimension = 0; dimension < DIM; ++dimension)
-                    {
-                        int coordinate = mcoords[dimension] % dims[dimension];
-                        if(coordinate < 0)
-                            coordinate += dims[dimension];
-                        ranks[i] = ranks[i] * dims[dimension] + coordinate;
-                    }
+                    int coordinate = mcoords[dimension] % dims[dimension];
+                    if(coordinate < 0)
+                        coordinate += dims[dimension];
+                    ranks[i] = ranks[i] * dims[dimension] + coordinate;
                 }
-                else
-                    MPI_CHECK(MPI_Cart_rank(topology, mcoords, &ranks[i]));
                 communicationMask = communicationMask + Mask(i);
             }
             else

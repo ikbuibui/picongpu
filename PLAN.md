@@ -1540,9 +1540,10 @@ global Caravan supervisor or general task/scheduler hierarchy has been introduce
 
 ## Phase 3: Complete the dedicated-thread MPI backend and PMacc MPI migration
 
-**Current state:** PMacc's `GatherSlice` communicator setup, metadata gathers, and
-variable data gather use the managed Caravan MPI context when attached; the legacy
-startup path remains temporarily available for unmigrated applications.
+**Current state:** PMacc startup, topology, point-to-point operations, signals,
+barriers, reductions, and gathers use the managed Caravan MPI context. Native MPI
+calls are confined to `MPIReduce`'s generic request initiation hook, and a PMacc
+CI check rejects calls outside that integration boundary.
 
 Begin this phase only after the Phase 2 alpaka sender prototype has exercised the
 shared sender model across both backend shapes.
@@ -1552,8 +1553,8 @@ shared sender model across both backend shapes.
 2. Complete point-to-point operations, receive status/count metadata, required
    collectives, barriers, communicator creation/destruction, and topology setup
    through the generic MPI mechanisms.
-3. Route all remaining PMacc direct MPI operations and target PMacc examples
-   through `caravan::mpi` or narrowly scoped generic native invocation.
+3. **Implemented:** route all remaining PMacc direct MPI operations and target PMacc
+   examples through `caravan::mpi` or narrowly scoped generic native invocation.
 4. Route PMacc signal operations through the same MPI context.
 5. Inventory PMacc-relevant MPI-enabled third-party calls and route blocking
    cases through `invokeBlocking()` after composing the required safety/quiescence
@@ -1562,8 +1563,8 @@ shared sender model across both backend shapes.
    collective helpers; dependency-ready later collectives must not pass earlier
    submitted collectives on the same communicator.
 7. Preserve early receive posting where explicit dependencies and the destination lifetime contract permit.
-8. Add a PMacc-scoped CI rule/allowlist rejecting direct MPI calls outside the
-   approved MPI integration layer during this migration stage.
+8. **Implemented:** add a PMacc-scoped CI rule/allowlist rejecting direct MPI calls
+   outside the approved MPI integration layer during this migration stage.
 9. Verify progress continues while the process application thread sleeps or does
    CPU work.
 10. Verify startup/shutdown, failure propagation, communicator lifetime, and

@@ -38,6 +38,8 @@
 #include <iostream>
 #include <memory>
 
+#include <caravan/mpi.hpp>
+
 #define NUM_STEPS 1000
 #define NUM_DEVICES_PER_DIM 2
 #define THERMAL_DIFFUSIVITY 4 // POSITIVE FACTOR
@@ -72,11 +74,11 @@ inline auto createPng(uint32_t currentStep, T_Gather& gather, std::unique_ptr<T_
     }
 }
 
-auto main(int argc, char** argv) -> int
+auto run(caravan::MpiContext& mpi) -> int
 {
     auto const devices = pmacc::DataSpace<DIM2>::create(NUM_DEVICES_PER_DIM);
     auto const periodic = pmacc::DataSpace<DIM2>::create(0);
-    pmacc::Environment<DIM2>::get().initDevices(devices, periodic);
+    pmacc::Environment<DIM2>::get().initDevices(mpi, devices, periodic);
 
     /** define a gloabl grid */
     pmacc::DataSpace<DIM2> const gridSize{256u, 256u};
@@ -232,4 +234,9 @@ auto main(int argc, char** argv) -> int
     pmacc::Environment<DIM2>::get().finalize();
 
     return 0;
+}
+
+auto main(int argc, char** argv) -> int
+{
+    return caravan::MpiRuntime::run(argc, argv, [](caravan::MpiContext& mpi) { return run(mpi); });
 }

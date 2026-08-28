@@ -23,8 +23,6 @@
 
 #include "pmacc/eventSystem/tasks/ITask.hpp"
 
-#include <mpi.h>
-
 namespace pmacc
 {
     /**

@@ -104,9 +104,9 @@ foreach(dim 2 3)
         get_filename_component(testCaseFilename ${testCaseFilepath} NAME)
         string(REPLACE "UT.cpp" "" testCase ${testCaseFilename})
         set(testExe "${PROJECT_NAME}-${testCase}-${dim}D")
-        alpaka_add_executable(${testExe} ${testCaseFilepath})
+        alpaka_add_executable(${testExe} ${testCaseFilepath} test/TestMain.cpp)
         target_compile_definitions(${testExe} PRIVATE TEST_DIM=${dim})
-        target_link_libraries(${testExe} PUBLIC Catch2 Catch2WithMain)
+        target_link_libraries(${testExe} PUBLIC Catch2)
         target_link_libraries(${testExe} PRIVATE pmacc::pmacc)
         add_test(
             NAME "${testCase}-${dim}D"
