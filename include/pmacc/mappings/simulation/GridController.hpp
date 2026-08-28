@@ -55,7 +55,7 @@ namespace pmacc
         void init(
             DataSpace<DIM> nodes,
             DataSpace<DIM> periodic = DataSpace<DIM>(),
-            caravan::MpiExecutor* mpiExecutor = nullptr)
+            caravan::MpiContext* mpiContext = nullptr)
         {
             static bool commIsInit = false;
             if(!commIsInit)
@@ -88,8 +88,8 @@ namespace pmacc
                     periodicTmp[2] = periodic[2];
                 }
 
-                if(mpiExecutor)
-                    comm.init(*mpiExecutor, tmp, periodicTmp);
+                if(mpiContext)
+                    comm.init(*mpiContext, tmp, periodicTmp);
                 else
                     comm.init(tmp, periodicTmp);
                 commIsInit = true;

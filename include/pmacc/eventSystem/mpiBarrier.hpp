@@ -49,7 +49,7 @@ namespace pmacc::eventSystem
     template<unsigned DIM, typename T_Progress = std::function<void()>>
     void mpiBlocking(CommunicatorMPI<DIM>& communicator, T_Progress progress = [] {})
     {
-        if(!communicator.usesMpiExecutor())
+        if(!communicator.usesMpiContext())
         {
             mpiBlocking(communicator.getMPIComm(), std::move(progress));
             return;
