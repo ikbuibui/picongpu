@@ -26,8 +26,6 @@
 #include "pmacc/communication/ICommunicator.hpp"
 #include "pmacc/eventSystem/tasks/MPITask.hpp"
 
-#include <mpi.h>
-
 namespace pmacc
 {
     template<class TYPE, unsigned DIM>
@@ -45,22 +43,11 @@ namespace pmacc
         {
             auto cPtr = exchange->getCPtrCurrentSize();
             auto& communicator = Environment<DIM>::get().EnvironmentController().getCommunicator();
-            if(communicator.usesMpiContext())
-            {
-                future = communicator.startSendAsync(
-                    exchange->getExchangeType(),
-                    cPtr.asCharPtr(),
-                    cPtr.sizeInBytes(),
-                    exchange->getCommunicationTag());
-            }
-            else
-            {
-                request = communicator.startSend(
-                    exchange->getExchangeType(),
-                    cPtr.asCharPtr(),
-                    cPtr.sizeInBytes(),
-                    exchange->getCommunicationTag());
-            }
+            future = communicator.startSendAsync(
+                exchange->getExchangeType(),
+                cPtr.asCharPtr(),
+                cPtr.sizeInBytes(),
+                exchange->getCommunicationTag());
         }
 
         bool executeIntern() override
@@ -68,30 +55,12 @@ namespace pmacc
             if(this->isFinished())
                 return true;
 
-            if(future.valid())
-            {
-                Environment<DIM>::get().EnvironmentController().getCommunicator().progressAsync();
-                if(future.state() == caravan::CompletionState::pending)
-                    return false;
-                static_cast<void>(future.result());
-                setFinished();
-                return true;
-            }
-
-            if(request == nullptr)
-                throw std::runtime_error("request was nullptr (call executeIntern after freed");
-
-            int flag = 0;
-            MPI_CHECK(MPI_Test(request, &flag, &status));
-
-            if(flag) // finished
-            {
-                delete request;
-                request = nullptr;
-                setFinished();
-                return true;
-            }
-            return false;
+            Environment<DIM>::get().EnvironmentController().getCommunicator().progressAsync();
+            if(future.state() == caravan::CompletionState::pending)
+                return false;
+            static_cast<void>(future.result());
+            setFinished();
+            return true;
         }
 
         ~TaskSendMPI() override
@@ -111,8 +80,6 @@ namespace pmacc
     private:
         Exchange<TYPE, DIM>* exchange;
         caravan::Future<caravan::SendResult> future;
-        MPI_Request* request{nullptr};
-        MPI_Status status;
     };
 
 } // namespace pmacc

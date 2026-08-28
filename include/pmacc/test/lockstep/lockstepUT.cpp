@@ -24,7 +24,6 @@
 #include <pmacc/Environment.hpp>
 #include <pmacc/lockstep.hpp>
 #include <pmacc/memory/buffers/HostDeviceBuffer.hpp>
-#include <pmacc/test/PMaccFixture.hpp>
 #include <pmacc/verify.hpp>
 
 #include <cstdint>
@@ -39,9 +38,6 @@
  *  This file is testing common lockstep pattern.
  *  There are many code duplications, those are necessary because the code snippets are include into the documentation.
  */
-
-using MyPMaccFixture = pmacc::test::PMaccFixture<TEST_DIM>;
-static MyPMaccFixture fixture;
 
 constexpr uint32_t numElements = 4096u;
 
