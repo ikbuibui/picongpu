@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <cassert>
+#include <exception>
 #include <mutex>
 #include <stdexcept>
 #include <string_view>
@@ -12,6 +13,7 @@
 #include <vector>
 
 #include <caravan/core.hpp>
+#include <caravan/sender.hpp>
 
 namespace
 {
@@ -22,6 +24,97 @@ namespace
         {
             std::forward<T_Function>(function)();
         }
+    };
+
+    struct EventReceiver
+    {
+        void set_value() noexcept
+        {
+            *value = true;
+        }
+
+        void set_error(std::exception_ptr error) noexcept
+        {
+            *failure = std::move(error);
+        }
+
+        void set_stopped() noexcept
+        {
+            *stopped = true;
+        }
+
+        bool* value;
+        std::exception_ptr* failure;
+        bool* stopped;
+    };
+
+    template<typename T>
+    class AsyncValueSender
+    {
+    public:
+        AsyncValueSender(caravan::Event ready, T value) : m_ready(std::move(ready)), m_value(std::move(value))
+        {
+        }
+
+        template<typename T_Receiver>
+        class Operation
+        {
+            struct Receiver
+            {
+                void set_value() noexcept
+                {
+                    owner->m_receiver.set_value(std::move(owner->m_value));
+                }
+
+                void set_error(std::exception_ptr error) noexcept
+                {
+                    owner->m_receiver.set_error(std::move(error));
+                }
+
+                void set_stopped() noexcept
+                {
+                    owner->m_receiver.set_stopped();
+                }
+
+                Operation* owner;
+            };
+
+        public:
+            Operation(caravan::Event ready, T value, T_Receiver receiver)
+                : m_value(std::move(value))
+                , m_receiver(std::move(receiver))
+                , m_operation(caravan::asSender(std::move(ready)).connect(Receiver{this}))
+            {
+            }
+
+            Operation(Operation const&) = delete;
+            Operation& operator=(Operation const&) = delete;
+            Operation(Operation&&) = delete;
+            Operation& operator=(Operation&&) = delete;
+
+            void start() & noexcept
+            {
+                m_operation.start();
+            }
+
+        private:
+            T m_value;
+            T_Receiver m_receiver;
+            caravan::EventOperation<Receiver> m_operation;
+        };
+
+        template<typename T_Receiver>
+        auto connect(T_Receiver&& receiver) &&
+        {
+            return Operation<std::decay_t<T_Receiver>>{
+                std::move(m_ready),
+                std::move(m_value),
+                std::forward<T_Receiver>(receiver)};
+        }
+
+    private:
+        caravan::Event m_ready;
+        T m_value;
     };
 
     struct RecursionTrackingExecutor
@@ -129,6 +222,188 @@ namespace
         assert(doubled.result() == 42);
     }
 
+    void testEventSenderBridge()
+    {
+        caravan::EventSource source;
+        bool value = false;
+        bool stopped = false;
+        std::exception_ptr failure;
+        auto operation = caravan::asSender(source.event()).connect(EventReceiver{&value, &failure, &stopped});
+
+        source.setReady();
+        assert(!value);
+        operation.start();
+        assert(value && !failure && !stopped);
+
+        caravan::EventSource stoppedSource;
+        auto stoppedOperation
+            = caravan::asSender(stoppedSource.event()).connect(EventReceiver{&value, &failure, &stopped});
+        stoppedOperation.start();
+        stoppedSource.setStopped();
+        assert(stopped);
+    }
+
+    void testSyncWait()
+    {
+        caravan::syncWait(caravan::asSender(caravan::readyEvent()));
+
+        caravan::EventSource failed;
+        failed.setFailed(std::make_exception_ptr(std::runtime_error("sync wait failure")));
+        try
+        {
+            caravan::syncWait(caravan::asSender(failed.event()));
+            assert(false);
+        }
+        catch(std::runtime_error const&)
+        {
+        }
+    }
+
+    void testLetValue()
+    {
+        caravan::EventSource predecessor;
+        caravan::EventSource successor;
+        bool factoryCalled = false;
+        auto chain = caravan::letValue(
+            caravan::asSender(predecessor.event()),
+            [&]
+            {
+                factoryCalled = true;
+                return caravan::asSender(successor.event());
+            });
+        caravan::AsyncScope scope;
+        auto completion = scope.spawn(std::move(chain));
+        auto joined = scope.join();
+
+        assert(!factoryCalled);
+        predecessor.setReady();
+        assert(factoryCalled);
+        assert(completion.state() == caravan::CompletionState::pending);
+        successor.setReady();
+        completion.wait();
+        joined.wait();
+
+        caravan::EventSource eagerPredecessor;
+        caravan::AsyncScope eagerScope;
+        auto eagerCompletion = eagerScope.spawn(
+            caravan::letValue(
+                caravan::asSender(eagerPredecessor.event()),
+                [] { return caravan::asSender(caravan::readyEvent()); }));
+        auto eagerJoin = eagerScope.join();
+        eagerPredecessor.setReady();
+        eagerCompletion.wait();
+        eagerJoin.wait();
+    }
+
+    void testEagerSenderBridgesAndOperationLifetime()
+    {
+        caravan::AsyncScope scope;
+        caravan::EventSource valueReady;
+        auto value = scope.spawnFuture<int>(AsyncValueSender<int>{valueReady.event(), 42});
+        assert(value.state() == caravan::CompletionState::pending);
+        valueReady.setReady();
+        assert(value.result() == 42);
+
+        caravan::EventSource failedReady;
+        auto failed = scope.spawnFuture<int>(AsyncValueSender<int>{failedReady.event(), 0});
+        failedReady.setFailed(std::make_exception_ptr(std::runtime_error("typed bridge failure")));
+        try
+        {
+            static_cast<void>(failed.result());
+            assert(false);
+        }
+        catch(std::runtime_error const&)
+        {
+        }
+
+        caravan::EventSource stoppedReady;
+        auto stopped = scope.spawnFuture<int>(AsyncValueSender<int>{stoppedReady.event(), 0});
+        stoppedReady.setStopped();
+        try
+        {
+            static_cast<void>(stopped.result());
+            assert(false);
+        }
+        catch(caravan::StoppedError const&)
+        {
+        }
+
+        caravan::EventSource predecessor;
+        caravan::EventSource successor;
+        auto retained = std::make_shared<int>(7);
+        std::weak_ptr<int> lifetime = retained;
+        auto completion = scope.spawn(
+            caravan::letValue(
+                caravan::asSender(predecessor.event()),
+                [retained, ready = successor.event()] { return caravan::asSender(ready); }));
+        retained.reset();
+        assert(!lifetime.expired());
+        predecessor.setReady();
+        assert(!lifetime.expired());
+        successor.setReady();
+        completion.wait();
+        assert(lifetime.expired());
+        scope.join().wait();
+    }
+
+    void testContinuesOnRunLoop()
+    {
+        caravan::RunLoop runLoop;
+        caravan::AsyncScope scope;
+        caravan::EventSource source;
+        auto transferred = scope.spawn(caravan::continuesOn(caravan::asSender(source.event()), runLoop));
+        auto joined = scope.join();
+
+        source.setReady();
+        assert(transferred.state() == caravan::CompletionState::pending);
+        assert(joined.state() == caravan::CompletionState::pending);
+        runLoop.finish();
+        runLoop.run();
+        transferred.wait();
+        joined.wait();
+
+        caravan::RunLoop polledLoop;
+        caravan::AsyncScope polledScope;
+        caravan::EventSource polledSource;
+        auto polled = polledScope.spawn(caravan::continuesOn(caravan::asSender(polledSource.event()), polledLoop));
+        auto polledJoin = polledScope.join();
+        polledSource.setReady();
+        assert(polled.state() == caravan::CompletionState::pending);
+        polledLoop.runReady();
+        polled.wait();
+        polledJoin.wait();
+    }
+
+    void testAsyncScope()
+    {
+        caravan::AsyncScope scope;
+        caravan::EventSource readySource;
+        caravan::EventSource failedSource;
+        caravan::EventSource stoppedSource;
+        auto ready = scope.spawn(caravan::asSender(readySource.event()));
+        auto failed = scope.spawn(caravan::asSender(failedSource.event()));
+        auto stopped = scope.spawn(caravan::asSender(stoppedSource.event()));
+        auto joined = scope.join();
+
+        assert(joined.state() == caravan::CompletionState::pending);
+        readySource.setReady();
+        failedSource.setFailed(std::make_exception_ptr(std::runtime_error("scope failure")));
+        stoppedSource.setStopped();
+        joined.wait();
+        assert(ready.isReady());
+        assert(failed.state() == caravan::CompletionState::failed && failed.error());
+        assert(stopped.state() == caravan::CompletionState::stopped);
+
+        try
+        {
+            scope.spawn(caravan::asSender(caravan::readyEvent()));
+            assert(false);
+        }
+        catch(std::logic_error const&)
+        {
+        }
+    }
+
     void testExactlyOnceCompletion()
     {
         caravan::EventSource source;
@@ -197,6 +472,12 @@ int main()
     testNoRecursiveInlineChains();
     testWhenAllAndFailure();
     testFuture();
+    testEventSenderBridge();
+    testSyncWait();
+    testLetValue();
+    testEagerSenderBridgesAndOperationLifetime();
+    testContinuesOnRunLoop();
+    testAsyncScope();
     testExactlyOnceCompletion();
     testRegistrationRace();
     testExecutorWaitGuard();

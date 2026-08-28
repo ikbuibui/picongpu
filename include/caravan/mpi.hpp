@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -49,6 +48,11 @@ namespace caravan
 
     inline constexpr MessageTag anyMessageTag{0, true};
 
+    /** MPI buffer view with optional explicitly retained ownership.
+     *
+     * A borrowed buffer must remain valid until the operation completes. Passing
+     * an owner retains that allocation in the operation and native request state.
+     */
     class BufferLease
     {
     public:
@@ -57,6 +61,11 @@ namespace caravan
             , m_data(data)
             , m_bytes(bytes)
         {
+        }
+
+        static BufferLease borrowed(void* data, std::size_t bytes)
+        {
+            return BufferLease{{}, data, bytes};
         }
 
         void* data() const noexcept
@@ -76,7 +85,7 @@ namespace caravan
 
         bool valid() const noexcept
         {
-            return m_bytes == 0u || (m_allocation && m_data != nullptr);
+            return m_bytes == 0u || m_data != nullptr;
         }
 
     private:
@@ -158,37 +167,6 @@ namespace caravan
         ~MpiExecutor();
 
         TopologySnapshot topology() const;
-
-        Future<TopologySnapshot> createCartesian(
-            Event predecessor,
-            std::vector<int> dimensions,
-            std::vector<bool> periodic);
-
-        Future<CommunicatorId> duplicateCommunicator(
-            Event predecessor,
-            CommunicatorId communicator = worldCommunicator);
-
-        Future<std::optional<CommunicatorInfo>> splitCommunicator(
-            Event predecessor,
-            std::optional<int> color,
-            int key,
-            CommunicatorId communicator = worldCommunicator);
-
-        Event destroyCommunicator(Event predecessor, CommunicatorId communicator);
-
-        Future<SendResult> send(
-            Event dataReady,
-            BufferLease buffer,
-            Peer destination,
-            MessageTag tag,
-            CommunicatorId communicator = worldCommunicator);
-
-        Future<ReceiveResult> receive(
-            Event bufferAvailable,
-            BufferLease buffer,
-            Peer source,
-            MessageTag tag,
-            CommunicatorId communicator = worldCommunicator);
 
         Future<AllReduceResult> allReduce(
             Event dataReady,
