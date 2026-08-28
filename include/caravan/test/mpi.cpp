@@ -67,10 +67,16 @@ namespace
 int main(int argc, char** argv)
 {
     auto const processMain = std::this_thread::get_id();
-    return caravan::MpiRuntime::run(
+    std::atomic<bool> shutdownGateStarted = false;
+    std::atomic<bool> releaseShutdownGate = false;
+    std::jthread shutdownReleaser;
+    caravan::AsyncScope shutdownScope;
+    int shutdownSent = 42;
+    int shutdownReceived = -1;
+    auto const result = caravan::MpiRuntime::run(
         argc,
         argv,
-        [processMain](caravan::MpiContext& mpi)
+        [&](caravan::MpiContext& mpi)
         {
             assert(std::this_thread::get_id() == processMain);
             auto const topology = mpi.topology();
@@ -712,8 +718,51 @@ int main(int argc, char** argv)
 
             caravan::syncWait(caravan::mpi::destroyCommunicator(mpi, cartesian.communicator));
 
-            // MpiRuntime must drain native work even when the application drops its handle.
-            static_cast<void>(mpi.barrier(caravan::readyEvent()));
+            // Hold the worker after starting a receive and queue its matching send. A rejected probe confirms
+            // shutdown has begun before releasing the worker, so MpiRuntime must drain both requests on shutdown.
+            constexpr int shutdownTag = 921;
+            static_cast<void>(shutdownScope.spawn(
+                caravan::mpi::receive(
+                    mpi,
+                    caravan::BufferLease::borrowed(&shutdownReceived, sizeof(shutdownReceived)),
+                    caravan::Peer{topology.rank},
+                    caravan::MessageTag{shutdownTag})));
+            static_cast<void>(shutdownScope.spawn(
+                caravan::mpi::invokeBlocking(
+                    mpi,
+                    [&](caravan::NativeMpiContext&)
+                    {
+                        shutdownGateStarted.store(true);
+                        while(!releaseShutdownGate.load())
+                            std::this_thread::yield();
+                    })));
+            while(!shutdownGateStarted.load())
+                std::this_thread::yield();
+
+            static_cast<void>(shutdownScope.spawn(
+                caravan::mpi::send(
+                    mpi,
+                    caravan::BufferLease::borrowed(&shutdownSent, sizeof(shutdownSent)),
+                    caravan::Peer{topology.rank},
+                    caravan::MessageTag{shutdownTag})));
+            shutdownReleaser = std::jthread(
+                [&]
+                {
+                    for(;;)
+                    {
+                        auto probe = shutdownScope.spawn(caravan::mpi::invoke(mpi, [](caravan::NativeMpiContext&) {}));
+                        if(probe.state() == caravan::CompletionState::failed)
+                        {
+                            releaseShutdownGate.store(true);
+                            return;
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
+                });
             return 0;
         });
+    shutdownReleaser.join();
+    shutdownScope.join().wait();
+    assert(shutdownReceived == shutdownSent);
+    return result;
 }
