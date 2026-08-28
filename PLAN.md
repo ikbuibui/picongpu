@@ -1540,35 +1540,39 @@ global Caravan supervisor or general task/scheduler hierarchy has been introduce
 
 ## Phase 3: Complete the dedicated-thread MPI backend and PMacc MPI migration
 
-**Current state:** PMacc startup, topology, point-to-point operations, signals,
-barriers, reductions, and gathers use the managed Caravan MPI context. Native MPI
-calls are confined to `MPIReduce`'s generic request initiation hook, and a PMacc
-CI check rejects calls outside that integration boundary.
+**Current state:** implemented for the PMacc migration scope. PMacc startup,
+topology, point-to-point operations, signals, barriers, reductions, and gathers
+use the managed Caravan MPI context. Native MPI calls are confined to
+`MPIReduce`'s generic request initiation hook, and a PMacc CI check rejects calls
+outside that integration boundary. No PMacc-scoped MPI-enabled third-party call
+requires `invokeBlocking`; PIConGPU plugin/library use remains deferred to Phase 8.
 
 Begin this phase only after the Phase 2 alpaka sender prototype has exercised the
 shared sender model across both backend shapes.
 
-1. Finish the dedicated-thread submission queue and batched active-request
-   progress path without reintroducing predecessor storage in the MPI engine.
-2. Complete point-to-point operations, receive status/count metadata, required
-   collectives, barriers, communicator creation/destruction, and topology setup
-   through the generic MPI mechanisms.
+1. **Implemented:** finish the dedicated-thread submission queue and batched
+   active-request progress path without reintroducing predecessor storage in the
+   MPI engine.
+2. **Implemented:** complete point-to-point operations, receive status/count
+   metadata, required collectives, barriers, communicator creation/destruction,
+   and topology setup through the generic MPI mechanisms.
 3. **Implemented:** route all remaining PMacc direct MPI operations and target PMacc
    examples through `caravan::mpi` or narrowly scoped generic native invocation.
-4. Route PMacc signal operations through the same MPI context.
-5. Inventory PMacc-relevant MPI-enabled third-party calls and route blocking
-   cases through `invokeBlocking()` after composing the required safety/quiescence
-   dependencies outside the primitive.
-6. Implement and test per-communicator collective initiation ordering for managed
-   collective helpers; dependency-ready later collectives must not pass earlier
-   submitted collectives on the same communicator.
-7. Preserve early receive posting where explicit dependencies and the destination lifetime contract permit.
+4. **Implemented:** route PMacc signal operations through the same MPI context.
+5. **Implemented for the PMacc scope:** inventory PMacc-relevant MPI-enabled
+   third-party calls; none require `invokeBlocking()`. PIConGPU plugin/library use
+   remains a Phase 8 concern.
+6. **Implemented:** preserve and test per-communicator collective initiation
+   ordering for managed collective helpers; dependency-ready later collectives
+   must not pass earlier submitted collectives on the same communicator.
+7. **Implemented:** preserve early receive posting where explicit dependencies and
+   the destination lifetime contract permit.
 8. **Implemented:** add a PMacc-scoped CI rule/allowlist rejecting direct MPI calls
    outside the approved MPI integration layer during this migration stage.
-9. Verify progress continues while the process application thread sleeps or does
-   CPU work.
-10. Verify startup/shutdown, failure propagation, communicator lifetime, and
-   in-flight request handling.
+9. **Implemented:** verify progress continues while the process application thread
+   sleeps or does CPU work.
+10. **Implemented:** verify startup/shutdown, failure propagation, communicator
+   lifetime, and queued/in-flight request handling.
 
 **Exit criterion:** no PMacc example, task, helper, or simulation thread directly
 calls MPI; the selected production configuration uses the dedicated FUNNELED
