@@ -35,8 +35,8 @@
 #include <type_traits>
 #include <vector>
 
-#include <caravan/mpi_native.hpp>
-#include <caravan/sender.hpp>
+#include <caravan/core/sender.hpp>
+#include <caravan/mpi/native.hpp>
 #include <mpi.h>
 
 namespace pmacc
