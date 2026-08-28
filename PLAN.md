@@ -20,6 +20,8 @@ The implementation completed so far remains valuable and is not discarded:
   signal, reduction, gather, barrier, and point-to-point paths through it;
 - the native MPI extension can transfer arbitrary nonblocking requests and their
   retained lifetimes to the progress engine;
+- the MPI engine no longer stores predecessor Events; lazy senders submit directly,
+  while temporary eager Event adapters subscribe above the backend;
 - blocking MPI-context submissions already provide an escape path for blocking
   MPI-enabled operations and third-party libraries;
 - the minimal typed sender vocabulary and completion-signature model are
@@ -52,8 +54,8 @@ The immediate implementation order is:
 4. **Implemented:** make the typed `mpi::send`, `receive`, collectives, and barrier
    sender factories part of the normal public MPI header, leaving
    request/invoke/native context in an extension/native header;
-5. remove predecessor handling from the MPI engine; temporary Event-taking PMacc
-   wrappers compose or subscribe above the backend;
+5. **Implemented:** remove predecessor handling from the MPI engine; temporary
+   Event-taking wrappers compose or subscribe above the backend;
 6. implement the first real alpaka/device sender prototype as the second backend
    architecture test; and only then
 7. replace PMacc polling task chains with local sender composition and retain Event
@@ -1426,10 +1428,12 @@ with P2300 semantics and the clarified Caravan scope.
    header.
 5. Ensure every primitive sender's `start()` performs MPI initiation in the valid
    authority and convenience operations remain thin factories over that path.
-6. Remove predecessor `Event` parameters from the MPI engine and its internal
-   submission queue. Sender composition decides when an MPI operation is started.
-7. Let temporary compatibility wrappers subscribe to/adapt predecessor Events
-   above the backend; do not retain `submitAfter(Event, ...)` as the engine model.
+6. **Implemented:** remove predecessor `Event` parameters from the MPI engine and
+   its internal submission queue. Sender composition decides when an MPI operation
+   is started.
+7. **Implemented:** let temporary compatibility wrappers subscribe to/adapt
+   predecessor Events above the backend; `submitAfter(Event, ...)` is not retained
+   as the engine model.
 8. Preserve per-communicator collective initiation ordering.
 9. Avoid Caravan replicas of MPI types unless they express a Caravan-specific
    safety property.
