@@ -180,6 +180,11 @@ namespace caravan
         --detail::executorDepth;
     }
 
+    inline bool isExecutorThread() noexcept
+    {
+        return detail::executorDepth != 0u;
+    }
+
     class EventSource;
     template<typename T_Receiver>
     class EventOperation;

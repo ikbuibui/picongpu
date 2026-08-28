@@ -25,20 +25,26 @@ namespace caravan
 
         void run()
         {
-            ExecutorThreadGuard guard;
-            for(;;)
+            while(runOne())
             {
-                std::function<void()> task;
-                {
-                    std::unique_lock lock(m_mutex);
-                    m_ready.wait(lock, [this] { return m_finished || !m_tasks.empty(); });
-                    if(m_tasks.empty())
-                        return;
-                    task = std::move(m_tasks.front());
-                    m_tasks.pop_front();
-                }
-                task();
             }
+        }
+
+        /** Execute one task, blocking until work is ready or the loop is finished. */
+        bool runOne()
+        {
+            ExecutorThreadGuard guard;
+            std::function<void()> task;
+            {
+                std::unique_lock lock(m_mutex);
+                m_ready.wait(lock, [this] { return m_finished || !m_tasks.empty(); });
+                if(m_tasks.empty())
+                    return false;
+                task = std::move(m_tasks.front());
+                m_tasks.pop_front();
+            }
+            task();
+            return true;
         }
 
         /** Execute all currently ready work without blocking. */
