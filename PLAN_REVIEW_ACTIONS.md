@@ -819,7 +819,7 @@ application storage.
 ## Must pass before treating Caravan headers as a stable internal library boundary
 
 - [x] A4 scope destruction/progress contract defined and tested.
-- [ ] A5 normal/native MPI header split enforced.
+- [x] A5 normal/native MPI header split enforced.
 - [x] A6 eager predecessor-taking `MpiContext` API removed or confined to a
       named temporary PMacc adapter.
 - [ ] A7 standard-execution spike completed and compatibility claims updated.
