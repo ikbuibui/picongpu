@@ -56,6 +56,10 @@ if(CARAVAN_BUILD_TESTING)
         set_tests_properties(caravan-alpaka-mpi PROPERTIES PROCESSORS 1 TIMEOUT 30)
     endif()
 
+    add_executable(caravan-mpi-header-test test/mpi_header.cpp)
+    target_link_libraries(caravan-mpi-header-test PRIVATE caravan::mpi)
+    add_test(NAME caravan-mpi-header COMMAND caravan-mpi-header-test)
+
     add_executable(caravan-mpi-test test/mpi.cpp)
     target_link_libraries(caravan-mpi-test PRIVATE caravan::mpi)
     foreach(ranks IN ITEMS 1 2 4)
