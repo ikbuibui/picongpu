@@ -449,8 +449,8 @@ namespace caravan
 
         /** Describe native MPI work without initiating it until operation start.
          *
-         * Pass a communicator when the request initiates a collective; Caravan
-         * then preserves managed collective initiation order on that communicator.
+         * A communicator orders submissions by operation-start time. Use
+         * CollectiveLane when dependency readiness must not define logical order.
          */
         template<typename T, typename T_Start, typename T_Complete>
         auto request(
@@ -589,7 +589,8 @@ namespace caravan
 
     /** Submit native nonblocking MPI requests and return a typed result.
      *
-     * The optional communicator marks managed collective initiation ordering.
+     * The optional communicator orders by submission time; dependency-sensitive
+     * collective graphs require an explicit mpi::CollectiveLane.
      */
     template<typename T, typename T_Start, typename T_Complete>
     Future<T> nativeFuture(
@@ -662,7 +663,8 @@ namespace caravan
 
     /** Run a blocking MPI call without implicitly draining unrelated requests.
      *
-     * The optional communicator marks managed collective initiation ordering.
+     * The optional communicator orders by submission time; dependency-sensitive
+     * collective graphs require an explicit mpi::CollectiveLane.
      */
     template<typename T, typename T_Operation>
     Future<T> nativeBlockingFuture(
