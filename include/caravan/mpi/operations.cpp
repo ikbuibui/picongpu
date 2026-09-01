@@ -5,13 +5,16 @@
 #include <climits>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include <caravan/mpi/error.hpp>
 #include <caravan/mpi/native.hpp>
+#include <caravan/mpi/operations.hpp>
 #include <mpi.h>
 
 namespace caravan
@@ -75,6 +78,81 @@ namespace caravan
                 return MPI_PROD;
             }
             throw std::invalid_argument("Unknown Caravan reduce operation");
+        }
+
+        template<typename T, typename T_Start, typename T_Complete>
+        mpi::OperationSender<T> makeRequestSender(
+            MpiContext& context,
+            T_Start start,
+            T_Complete complete,
+            std::optional<CommunicatorId> collective = {})
+        {
+            return mpi::OperationSender<T>{[&context,
+                                            start = std::move(start),
+                                            complete = std::move(complete),
+                                            collective](auto value, auto error, auto stopped) mutable
+                                           {
+                                               detail::NativeAccess::submit(
+                                                   context,
+                                                   detail::NativeSubmission{
+                                                       [start = std::move(start)](NativeMpiContext& native) mutable
+                                                       { return detail::invokeNative(start, native); },
+                                                       [complete = std::move(complete), value = std::move(value)](
+                                                           NativeMpiContext& native,
+                                                           std::span<MPI_Status const> statuses) mutable
+                                                       {
+                                                           if constexpr(std::is_void_v<T>)
+                                                           {
+                                                               if constexpr(std::is_invocable_v<
+                                                                                T_Complete&,
+                                                                                NativeMpiContext&,
+                                                                                std::span<MPI_Status const>>)
+                                                                   detail::invokeNative(complete, native, statuses);
+                                                               else
+                                                                   detail::invokeNative(complete, statuses);
+                                                               value();
+                                                           }
+                                                           else if constexpr(std::is_invocable_v<
+                                                                                 T_Complete&,
+                                                                                 NativeMpiContext&,
+                                                                                 std::span<MPI_Status const>>)
+                                                               value(detail::invokeNative(complete, native, statuses));
+                                                           else
+                                                               value(detail::invokeNative(complete, statuses));
+                                                       },
+                                                       std::move(error),
+                                                       std::move(stopped),
+                                                       collective});
+                                           }};
+        }
+
+        template<typename T, typename T_Operation>
+        mpi::OperationSender<T> makeBlockingSender(
+            MpiContext& context,
+            T_Operation operation,
+            std::optional<CommunicatorId> collective = {})
+        {
+            return mpi::OperationSender<T>{
+                [&context, operation = std::move(operation), collective](auto value, auto error, auto stopped) mutable
+                {
+                    detail::NativeAccess::invokeBlocking(
+                        context,
+                        detail::NativeBlockingSubmission{
+                            [operation = std::move(operation),
+                             value = std::move(value)](NativeMpiContext& native) mutable
+                            {
+                                if constexpr(std::is_void_v<T>)
+                                {
+                                    detail::invokeNative(operation, native);
+                                    value();
+                                }
+                                else
+                                    value(detail::invokeNative(operation, native));
+                            },
+                            std::move(error),
+                            std::move(stopped),
+                            collective});
+                }};
         }
     } // namespace
 
@@ -317,6 +395,184 @@ namespace caravan
         if(error != MPI_SUCCESS)
             throw mpiError("MPI_Ibarrier", error);
         return batch;
+    }
+
+    mpi::OperationSender<SendResult> mpi::send(
+        MpiContext& context,
+        BufferLease buffer,
+        Peer destination,
+        MessageTag tag,
+        CommunicatorId communicator)
+    {
+        auto const bytes = buffer.bytes();
+        return makeRequestSender<SendResult>(
+            context,
+            [buffer = std::move(buffer), destination, tag, communicator](NativeMpiContext& native)
+            { return detail::startSend(native, buffer, destination, tag, communicator); },
+            [bytes](std::span<MPI_Status const>) { return SendResult{bytes}; });
+    }
+
+    mpi::OperationSender<ReceiveResult> mpi::receive(
+        MpiContext& context,
+        BufferLease buffer,
+        Peer source,
+        MessageTag tag,
+        CommunicatorId communicator)
+    {
+        return makeRequestSender<ReceiveResult>(
+            context,
+            [buffer = std::move(buffer), source, tag, communicator](NativeMpiContext& native)
+            { return detail::startReceive(native, buffer, source, tag, communicator); },
+            [](std::span<MPI_Status const> statuses) { return detail::completeReceive(statuses); });
+    }
+
+    mpi::OperationSender<AllReduceResult> mpi::allReduce(
+        MpiContext& context,
+        BufferLease input,
+        BufferLease output,
+        ScalarType type,
+        ReduceOperation operation,
+        CommunicatorId communicator)
+    {
+        auto elements = std::make_shared<std::size_t>(0u);
+        return makeRequestSender<AllReduceResult>(
+            context,
+            [input = std::move(input), output = std::move(output), type, operation, communicator, elements](
+                NativeMpiContext& native)
+            { return detail::startAllReduce(native, input, output, type, operation, communicator, elements); },
+            [elements](std::span<MPI_Status const>) { return AllReduceResult{*elements}; },
+            communicator);
+    }
+
+    mpi::OperationSender<ReduceResult> mpi::reduce(
+        MpiContext& context,
+        BufferLease input,
+        BufferLease output,
+        ScalarType type,
+        ReduceOperation operation,
+        Peer root,
+        CommunicatorId communicator)
+    {
+        auto elements = std::make_shared<std::size_t>(0u);
+        return makeRequestSender<ReduceResult>(
+            context,
+            [input = std::move(input), output = std::move(output), type, operation, root, communicator, elements](
+                NativeMpiContext& native)
+            { return detail::startReduce(native, input, output, type, operation, root, communicator, elements); },
+            [elements](std::span<MPI_Status const>) { return ReduceResult{*elements}; },
+            communicator);
+    }
+
+    mpi::OperationSender<GatherResult> mpi::gather(
+        MpiContext& context,
+        BufferLease input,
+        BufferLease output,
+        Peer root,
+        CommunicatorId communicator)
+    {
+        auto resultBytes = std::make_shared<std::size_t>(0u);
+        return makeRequestSender<GatherResult>(
+            context,
+            [input = std::move(input), output = std::move(output), root, communicator, resultBytes](
+                NativeMpiContext& native)
+            { return detail::startGather(native, input, output, root, communicator, resultBytes); },
+            [resultBytes](std::span<MPI_Status const>) { return GatherResult{*resultBytes}; },
+            communicator);
+    }
+
+    mpi::OperationSender<GatherResult> mpi::gatherV(
+        MpiContext& context,
+        BufferLease input,
+        BufferLease output,
+        std::vector<std::size_t> receiveBytes,
+        std::vector<std::size_t> displacements,
+        Peer root,
+        CommunicatorId communicator)
+    {
+        auto resultBytes = std::make_shared<std::size_t>(0u);
+        return makeRequestSender<GatherResult>(
+            context,
+            [input = std::move(input),
+             output = std::move(output),
+             receiveBytes = std::move(receiveBytes),
+             displacements = std::move(displacements),
+             root,
+             communicator,
+             resultBytes](NativeMpiContext& native)
+            {
+                return detail::startGatherV(
+                    native,
+                    input,
+                    output,
+                    receiveBytes,
+                    displacements,
+                    root,
+                    communicator,
+                    resultBytes);
+            },
+            [resultBytes](std::span<MPI_Status const>) { return GatherResult{*resultBytes}; },
+            communicator);
+    }
+
+    mpi::OperationSender<void> mpi::barrier(MpiContext& context, CommunicatorId communicator)
+    {
+        return makeRequestSender<void>(
+            context,
+            [communicator](NativeMpiContext& native) { return detail::startBarrier(native, communicator); },
+            [](std::span<MPI_Status const>) {},
+            communicator);
+    }
+
+    mpi::OperationSender<TopologySnapshot> mpi::createCartesian(
+        MpiContext& context,
+        std::vector<int> dimensions,
+        std::vector<bool> periodic)
+    {
+        auto const topology = context.topology();
+        return makeBlockingSender<TopologySnapshot>(
+            context,
+            [dimensions = std::move(dimensions),
+             periodic = std::move(periodic),
+             worldSize = topology.size,
+             hostLocalRank = topology.hostLocalRank](NativeMpiContext& native) mutable
+            {
+                return detail::createCartesian(
+                    native,
+                    std::move(dimensions),
+                    std::move(periodic),
+                    worldSize,
+                    hostLocalRank);
+            },
+            worldCommunicator);
+    }
+
+    mpi::OperationSender<CommunicatorId> mpi::duplicateCommunicator(MpiContext& context, CommunicatorId communicator)
+    {
+        return makeBlockingSender<CommunicatorId>(
+            context,
+            [communicator](NativeMpiContext& native) { return detail::duplicateCommunicator(native, communicator); },
+            communicator);
+    }
+
+    mpi::OperationSender<std::optional<CommunicatorInfo>> mpi::splitCommunicator(
+        MpiContext& context,
+        std::optional<int> color,
+        int key,
+        CommunicatorId communicator)
+    {
+        return makeBlockingSender<std::optional<CommunicatorInfo>>(
+            context,
+            [color, key, communicator](NativeMpiContext& native)
+            { return detail::splitCommunicator(native, color, key, communicator); },
+            communicator);
+    }
+
+    mpi::OperationSender<void> mpi::destroyCommunicator(MpiContext& context, CommunicatorId communicator)
+    {
+        return makeBlockingSender<void>(
+            context,
+            [communicator](NativeMpiContext& native) { detail::destroyCommunicator(native, communicator); },
+            communicator);
     }
 
 } // namespace caravan
