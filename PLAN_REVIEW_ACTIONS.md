@@ -835,7 +835,7 @@ application storage.
 ## Must pass before the PIConGPU entry gate
 
 - [x] M1 `gameOfLife2D` complete graph migrated.
-- [ ] M2 `heatEquation2D` migrated.
+- [x] M2 `heatEquation2D` migrated.
 - [ ] M3 generic PMacc communication and remaining helpers migrated.
 - [ ] Legacy Manager, transactions, tasks, observers, and adapters deleted.
 - [ ] PMacc CPU/GPU/multi-rank regression matrix passes.
