@@ -28,6 +28,7 @@
 #include "pmacc/memory/dataTypes/Mask.hpp"
 
 #include <algorithm>
+#include <array>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -463,6 +464,44 @@ namespace pmacc
             return ev;
         }
 
+        caravan::Event sendCompletion(uint32_t exchange) const
+        {
+            return sendCompletions[exchange];
+        }
+
+        void setReceiveCompletion(uint32_t exchange, caravan::Event completion)
+        {
+            receiveCompletions[exchange] = std::move(completion);
+        }
+
+        template<typename T_Queue>
+        caravan::Event asyncSend(
+            async::Context& context,
+            T_Queue& queue,
+            uint32_t exchange,
+            caravan::Event previous = {})
+        {
+            if(!hasSendExchange(exchange))
+                return {};
+            std::array dependencies{std::move(previous), sendCompletions[exchange]};
+            sendCompletions[exchange]
+                = sendExchanges[exchange]->sendAsync(context, queue, caravan::whenAll(dependencies));
+            return sendCompletions[exchange];
+        }
+
+        template<typename T_Queue>
+        caravan::Future<typename Exchange<BORDERTYPE, DIM>::ReceiveMetadata> asyncReceive(
+            async::Context& context,
+            T_Queue& queue,
+            uint32_t exchange,
+            caravan::Event previous = {})
+        {
+            std::array dependencies{std::move(previous), receiveCompletions[exchange]};
+            auto receive = receiveExchanges[exchange]->receiveAsync(context, queue, caravan::whenAll(dependencies));
+            receiveCompletions[exchange] = receive.event();
+            return receive;
+        }
+
         /** Start one explicit send and receive branch per active direction and return their flat join. */
         template<typename T_Queue>
         caravan::Event asyncCommunication(async::Context& context, T_Queue& queue)
@@ -472,19 +511,11 @@ namespace pmacc
             for(uint32_t i = 0; i < maxExchange; ++i)
             {
                 if(hasReceiveExchange(i))
-                {
-                    auto receive = receiveExchanges[i]->receiveAsync(context, queue, receiveCompletions[i]);
-                    receiveCompletions[i] = receive.event();
-                    branches.push_back(receiveCompletions[i]);
-                }
+                    branches.push_back(asyncReceive(context, queue, i).event());
 
                 auto const sendEx = Mask::getMirroredExchangeType(i);
                 if(hasSendExchange(sendEx))
-                {
-                    sendCompletions[sendEx]
-                        = sendExchanges[sendEx]->sendAsync(context, queue, sendCompletions[sendEx]);
-                    branches.push_back(sendCompletions[sendEx]);
-                }
+                    branches.push_back(asyncSend(context, queue, sendEx));
             }
             return caravan::whenAll(branches);
         }

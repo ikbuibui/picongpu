@@ -29,6 +29,8 @@
 #include "pmacc/particles/memory/buffers/ParticlesBuffer.hpp"
 #include "pmacc/traits/GetNumWorkers.hpp"
 
+#include <utility>
+
 namespace pmacc
 {
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
@@ -38,6 +40,18 @@ namespace pmacc
 
         PMACC_LOCKSTEP_KERNEL(KernelDeleteParticles{})
             .config(mapper.getGridDim(), *particlesBuffer)(particlesBuffer->getDeviceParticleBox(), mapper);
+    }
+
+    template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
+    template<typename T_Queue>
+    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::deleteGuardParticlesAsync(
+        T_Queue& queue,
+        uint32_t exchangeType)
+    {
+        ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
+        return PMACC_LOCKSTEP_KERNEL(KernelDeleteParticles{})
+            .config(mapper.getGridDim(), *particlesBuffer)
+            .sender(queue, particlesBuffer->getDeviceParticleBox(), mapper);
     }
 
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
@@ -75,6 +89,27 @@ namespace pmacc
     }
 
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
+    template<typename T_Queue>
+    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::copyGuardToExchangeAsync(
+        T_Queue& queue,
+        uint32_t exchangeType)
+    {
+        ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
+        auto stack = particlesBuffer->getSendExchangeStack(exchangeType);
+        auto reset = stack.resetAsync(queue);
+        auto copy = PMACC_LOCKSTEP_KERNEL(KernelCopyGuardToExchange{})
+                        .config(mapper.getGridDim(), *particlesBuffer)
+                        .sender(
+                            queue,
+                            particlesBuffer->getDeviceParticleBox(),
+                            stack.getDeviceExchangePushDataBox(),
+                            mapper);
+        return caravan::alpaka::then(
+            caravan::alpaka::then(std::move(reset), std::move(copy)),
+            stack.publishDeviceSizes(queue));
+    }
+
+    template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
     void ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::insertParticles(uint32_t exchangeType)
     {
         if(particlesBuffer->hasReceiveExchange(exchangeType))
@@ -96,6 +131,23 @@ namespace pmacc
                         mapper);
             }
         }
+    }
+
+    template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
+    template<typename T_Queue>
+    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::insertParticlesAsync(
+        T_Queue& queue,
+        uint32_t exchangeType,
+        size_t numParticles)
+    {
+        ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
+        return PMACC_LOCKSTEP_KERNEL(KernelInsertParticles{})
+            .config(numParticles, *particlesBuffer)
+            .sender(
+                queue,
+                particlesBuffer->getDeviceParticleBox(),
+                particlesBuffer->getReceiveExchangeStack(exchangeType).getDeviceExchangePopDataBox(),
+                mapper);
     }
 
 } // namespace pmacc

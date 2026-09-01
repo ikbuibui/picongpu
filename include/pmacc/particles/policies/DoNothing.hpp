@@ -23,6 +23,8 @@
 
 #include <cstdint>
 
+#include <caravan/alpaka.hpp>
+
 namespace pmacc
 {
     namespace particles
@@ -40,6 +42,18 @@ namespace pmacc
                 template<typename T_Particles>
                 void handleIncoming(T_Particles& par, int32_t direction) const
                 {
+                }
+
+                template<typename T_Queue, typename T_Particles>
+                auto handleOutgoingAsync(T_Queue& queue, T_Particles&, int32_t) const
+                {
+                    return caravan::alpaka::submit(queue, [](T_Queue&) {});
+                }
+
+                template<typename T_Queue, typename T_Particles>
+                auto handleIncomingAsync(T_Queue& queue, T_Particles&, int32_t) const
+                {
+                    return caravan::alpaka::submit(queue, [](T_Queue&) {});
                 }
             };
 
