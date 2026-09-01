@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <cassert>
+#include <cstdlib>
 #include <exception>
 #include <mutex>
 #include <stdexcept>
@@ -15,6 +16,11 @@
 #include <vector>
 
 #include <caravan/core.hpp>
+
+#if defined(__unix__)
+#    include <sys/wait.h>
+#    include <unistd.h>
+#endif
 
 namespace
 {
@@ -527,6 +533,7 @@ namespace
     void testAsyncScope()
     {
         caravan::AsyncScope scope;
+        assert(scope.status() == caravan::AsyncScopeStatus::open);
         caravan::EventSource readySource;
         caravan::EventSource failedSource;
         caravan::EventSource stoppedSource;
@@ -535,11 +542,13 @@ namespace
         auto stopped = scope.spawn(caravan::asSender(stoppedSource.event()));
         auto joined = scope.join();
 
+        assert(scope.status() == caravan::AsyncScopeStatus::joining);
         assert(joined.state() == caravan::CompletionState::pending);
         readySource.setReady();
         failedSource.setFailed(std::make_exception_ptr(std::runtime_error("scope failure")));
         stoppedSource.setStopped();
         joined.wait();
+        assert(scope.status() == caravan::AsyncScopeStatus::joined);
         assert(ready.isReady());
         assert(failed.state() == caravan::CompletionState::failed && failed.error());
         assert(stopped.state() == caravan::CompletionState::stopped);
@@ -552,6 +561,29 @@ namespace
         catch(std::logic_error const&)
         {
         }
+    }
+
+    void testPendingScopeDestructionDiagnosed()
+    {
+#if defined(__unix__)
+        auto const child = fork();
+        assert(child >= 0);
+        if(child == 0)
+        {
+            std::set_terminate([] { std::_Exit(42); });
+            {
+                caravan::RunLoop loop;
+                caravan::AsyncScope scope;
+                static_cast<void>(
+                    scope.spawn(caravan::continuesOn(caravan::asSender(caravan::readyEvent()), loop.scheduler())));
+            }
+            std::_Exit(0);
+        }
+
+        int status = 0;
+        assert(waitpid(child, &status, 0) == child);
+        assert(WIFEXITED(status) && WEXITSTATUS(status) == 42);
+#endif
     }
 
     void testExactlyOnceCompletion()
@@ -629,6 +661,7 @@ int main()
     testEagerSenderBridgesAndOperationLifetime();
     testContinuesOnRunLoop();
     testAsyncScope();
+    testPendingScopeDestructionDiagnosed();
     testExactlyOnceCompletion();
     testRegistrationRace();
     testExecutorWaitGuard();
