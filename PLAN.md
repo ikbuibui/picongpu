@@ -1709,8 +1709,9 @@ boundary. `heatEquation2D` also composes residual copy/reset and typed MPI
 reduction, while its gather path uses an explicit completed-input boundary. The
 four-rank CPU residual regression and CUDA translation pass. M3 has also replaced
 the polling signal task and eager signal/barrier adapters with explicitly scoped
-typed MPI senders; target-GPU runtime validation and the remaining field/particle
-communication migration remain.
+typed MPI senders. Generic field pack/receive/insert branches and continuation-driven
+particle chunk exchange are now available without polling tasks; target-GPU runtime
+validation, PIConGPU call-site conversion, and adapter deletion remain.
 
 1. Port `Exchange` send and receive to explicit operation chains.
 2. Preserve host staging, double buffering, and GPU-aware MPI.
