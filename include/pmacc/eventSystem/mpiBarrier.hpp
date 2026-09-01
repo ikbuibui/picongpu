@@ -34,12 +34,13 @@ namespace pmacc::eventSystem
     template<unsigned DIM, typename T_Progress = std::function<void()>>
     void mpiBlocking(CommunicatorMPI<DIM>& communicator, T_Progress progress = [] {})
     {
-        auto barrier = communicator.startBarrierAsync();
+        async::Context context;
+        auto barrier = context.spawn(communicator.barrier());
         Manager::getInstance().waitFor(
             [&]()
             {
                 std::invoke(progress);
-                communicator.progressAsync();
+                context.runReady();
                 if(barrier.state() == caravan::CompletionState::pending)
                     return false;
                 barrier.wait();

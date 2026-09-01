@@ -25,6 +25,7 @@
 
 #include "TimeInterval.hpp"
 #include "pmacc/Environment.hpp"
+#include "pmacc/async/Context.hpp"
 #include "pmacc/mappings/simulation/GridController.hpp"
 #include "pmacc/pluginSystem/IPlugin.hpp"
 #include "pmacc/pluginSystem/Slice.hpp"
@@ -187,6 +188,8 @@ namespace pmacc
 
         TimeInterval tSimulation;
         TimeInterval tInit;
+        async::Context signalContext;
+        caravan::Event signalCompletion;
     };
 
 } // namespace pmacc

@@ -1707,8 +1707,10 @@ explicit send/receive branches with flat Event joins, and both target examples
 compose halo communication and compute work without an `EventTask`/Manager
 boundary. `heatEquation2D` also composes residual copy/reset and typed MPI
 reduction, while its gather path uses an explicit completed-input boundary. The
-four-rank CPU residual regression and CUDA translation pass; target-GPU runtime
-validation and the broader M3 communication migration remain.
+four-rank CPU residual regression and CUDA translation pass. M3 has also replaced
+the polling signal task and eager signal/barrier adapters with explicitly scoped
+typed MPI senders; target-GPU runtime validation and the remaining field/particle
+communication migration remain.
 
 1. Port `Exchange` send and receive to explicit operation chains.
 2. Preserve host staging, double buffering, and GPU-aware MPI.

@@ -150,26 +150,26 @@ namespace pmacc
     }
 
     template<unsigned DIM>
-    caravan::Future<caravan::AllReduceResult> CommunicatorMPI<DIM>::startSignalAllReduce(
+    caravan::mpi::OperationSender<caravan::AllReduceResult> CommunicatorMPI<DIM>::signalAllReduce(
         void const* input,
         void* output,
         size_t bytes,
         caravan::ScalarType type,
         caravan::ReduceOperation operation)
     {
-        return asyncContext.spawnFuture<caravan::AllReduceResult>(caravan::mpi::allReduce(
+        return caravan::mpi::allReduce(
             *mpiContext,
             caravan::BufferLease::borrowed(const_cast<void*>(input), bytes),
             caravan::BufferLease::borrowed(output, bytes),
             type,
             operation,
-            signalCommunicatorId));
+            signalCommunicatorId);
     }
 
     template<unsigned DIM>
-    caravan::Event CommunicatorMPI<DIM>::startBarrierAsync()
+    caravan::mpi::OperationSender<void> CommunicatorMPI<DIM>::barrier()
     {
-        return asyncContext.spawn(caravan::mpi::barrier(*mpiContext, communicatorId));
+        return caravan::mpi::barrier(*mpiContext, communicatorId);
     }
 
     // description in ICommunicator

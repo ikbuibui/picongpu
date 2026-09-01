@@ -145,17 +145,6 @@ namespace pmacc
          */
         EventTask startTask(ITask& task, ITask* registeringTask);
 
-        /** Creates a signal handling task
-         *
-         * The signal system takes care that there is only one active signal handling tasks is running.
-         *
-         * @param currentStep the time step which is currently processed
-         * @param checkpointing instance where a checkpoint can be registered to
-         * @param writeOutput true if the MPI rank should write status information to the terminal, else false
-         */
-        template<unsigned T_dim>
-        EventTask createTaskSignal(uint32_t currentStep, auto& checkpointing, bool writeOutput);
-
     private:
         friend struct detail::Environment;
 
