@@ -4,186 +4,168 @@
  */
 #pragma once
 
-#include <caravan/mpi/native.hpp>
+#include <exception>
+#include <functional>
+#include <optional>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
-namespace caravan
+#include <caravan/core/sender.hpp>
+#include <caravan/mpi/context.hpp>
+
+namespace caravan::mpi
 {
-    namespace mpi
+    namespace operation_detail
     {
-        inline auto send(
-            MpiContext& context,
-            BufferLease buffer,
-            Peer destination,
-            MessageTag tag,
-            CommunicatorId communicator = worldCommunicator)
+        template<typename T>
+        struct ValueCallback
         {
-            auto const bytes = buffer.bytes();
-            return request<SendResult>(
-                context,
-                [buffer = std::move(buffer), destination, tag, communicator](NativeMpiContext& context)
-                { return detail::startSend(context, buffer, destination, tag, communicator); },
-                [bytes](std::span<MPI_Status const>) { return SendResult{bytes}; });
+            using type = std::function<void(T)>;
+        };
+
+        template<>
+        struct ValueCallback<void>
+        {
+            using type = std::function<void()>;
+        };
+    } // namespace operation_detail
+
+    template<typename T>
+    class OperationSender
+    {
+        static_assert(std::is_void_v<T> || (!std::is_reference_v<T> && !std::is_const_v<T>) );
+
+        using ValueCallback = typename operation_detail::ValueCallback<T>::type;
+        using ErrorCallback = std::function<void(std::exception_ptr)>;
+        using StoppedCallback = std::function<void()>;
+
+    public:
+        using completion_signatures
+            = caravan::detail::DefaultCompletionSignatures<caravan::detail::ResultValueSignature<T>>;
+        using Start = std::function<void(ValueCallback, ErrorCallback, StoppedCallback)>;
+
+        explicit OperationSender(Start start) : m_start(std::move(start))
+        {
         }
 
-        inline auto receive(
-            MpiContext& context,
-            BufferLease buffer,
-            Peer source,
-            MessageTag tag,
-            CommunicatorId communicator = worldCommunicator)
+        template<typename T_Receiver>
+        class Operation
         {
-            return request<ReceiveResult>(
-                context,
-                [buffer = std::move(buffer), source, tag, communicator](NativeMpiContext& context)
-                { return detail::startReceive(context, buffer, source, tag, communicator); },
-                [](std::span<MPI_Status const> statuses) { return detail::completeReceive(statuses); });
-        }
+        public:
+            Operation(Start start, T_Receiver receiver) : m_start(std::move(start)), m_receiver(std::move(receiver))
+            {
+            }
 
-        inline auto allReduce(
-            MpiContext& context,
-            BufferLease input,
-            BufferLease output,
-            ScalarType type,
-            ReduceOperation operation,
-            CommunicatorId communicator = worldCommunicator)
-        {
-            auto elements = std::make_shared<std::size_t>(0u);
-            return request<AllReduceResult>(
-                context,
-                [input = std::move(input), output = std::move(output), type, operation, communicator, elements](
-                    NativeMpiContext& context)
-                { return detail::startAllReduce(context, input, output, type, operation, communicator, elements); },
-                [elements](std::span<MPI_Status const>) { return AllReduceResult{*elements}; },
-                communicator);
-        }
+            Operation(Operation const&) = delete;
+            Operation& operator=(Operation const&) = delete;
+            Operation(Operation&&) = delete;
+            Operation& operator=(Operation&&) = delete;
 
-        inline auto reduce(
-            MpiContext& context,
-            BufferLease input,
-            BufferLease output,
-            ScalarType type,
-            ReduceOperation operation,
-            Peer root,
-            CommunicatorId communicator = worldCommunicator)
-        {
-            auto elements = std::make_shared<std::size_t>(0u);
-            return request<ReduceResult>(
-                context,
-                [input = std::move(input), output = std::move(output), type, operation, root, communicator, elements](
-                    NativeMpiContext& context)
-                { return detail::startReduce(context, input, output, type, operation, root, communicator, elements); },
-                [elements](std::span<MPI_Status const>) { return ReduceResult{*elements}; },
-                communicator);
-        }
+            void start() & noexcept
+            {
+                if(std::exchange(m_started, true))
+                    std::terminate();
 
-        inline auto gather(
-            MpiContext& context,
-            BufferLease input,
-            BufferLease output,
-            Peer root,
-            CommunicatorId communicator = worldCommunicator)
-        {
-            auto resultBytes = std::make_shared<std::size_t>(0u);
-            return request<GatherResult>(
-                context,
-                [input = std::move(input), output = std::move(output), root, communicator, resultBytes](
-                    NativeMpiContext& context)
-                { return detail::startGather(context, input, output, root, communicator, resultBytes); },
-                [resultBytes](std::span<MPI_Status const>) { return GatherResult{*resultBytes}; },
-                communicator);
-        }
-
-        inline auto gatherV(
-            MpiContext& context,
-            BufferLease input,
-            BufferLease output,
-            std::vector<std::size_t> receiveBytes,
-            std::vector<std::size_t> displacements,
-            Peer root,
-            CommunicatorId communicator = worldCommunicator)
-        {
-            auto resultBytes = std::make_shared<std::size_t>(0u);
-            return request<GatherResult>(
-                context,
-                [input = std::move(input),
-                 output = std::move(output),
-                 receiveBytes = std::move(receiveBytes),
-                 displacements = std::move(displacements),
-                 root,
-                 communicator,
-                 resultBytes](NativeMpiContext& context)
+                try
                 {
-                    return detail::startGatherV(
-                        context,
-                        input,
-                        output,
-                        receiveBytes,
-                        displacements,
-                        root,
-                        communicator,
-                        resultBytes);
-                },
-                [resultBytes](std::span<MPI_Status const>) { return GatherResult{*resultBytes}; },
-                communicator);
-        }
-
-        inline auto barrier(MpiContext& context, CommunicatorId communicator = worldCommunicator)
-        {
-            return request<void>(
-                context,
-                [communicator](NativeMpiContext& context) { return detail::startBarrier(context, communicator); },
-                [](std::span<MPI_Status const>) {},
-                communicator);
-        }
-
-        inline auto createCartesian(MpiContext& context, std::vector<int> dimensions, std::vector<bool> periodic)
-        {
-            auto const topology = context.topology();
-            return invokeBlocking(
-                context,
-                [dimensions = std::move(dimensions),
-                 periodic = std::move(periodic),
-                 worldSize = topology.size,
-                 hostLocalRank = topology.hostLocalRank](NativeMpiContext& context) mutable
+                    auto start = std::move(m_start);
+                    if constexpr(std::is_void_v<T>)
+                        start(
+                            [this] { m_receiver.set_value(); },
+                            [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
+                            [this] { m_receiver.set_stopped(); });
+                    else
+                        start(
+                            [this](T value) { m_receiver.set_value(std::move(value)); },
+                            [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
+                            [this] { m_receiver.set_stopped(); });
+                }
+                catch(...)
                 {
-                    return detail::createCartesian(
-                        context,
-                        std::move(dimensions),
-                        std::move(periodic),
-                        worldSize,
-                        hostLocalRank);
-                },
-                worldCommunicator);
+                    m_receiver.set_error(std::current_exception());
+                }
+            }
+
+        private:
+            Start m_start;
+            T_Receiver m_receiver;
+            bool m_started = false;
+        };
+
+        template<typename T_Receiver>
+        auto connect(T_Receiver&& receiver) &&
+        {
+            return Operation<std::decay_t<T_Receiver>>{std::move(m_start), std::forward<T_Receiver>(receiver)};
         }
 
-        inline auto duplicateCommunicator(MpiContext& context, CommunicatorId communicator = worldCommunicator)
-        {
-            return invokeBlocking(
-                context,
-                [communicator](NativeMpiContext& context)
-                { return detail::duplicateCommunicator(context, communicator); },
-                communicator);
-        }
+    private:
+        Start m_start;
+    };
 
-        inline auto splitCommunicator(
-            MpiContext& context,
-            std::optional<int> color,
-            int key,
-            CommunicatorId communicator = worldCommunicator)
-        {
-            return invokeBlocking(
-                context,
-                [color, key, communicator](NativeMpiContext& context)
-                { return detail::splitCommunicator(context, color, key, communicator); },
-                communicator);
-        }
+    OperationSender<SendResult> send(
+        MpiContext& context,
+        BufferLease buffer,
+        Peer destination,
+        MessageTag tag,
+        CommunicatorId communicator = worldCommunicator);
 
-        inline auto destroyCommunicator(MpiContext& context, CommunicatorId communicator)
-        {
-            return invokeBlocking(
-                context,
-                [communicator](NativeMpiContext& context) { detail::destroyCommunicator(context, communicator); },
-                communicator);
-        }
-    } // namespace mpi
-} // namespace caravan
+    OperationSender<ReceiveResult> receive(
+        MpiContext& context,
+        BufferLease buffer,
+        Peer source,
+        MessageTag tag,
+        CommunicatorId communicator = worldCommunicator);
+
+    OperationSender<AllReduceResult> allReduce(
+        MpiContext& context,
+        BufferLease input,
+        BufferLease output,
+        ScalarType type,
+        ReduceOperation operation,
+        CommunicatorId communicator = worldCommunicator);
+
+    OperationSender<ReduceResult> reduce(
+        MpiContext& context,
+        BufferLease input,
+        BufferLease output,
+        ScalarType type,
+        ReduceOperation operation,
+        Peer root,
+        CommunicatorId communicator = worldCommunicator);
+
+    OperationSender<GatherResult> gather(
+        MpiContext& context,
+        BufferLease input,
+        BufferLease output,
+        Peer root,
+        CommunicatorId communicator = worldCommunicator);
+
+    OperationSender<GatherResult> gatherV(
+        MpiContext& context,
+        BufferLease input,
+        BufferLease output,
+        std::vector<std::size_t> receiveBytes,
+        std::vector<std::size_t> displacements,
+        Peer root,
+        CommunicatorId communicator = worldCommunicator);
+
+    OperationSender<void> barrier(MpiContext& context, CommunicatorId communicator = worldCommunicator);
+
+    OperationSender<TopologySnapshot> createCartesian(
+        MpiContext& context,
+        std::vector<int> dimensions,
+        std::vector<bool> periodic);
+
+    OperationSender<CommunicatorId> duplicateCommunicator(
+        MpiContext& context,
+        CommunicatorId communicator = worldCommunicator);
+
+    OperationSender<std::optional<CommunicatorInfo>> splitCommunicator(
+        MpiContext& context,
+        std::optional<int> color,
+        int key,
+        CommunicatorId communicator = worldCommunicator);
+
+    OperationSender<void> destroyCommunicator(MpiContext& context, CommunicatorId communicator);
+} // namespace caravan::mpi
