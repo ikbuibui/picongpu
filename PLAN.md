@@ -1021,7 +1021,12 @@ native progress.
 
 Blocking PMacc boundaries should prefer a scope/run-loop-aware wait that continues
 to run eligible host continuations/progress instead of recreating
-`Manager::waitForFinished()` task scanning.
+`Manager::waitForFinished()` task scanning. `AsyncScope::join()` explicitly closes
+the scope, and its owner must provide progress until the join Event is terminal.
+Raw scope destruction performs no hidden progress and terminates if the scope is
+unjoined or non-quiescent. `pmacc::async::Context` performs that progress-aware
+join before destroying its scope; its `wait(Event)` installs a control-loop wakeup
+so externally completed Events cannot race with entry into a blocking `runOne()`.
 
 ---
 
