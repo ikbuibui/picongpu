@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include <caravan/core/eager.hpp>
 #include <caravan/mpi/error.hpp>
 #include <caravan/mpi/native.hpp>
 #include <mpi.h>
