@@ -102,6 +102,16 @@ namespace pmacc
             return alpaka::getPtrNative(this->currentSizeBufferHost)[0];
         }
 
+        /** Update the host-side size without creating a legacy event-system dependency.
+         *
+         * Device-side size synchronization, when enabled, must be explicitly composed by the caller.
+         */
+        void setSizeHostSide(size_t const newSize)
+        {
+            PMACC_ASSERT(static_cast<size_t>(newSize) <= static_cast<size_t>(capacityND().productOfComponents()));
+            alpaka::getPtrNative(this->currentSizeBufferHost)[0] = newSize;
+        }
+
         /** set total number of elements
          *
          * @param newSize number of elements per dimension
@@ -109,8 +119,7 @@ namespace pmacc
         virtual void setSize(size_t const newSize)
         {
             eventSystem::startOperation(ITask::TASK_HOST);
-            PMACC_ASSERT(static_cast<size_t>(newSize) <= static_cast<size_t>(capacityND().productOfComponents()));
-            alpaka::getPtrNative(this->currentSizeBufferHost)[0] = newSize;
+            setSizeHostSide(newSize);
         }
 
         /** Total number of elements mapped to the N-dimensional size of the buffer */

@@ -205,29 +205,30 @@ namespace gol
     private:
         void oneStep(uint32_t currentStep, std::unique_ptr<Buffer>& read, std::unique_ptr<Buffer>& write)
         {
-            auto& queue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
-            // Communication remains an EventTask boundary until its Phase 6 sender port.
-            auto communication = read->asyncCommunication(EventTask{});
-            auto core = asyncContext.spawn(evo.runAsync<CORE>(
-                queue,
+            auto& communicationQueue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+            auto& computeQueue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+            auto communication = read->asyncCommunication(asyncContext, communicationQueue);
+            auto core = evo.runAsync<CORE>(
+                computeQueue,
                 pmacc::async::retain(
                     read->getDeviceBuffer().getDataBox(),
                     read->getDeviceBuffer().getOwnedAlpakaView()),
                 pmacc::async::retain(
                     write->getDeviceBuffer().getDataBox(),
-                    write->getDeviceBuffer().getOwnedAlpakaView())));
+                    write->getDeviceBuffer().getOwnedAlpakaView()));
 
-            communication.waitForFinished();
-            asyncContext.wait(core);
-            auto border = asyncContext.spawn(evo.runAsync<BORDER>(
-                queue,
-                pmacc::async::retain(
-                    read->getDeviceBuffer().getDataBox(),
-                    read->getDeviceBuffer().getOwnedAlpakaView()),
-                pmacc::async::retain(
-                    write->getDeviceBuffer().getDataBox(),
-                    write->getDeviceBuffer().getOwnedAlpakaView())));
-            asyncContext.wait(border);
+            auto step = caravan::letValue(
+                caravan::whenAll(std::move(core), caravan::asSender(std::move(communication))),
+                [&,
+                 readView = read->getDeviceBuffer().getOwnedAlpakaView(),
+                 writeView = write->getDeviceBuffer().getOwnedAlpakaView()]() mutable
+                {
+                    return evo.runAsync<BORDER>(
+                        computeQueue,
+                        pmacc::async::retain(read->getDeviceBuffer().getDataBox(), readView),
+                        pmacc::async::retain(write->getDeviceBuffer().getDataBox(), writeView));
+                });
+            asyncContext.wait(asyncContext.spawn(std::move(step)));
 
             /* gather::operator() gathers all the buffers and assembles those to  *
              * a complete picture discarding the guards.                          */

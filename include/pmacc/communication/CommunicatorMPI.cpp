@@ -100,18 +100,43 @@ namespace pmacc
     }
 
     template<unsigned DIM>
+    caravan::mpi::OperationSender<caravan::SendResult> CommunicatorMPI<DIM>::send(
+        uint32_t ex,
+        char const* sendData,
+        size_t sendBytes,
+        uint32_t tag)
+    {
+        return caravan::mpi::send(
+            *mpiContext,
+            caravan::BufferLease::borrowed(const_cast<char*>(sendData), sendBytes),
+            caravan::Peer{ExchangeTypeToRank(ex)},
+            caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
+            communicatorId);
+    }
+
+    template<unsigned DIM>
+    caravan::mpi::OperationSender<caravan::ReceiveResult> CommunicatorMPI<DIM>::receive(
+        uint32_t ex,
+        char* receiveData,
+        size_t receiveBytes,
+        uint32_t tag)
+    {
+        return caravan::mpi::receive(
+            *mpiContext,
+            caravan::BufferLease::borrowed(receiveData, receiveBytes),
+            caravan::Peer{ExchangeTypeToRank(ex)},
+            caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
+            communicatorId);
+    }
+
+    template<unsigned DIM>
     caravan::Future<caravan::SendResult> CommunicatorMPI<DIM>::startSendAsync(
         uint32_t ex,
         char const* sendData,
         size_t sendBytes,
         uint32_t tag)
     {
-        return asyncContext.spawnFuture<caravan::SendResult>(caravan::mpi::send(
-            *mpiContext,
-            caravan::BufferLease::borrowed(const_cast<char*>(sendData), sendBytes),
-            caravan::Peer{ExchangeTypeToRank(ex)},
-            caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
-            communicatorId));
+        return asyncContext.spawnFuture<caravan::SendResult>(send(ex, sendData, sendBytes, tag));
     }
 
     template<unsigned DIM>
@@ -121,12 +146,7 @@ namespace pmacc
         size_t receiveBytes,
         uint32_t tag)
     {
-        return asyncContext.spawnFuture<caravan::ReceiveResult>(caravan::mpi::receive(
-            *mpiContext,
-            caravan::BufferLease::borrowed(receiveData, receiveBytes),
-            caravan::Peer{ExchangeTypeToRank(ex)},
-            caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
-            communicatorId));
+        return asyncContext.spawnFuture<caravan::ReceiveResult>(receive(ex, receiveData, receiveBytes, tag));
     }
 
     template<unsigned DIM>

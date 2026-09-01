@@ -53,6 +53,20 @@ namespace pmacc
          */
         virtual bool setStateAfterSlides(size_t numSlides) = 0;
 
+        virtual caravan::mpi::OperationSender<caravan::SendResult> send(
+            uint32_t ex,
+            char const* sendData,
+            size_t sendBytes,
+            uint32_t tag)
+            = 0;
+
+        virtual caravan::mpi::OperationSender<caravan::ReceiveResult> receive(
+            uint32_t ex,
+            char* receiveData,
+            size_t receiveBytes,
+            uint32_t tag)
+            = 0;
+
         virtual caravan::Future<caravan::SendResult> startSendAsync(
             uint32_t ex,
             char const* sendData,
