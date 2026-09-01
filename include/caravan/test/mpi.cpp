@@ -204,7 +204,7 @@ int main(int argc, char** argv)
             auto const portableDuplicate = caravan::syncWait<caravan::CommunicatorId>(
                 caravan::mpi::duplicateCommunicator(mpi, cartesian.communicator));
             assert(portableDuplicate != cartesian.communicator);
-            mpi.barrier(caravan::readyEvent(), portableDuplicate).wait();
+            caravan::syncWait(caravan::mpi::barrier(mpi, portableDuplicate));
             caravan::syncWait(caravan::mpi::destroyCommunicator(mpi, portableDuplicate));
 
             auto const split
@@ -222,15 +222,18 @@ int main(int argc, char** argv)
             else
                 assert(!split.has_value());
 
-            auto first = mpi.barrier(caravan::readyEvent(), cartesian.communicator);
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            first.wait();
+            caravan::syncWait(caravan::mpi::barrier(mpi, cartesian.communicator));
 
             caravan::EventSource dependency;
-            auto second = mpi.barrier(dependency.event());
+            caravan::AsyncScope dependencyScope;
+            auto second = dependencyScope.spawn(
+                caravan::letValue(
+                    caravan::asSender(dependency.event()),
+                    [&mpi] { return caravan::mpi::barrier(mpi); }));
             assert(second.state() == caravan::CompletionState::pending);
             dependency.setReady();
             second.wait();
+            dependencyScope.join().wait();
 
             caravan::mpi::CollectiveLane collectiveLane{mpi, cartesian.communicator};
             caravan::EventSource firstCollectiveReady;
@@ -638,9 +641,8 @@ int main(int argc, char** argv)
 
             auto nativeInput = std::make_shared<int>(topology.rank + 1);
             auto nativeOutput = std::make_shared<int>(0);
-            auto nativeReduction = caravan::nativeFuture<int>(
+            auto const nativeReduction = caravan::syncWait<int>(caravan::mpi::request<int>(
                 mpi,
-                caravan::readyEvent(),
                 [nativeInput, nativeOutput, communicator = cartesian.communicator](caravan::NativeMpiContext& context)
                 {
                     caravan::NativeRequestBatch batch(
@@ -668,23 +670,21 @@ int main(int argc, char** argv)
                     assert(MPI_Comm_rank(context.communicator(communicator), &rank) == MPI_SUCCESS);
                     assert(rank >= 0 && statuses.size() == 2u);
                     return *nativeOutput;
-                });
-            assert(nativeReduction.result() == topology.size * (topology.size + 1) / 2);
+                }));
+            assert(nativeReduction == topology.size * (topology.size + 1) / 2);
 
-            auto nativeImmediate = caravan::nativeEvent(
-                mpi,
-                caravan::readyEvent(),
-                [processMain](caravan::NativeMpiContext&)
-                {
-                    assert(std::this_thread::get_id() != processMain);
-                    return caravan::NativeRequestBatch{};
-                },
-                [](std::span<MPI_Status const> statuses) { assert(statuses.empty()); });
-            nativeImmediate.wait();
+            caravan::syncWait(
+                caravan::mpi::request<void>(
+                    mpi,
+                    [processMain](caravan::NativeMpiContext&)
+                    {
+                        assert(std::this_thread::get_id() != processMain);
+                        return caravan::NativeRequestBatch{};
+                    },
+                    [](std::span<MPI_Status const> statuses) { assert(statuses.empty()); }));
 
-            auto nativeStartFailure = caravan::nativeEvent(
+            auto nativeStartFailure = caravan::mpi::request<void>(
                 mpi,
-                caravan::readyEvent(),
                 [communicator
                  = cartesian.communicator](caravan::NativeMpiContext& context) -> caravan::NativeRequestBatch
                 {
@@ -696,49 +696,48 @@ int main(int argc, char** argv)
                 [](std::span<MPI_Status const>) { assert(false); });
             try
             {
-                nativeStartFailure.wait();
+                caravan::syncWait(std::move(nativeStartFailure));
                 assert(false);
             }
             catch(std::runtime_error const&)
             {
             }
 
-            static_cast<void>(mpi.barrier(caravan::readyEvent(), cartesian.communicator));
-            auto duplicated = caravan::nativeBlockingFuture<caravan::CommunicatorId>(
-                mpi,
-                caravan::readyEvent(),
-                [communicator = cartesian.communicator](caravan::NativeMpiContext& context)
-                {
-                    MPI_Comm native = MPI_COMM_NULL;
-                    int const error = MPI_Comm_dup(context.communicator(communicator), &native);
-                    if(error != MPI_SUCCESS)
-                        throw std::runtime_error("native MPI_Comm_dup failed");
-                    return context.adoptCommunicator(native);
-                });
-            auto const duplicatedCommunicator = duplicated.result();
-            mpi.barrier(caravan::readyEvent(), duplicatedCommunicator).wait();
+            caravan::AsyncScope nativeScope;
+            auto queuedBarrier = nativeScope.spawn(caravan::mpi::barrier(mpi, cartesian.communicator));
+            auto const duplicatedCommunicator
+                = caravan::syncWait<caravan::CommunicatorId>(caravan::mpi::invokeBlocking(
+                    mpi,
+                    [communicator = cartesian.communicator](caravan::NativeMpiContext& context)
+                    {
+                        MPI_Comm native = MPI_COMM_NULL;
+                        int const error = MPI_Comm_dup(context.communicator(communicator), &native);
+                        if(error != MPI_SUCCESS)
+                            throw std::runtime_error("native MPI_Comm_dup failed");
+                        return context.adoptCommunicator(native);
+                    }));
+            queuedBarrier.wait();
+            nativeScope.join().wait();
+            caravan::syncWait(caravan::mpi::barrier(mpi, duplicatedCommunicator));
             caravan::syncWait(caravan::mpi::destroyCommunicator(mpi, duplicatedCommunicator));
-            caravan::nativeBlockingEvent(
-                mpi,
-                caravan::readyEvent(),
-                [&mpi](caravan::NativeMpiContext&)
-                {
-                    auto recursive = caravan::nativeEvent(
-                        mpi,
-                        caravan::readyEvent(),
-                        [](caravan::NativeMpiContext&) { return caravan::NativeRequestBatch{}; },
-                        [](std::span<MPI_Status const>) {});
-                    assert(recursive.state() == caravan::CompletionState::failed);
-                    try
+            caravan::syncWait(
+                caravan::mpi::invokeBlocking(
+                    mpi,
+                    [&mpi](caravan::NativeMpiContext&)
                     {
-                        recursive.wait();
-                        assert(false);
-                    }
-                    catch(std::logic_error const&)
-                    {
-                    }
-                })
-                .wait();
+                        try
+                        {
+                            caravan::syncWait(
+                                caravan::mpi::request<void>(
+                                    mpi,
+                                    [](caravan::NativeMpiContext&) { return caravan::NativeRequestBatch{}; },
+                                    [](std::span<MPI_Status const>) {}));
+                            assert(false);
+                        }
+                        catch(std::logic_error const&)
+                        {
+                        }
+                    }));
             caravan::syncWait(
                 caravan::letValue(
                     caravan::mpi::barrier(mpi, cartesian.communicator),
@@ -760,7 +759,11 @@ int main(int argc, char** argv)
             }
 
             caravan::EventSource failedDependency;
-            auto failed = mpi.barrier(failedDependency.event());
+            caravan::AsyncScope failedDependencyScope;
+            auto failed = failedDependencyScope.spawn(
+                caravan::letValue(
+                    caravan::asSender(failedDependency.event()),
+                    [&mpi] { return caravan::mpi::barrier(mpi); }));
             failedDependency.setFailed(std::make_exception_ptr(std::runtime_error("expected")));
             try
             {
@@ -770,6 +773,7 @@ int main(int argc, char** argv)
             catch(std::runtime_error const&)
             {
             }
+            failedDependencyScope.join().wait();
 
             caravan::syncWait(caravan::mpi::destroyCommunicator(mpi, cartesian.communicator));
 

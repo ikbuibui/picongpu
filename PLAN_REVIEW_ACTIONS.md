@@ -820,7 +820,7 @@ application storage.
 
 - [x] A4 scope destruction/progress contract defined and tested.
 - [ ] A5 normal/native MPI header split enforced.
-- [ ] A6 eager predecessor-taking `MpiContext` API removed or confined to a
+- [x] A6 eager predecessor-taking `MpiContext` API removed or confined to a
       named temporary PMacc adapter.
 - [ ] A7 standard-execution spike completed and compatibility claims updated.
 

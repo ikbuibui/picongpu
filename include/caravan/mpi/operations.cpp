@@ -170,25 +170,6 @@ namespace caravan
         return batch;
     }
 
-    Future<AllReduceResult> MpiContext::allReduce(
-        Event dataReady,
-        BufferLease input,
-        BufferLease output,
-        ScalarType type,
-        ReduceOperation operation,
-        CommunicatorId communicator)
-    {
-        auto elements = std::make_shared<std::size_t>(0u);
-        return nativeFuture<AllReduceResult>(
-            *this,
-            std::move(dataReady),
-            [input = std::move(input), output = std::move(output), type, operation, communicator, elements](
-                NativeMpiContext& context)
-            { return detail::startAllReduce(context, input, output, type, operation, communicator, elements); },
-            [elements](std::span<MPI_Status const>) { return AllReduceResult{*elements}; },
-            communicator);
-    }
-
     NativeRequestBatch detail::startReduce(
         NativeMpiContext& context,
         BufferLease const& input,
@@ -218,26 +199,6 @@ namespace caravan
         if(error != MPI_SUCCESS)
             throw mpiError("MPI_Ireduce", error);
         return batch;
-    }
-
-    Future<ReduceResult> MpiContext::reduce(
-        Event dataReady,
-        BufferLease input,
-        BufferLease output,
-        ScalarType type,
-        ReduceOperation operation,
-        Peer root,
-        CommunicatorId communicator)
-    {
-        auto elements = std::make_shared<std::size_t>(0u);
-        return nativeFuture<ReduceResult>(
-            *this,
-            std::move(dataReady),
-            [input = std::move(input), output = std::move(output), type, operation, root, communicator, elements](
-                NativeMpiContext& context)
-            { return detail::startReduce(context, input, output, type, operation, root, communicator, elements); },
-            [elements](std::span<MPI_Status const>) { return ReduceResult{*elements}; },
-            communicator);
     }
 
     NativeRequestBatch detail::startGather(
@@ -280,24 +241,6 @@ namespace caravan
         if(error != MPI_SUCCESS)
             throw mpiError("MPI_Igather", error);
         return batch;
-    }
-
-    Future<GatherResult> MpiContext::gather(
-        Event dataReady,
-        BufferLease input,
-        BufferLease output,
-        Peer root,
-        CommunicatorId communicator)
-    {
-        auto resultBytes = std::make_shared<std::size_t>(0u);
-        return nativeFuture<GatherResult>(
-            *this,
-            std::move(dataReady),
-            [input = std::move(input), output = std::move(output), root, communicator, resultBytes](
-                NativeMpiContext& context)
-            { return detail::startGather(context, input, output, root, communicator, resultBytes); },
-            [resultBytes](std::span<MPI_Status const>) { return GatherResult{*resultBytes}; },
-            communicator);
     }
 
     NativeRequestBatch detail::startGatherV(
@@ -367,41 +310,6 @@ namespace caravan
         return batch;
     }
 
-    Future<GatherResult> MpiContext::gatherV(
-        Event dataReady,
-        BufferLease input,
-        BufferLease output,
-        std::vector<std::size_t> receiveBytes,
-        std::vector<std::size_t> displacements,
-        Peer root,
-        CommunicatorId communicator)
-    {
-        auto resultBytes = std::make_shared<std::size_t>(0u);
-        return nativeFuture<GatherResult>(
-            *this,
-            std::move(dataReady),
-            [input = std::move(input),
-             output = std::move(output),
-             receiveBytes = std::move(receiveBytes),
-             displacements = std::move(displacements),
-             root,
-             communicator,
-             resultBytes](NativeMpiContext& context)
-            {
-                return detail::startGatherV(
-                    context,
-                    input,
-                    output,
-                    receiveBytes,
-                    displacements,
-                    root,
-                    communicator,
-                    resultBytes);
-            },
-            [resultBytes](std::span<MPI_Status const>) { return GatherResult{*resultBytes}; },
-            communicator);
-    }
-
     NativeRequestBatch detail::startBarrier(NativeMpiContext& context, CommunicatorId communicator)
     {
         NativeRequestBatch batch({MPI_REQUEST_NULL});
@@ -409,16 +317,6 @@ namespace caravan
         if(error != MPI_SUCCESS)
             throw mpiError("MPI_Ibarrier", error);
         return batch;
-    }
-
-    Event MpiContext::barrier(Event predecessor, CommunicatorId communicator)
-    {
-        return nativeEvent(
-            *this,
-            std::move(predecessor),
-            [communicator](NativeMpiContext& context) { return detail::startBarrier(context, communicator); },
-            [](std::span<MPI_Status const>) {},
-            communicator);
     }
 
 } // namespace caravan
