@@ -194,6 +194,47 @@ namespace
             assert(std::string_view{error.what()} == "joined failure");
         }
 
+        caravan::EventSource stoppedInput;
+        caravan::EventSource readyInput;
+        std::array stoppedEvents{stoppedInput.event(), readyInput.event()};
+        auto stoppedJoin = caravan::whenAll(stoppedEvents);
+        stoppedInput.setStopped();
+        assert(stoppedJoin.state() == caravan::CompletionState::pending);
+        readyInput.setReady();
+        assert(stoppedJoin.state() == caravan::CompletionState::stopped);
+
+        for(bool stopFirst : {false, true})
+        {
+            caravan::EventSource failed;
+            caravan::EventSource stopped;
+            std::array precedenceEvents{failed.event(), stopped.event()};
+            auto precedenceJoin = caravan::whenAll(precedenceEvents);
+            if(stopFirst)
+                stopped.setStopped();
+            else
+                failed.setFailed(std::make_exception_ptr(std::runtime_error("precedence failure")));
+            assert(precedenceJoin.state() == caravan::CompletionState::pending);
+            if(stopFirst)
+                failed.setFailed(std::make_exception_ptr(std::runtime_error("precedence failure")));
+            else
+                stopped.setStopped();
+            assert(precedenceJoin.state() == caravan::CompletionState::failed);
+        }
+
+        for(unsigned i = 0u; i < 100u; ++i)
+        {
+            caravan::EventSource failed;
+            caravan::EventSource stopped;
+            std::array concurrentEvents{failed.event(), stopped.event()};
+            auto concurrentJoin = caravan::whenAll(concurrentEvents);
+            std::thread failer(
+                [&] { failed.setFailed(std::make_exception_ptr(std::runtime_error("concurrent failure"))); });
+            std::thread stopper([&] { stopped.setStopped(); });
+            failer.join();
+            stopper.join();
+            assert(concurrentJoin.state() == caravan::CompletionState::failed);
+        }
+
         InlineExecutor executor;
         caravan::EventSource failed;
         bool called = false;
