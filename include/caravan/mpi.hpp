@@ -4,5 +4,6 @@
  */
 #pragma once
 
+#include <caravan/mpi/collective.hpp>
 #include <caravan/mpi/context.hpp>
 #include <caravan/mpi/operations.hpp>

@@ -92,6 +92,30 @@ namespace caravan
                 collective);
         }
 
+        detail::ManagedCollectiveTicket reserveManagedCollective(CommunicatorId communicator)
+        {
+            std::lock_guard lock(m_queueMutex);
+            if(!m_accepting)
+                throw std::runtime_error("MPI context is shutting down");
+            return {communicator, m_managedCollectiveSubmitted[communicator.value]++};
+        }
+
+        void releaseManagedCollective(detail::ManagedCollectiveTicket ticket, std::function<void()> start)
+        {
+            {
+                std::unique_lock lock(m_queueMutex);
+                if(!m_accepting)
+                {
+                    lock.unlock();
+                    std::invoke(std::move(start));
+                    return;
+                }
+                m_queue.emplace_back([this, ticket, start = std::move(start)]() mutable
+                                     { startManagedCollective(ticket, std::move(start)); });
+            }
+            m_queueReady.notify_one();
+        }
+
         void run()
         {
             assertOwner();
@@ -220,6 +244,24 @@ namespace caravan
             auto& pending = m_collectivePending[ticket.communicator.value];
             pending.emplace(ticket.sequence, std::move(start));
             auto& next = m_collectiveNext[ticket.communicator.value];
+            for(;;)
+            {
+                auto const found = pending.find(next);
+                if(found == pending.end())
+                    return;
+                auto ready = std::move(found->second);
+                pending.erase(found);
+                ++next;
+                ready();
+            }
+        }
+
+        void startManagedCollective(detail::ManagedCollectiveTicket ticket, std::function<void()> start)
+        {
+            assertOwner();
+            auto& pending = m_managedCollectivePending[ticket.communicator.value];
+            pending.emplace(ticket.sequence, std::move(start));
+            auto& next = m_managedCollectiveNext[ticket.communicator.value];
             for(;;)
             {
                 auto const found = pending.find(next);
@@ -457,6 +499,10 @@ namespace caravan
         std::unordered_map<std::uint32_t, std::size_t> m_collectiveSubmitted;
         std::unordered_map<std::uint32_t, std::size_t> m_collectiveNext;
         std::unordered_map<std::uint32_t, std::unordered_map<std::size_t, std::function<void()>>> m_collectivePending;
+        std::unordered_map<std::uint32_t, std::size_t> m_managedCollectiveSubmitted;
+        std::unordered_map<std::uint32_t, std::size_t> m_managedCollectiveNext;
+        std::unordered_map<std::uint32_t, std::unordered_map<std::size_t, std::function<void()>>>
+            m_managedCollectivePending;
         std::vector<MPI_Comm> m_communicators{MPI_COMM_WORLD};
         std::vector<MPI_Request> m_requests;
         std::vector<NativeCompletion> m_active;
@@ -493,6 +539,29 @@ namespace caravan
     void MpiContext::invokeBlocking(detail::NativeBlockingSubmission submission)
     {
         m_implementation->invokeBlocking(std::move(submission));
+    }
+
+    detail::ManagedCollectiveTicket MpiContext::reserveManagedCollective(CommunicatorId communicator)
+    {
+        return m_implementation->reserveManagedCollective(communicator);
+    }
+
+    void MpiContext::releaseManagedCollective(detail::ManagedCollectiveTicket ticket, std::function<void()> start)
+    {
+        m_implementation->releaseManagedCollective(ticket, std::move(start));
+    }
+
+    detail::ManagedCollectiveTicket detail::CollectiveAccess::reserve(MpiContext& context, CommunicatorId communicator)
+    {
+        return context.reserveManagedCollective(communicator);
+    }
+
+    void detail::CollectiveAccess::release(
+        MpiContext& context,
+        detail::ManagedCollectiveTicket ticket,
+        std::function<void()> start)
+    {
+        context.releaseManagedCollective(ticket, std::move(start));
     }
 
     void detail::NativeAccess::submit(MpiContext& context, detail::NativeSubmission submission)

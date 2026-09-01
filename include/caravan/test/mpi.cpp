@@ -232,27 +232,46 @@ int main(int argc, char** argv)
             dependency.setReady();
             second.wait();
 
+            caravan::mpi::CollectiveLane collectiveLane{mpi, cartesian.communicator};
             caravan::EventSource firstCollectiveReady;
             caravan::EventSource secondCollectiveReady;
             auto firstCollectiveInput = std::make_shared<std::int32_t>(topology.rank + 1);
             auto secondCollectiveInput = std::make_shared<std::int32_t>(100 + topology.rank);
             auto firstCollectiveOutput = std::make_shared<std::int32_t>(-1);
             auto secondCollectiveOutput = std::make_shared<std::int32_t>(-1);
-            auto firstCollective = mpi.allReduce(
-                firstCollectiveReady.event(),
-                caravan::BufferLease{firstCollectiveInput, firstCollectiveInput.get(), sizeof(std::int32_t)},
-                caravan::BufferLease{firstCollectiveOutput, firstCollectiveOutput.get(), sizeof(std::int32_t)},
-                caravan::ScalarType::int32,
-                caravan::ReduceOperation::sum,
-                cartesian.communicator);
-            auto secondCollective = mpi.allReduce(
-                secondCollectiveReady.event(),
-                caravan::BufferLease{secondCollectiveInput, secondCollectiveInput.get(), sizeof(std::int32_t)},
-                caravan::BufferLease{secondCollectiveOutput, secondCollectiveOutput.get(), sizeof(std::int32_t)},
-                caravan::ScalarType::int32,
-                caravan::ReduceOperation::sum,
-                cartesian.communicator);
-            firstCollectiveReady.setReady();
+            caravan::AsyncScope collectiveScope;
+            auto firstCollective = collectiveScope.spawnFuture<caravan::AllReduceResult>(collectiveLane.submit(
+                caravan::asSender(firstCollectiveReady.event()),
+                [&mpi, firstCollectiveInput, firstCollectiveOutput, communicator = cartesian.communicator]
+                {
+                    return caravan::mpi::allReduce(
+                        mpi,
+                        caravan::BufferLease{firstCollectiveInput, firstCollectiveInput.get(), sizeof(std::int32_t)},
+                        caravan::BufferLease{firstCollectiveOutput, firstCollectiveOutput.get(), sizeof(std::int32_t)},
+                        caravan::ScalarType::int32,
+                        caravan::ReduceOperation::sum,
+                        communicator);
+                }));
+            auto secondCollective = collectiveScope.spawnFuture<caravan::AllReduceResult>(collectiveLane.submit(
+                caravan::asSender(secondCollectiveReady.event()),
+                [&mpi, secondCollectiveInput, secondCollectiveOutput, communicator = cartesian.communicator]
+                {
+                    return caravan::mpi::allReduce(
+                        mpi,
+                        caravan::BufferLease{secondCollectiveInput, secondCollectiveInput.get(), sizeof(std::int32_t)},
+                        caravan::BufferLease{
+                            secondCollectiveOutput,
+                            secondCollectiveOutput.get(),
+                            sizeof(std::int32_t)},
+                        caravan::ScalarType::int32,
+                        caravan::ReduceOperation::sum,
+                        communicator);
+                }));
+
+            if(topology.rank % 2 == 0)
+                secondCollectiveReady.setReady();
+            else
+                firstCollectiveReady.setReady();
 
             auto laneSendBuffer = std::make_shared<int>(topology.rank);
             auto laneReceiveBuffer = std::make_shared<int>(-1);
@@ -274,15 +293,22 @@ int main(int argc, char** argv)
             laneScope.join().wait();
             assert(*laneReceiveBuffer == topology.rank);
 
-            secondCollectiveReady.setReady();
+            if(topology.rank % 2 == 0)
+                firstCollectiveReady.setReady();
+            else
+                secondCollectiveReady.setReady();
             firstCollective.result();
             secondCollective.result();
             assert(*firstCollectiveOutput == topology.size * (topology.size + 1) / 2);
             assert(*secondCollectiveOutput == topology.size * 100 + topology.size * (topology.size - 1) / 2);
 
             caravan::EventSource failedCollectiveReady;
-            auto failedCollective = mpi.barrier(failedCollectiveReady.event(), cartesian.communicator);
-            auto followingCollective = mpi.barrier(caravan::readyEvent(), cartesian.communicator);
+            auto failedCollective = collectiveScope.spawn(collectiveLane.submit(
+                caravan::asSender(failedCollectiveReady.event()),
+                [&mpi, communicator = cartesian.communicator] { return caravan::mpi::barrier(mpi, communicator); }));
+            auto followingFailure = collectiveScope.spawn(collectiveLane.submit(
+                caravan::asSender(caravan::readyEvent()),
+                [&mpi, communicator = cartesian.communicator] { return caravan::mpi::barrier(mpi, communicator); }));
             failedCollectiveReady.setFailed(
                 std::make_exception_ptr(std::runtime_error("expected dependency failure")));
             try
@@ -293,7 +319,26 @@ int main(int argc, char** argv)
             catch(std::runtime_error const&)
             {
             }
-            followingCollective.wait();
+            followingFailure.wait();
+
+            caravan::EventSource stoppedCollectiveReady;
+            auto stoppedCollective = collectiveScope.spawn(collectiveLane.submit(
+                caravan::asSender(stoppedCollectiveReady.event()),
+                [&mpi, communicator = cartesian.communicator] { return caravan::mpi::barrier(mpi, communicator); }));
+            auto followingStop = collectiveScope.spawn(collectiveLane.submit(
+                caravan::asSender(caravan::readyEvent()),
+                [&mpi, communicator = cartesian.communicator] { return caravan::mpi::barrier(mpi, communicator); }));
+            stoppedCollectiveReady.setStopped();
+            try
+            {
+                stoppedCollective.wait();
+                assert(false);
+            }
+            catch(caravan::StoppedError const&)
+            {
+            }
+            followingStop.wait();
+            collectiveScope.join().wait();
 
             int const destination = (topology.rank + 1) % topology.size;
             int const source = (topology.rank + topology.size - 1) % topology.size;
@@ -475,13 +520,23 @@ int main(int argc, char** argv)
             assert(!scopedSenderStarted);
             caravan::RunLoop controlLoop;
             caravan::AsyncScope scope;
-            auto scopedEvent = scope.spawn(caravan::continuesOn(std::move(scopedSender), controlLoop.scheduler()));
+            std::thread::id scopedContinuationThread;
+            auto scopedEvent = scope.spawn(
+                caravan::then(
+                    caravan::continuesOn(std::move(scopedSender), controlLoop.scheduler()),
+                    [&](int value)
+                    {
+                        assert(value == 42);
+                        scopedContinuationThread = std::this_thread::get_id();
+                    }));
             std::thread controlThread([&controlLoop] { controlLoop.run(); });
+            auto const controlThreadId = controlThread.get_id();
             scopedEvent.wait();
             controlLoop.finish();
             controlThread.join();
             scope.join().wait();
             assert(scopedSenderStarted);
+            assert(scopedContinuationThread == controlThreadId);
 
             bool invokeStarted = false;
             auto invokeSender = caravan::mpi::invoke(
