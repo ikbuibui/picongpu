@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -16,6 +17,13 @@
 
 namespace caravan
 {
+    enum class AsyncScopeStatus : std::uint8_t
+    {
+        open,
+        joining,
+        joined
+    };
+
     namespace detail
     {
         class SpawnOperation
@@ -31,7 +39,7 @@ namespace caravan
             std::size_t reserve()
             {
                 std::lock_guard lock(m_mutex);
-                if(m_closed)
+                if(m_status != AsyncScopeStatus::open)
                     throw std::logic_error("Cannot spawn into a joined Caravan async scope");
                 auto const id = m_nextId++;
                 m_operations.emplace(id, nullptr);
@@ -55,7 +63,9 @@ namespace caravan
                         return;
                     operation = std::move(found->second);
                     m_operations.erase(found);
-                    joined = m_closed && m_operations.empty();
+                    joined = m_status == AsyncScopeStatus::joining && m_operations.empty();
+                    if(joined)
+                        m_status = AsyncScopeStatus::joined;
                 }
                 if(joined)
                     m_joined.setReady();
@@ -66,19 +76,28 @@ namespace caravan
                 bool joined = false;
                 {
                     std::lock_guard lock(m_mutex);
-                    m_closed = true;
+                    if(m_status == AsyncScopeStatus::open)
+                        m_status = AsyncScopeStatus::joining;
                     joined = m_operations.empty();
+                    if(joined)
+                        m_status = AsyncScopeStatus::joined;
                 }
                 if(joined)
                     m_joined.setReady();
                 return m_joined.event();
             }
 
+            AsyncScopeStatus status() const noexcept
+            {
+                std::lock_guard lock(m_mutex);
+                return m_status;
+            }
+
         private:
-            std::mutex m_mutex;
+            mutable std::mutex m_mutex;
             std::unordered_map<std::size_t, std::shared_ptr<SpawnOperation>> m_operations;
             std::size_t m_nextId = 0u;
-            bool m_closed = false;
+            AsyncScopeStatus m_status = AsyncScopeStatus::open;
             EventSource m_joined;
         };
 
@@ -164,8 +183,11 @@ namespace caravan
     /** Owns eagerly spawned sender operations until receiver completion.
      *
      * join() closes the scope to new work and completes when every operation is
-     * quiescent. The returned Event carries each sender's value/error/stopped
-     * channel; values are deliberately type-erased at this migration boundary.
+     * quiescent. The owner must provide progress and wait for that Event before
+     * destruction; destroying an unjoined or non-quiescent scope terminates
+     * instead of attempting hidden, potentially unbounded progress. The returned
+     * Event carries each sender's value/error/stopped channel; values are
+     * deliberately type-erased at this migration boundary.
      */
     class AsyncScope
     {
@@ -179,7 +201,8 @@ namespace caravan
 
         ~AsyncScope()
         {
-            m_state->join().wait();
+            if(status() != AsyncScopeStatus::joined)
+                std::terminate();
         }
 
         template<typename T_Sender>
@@ -230,6 +253,11 @@ namespace caravan
         Event join()
         {
             return m_state->join();
+        }
+
+        AsyncScopeStatus status() const noexcept
+        {
+            return m_state->status();
         }
 
     private:
