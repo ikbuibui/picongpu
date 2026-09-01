@@ -4,6 +4,7 @@
  */
 #include <pmacc/async/Context.hpp>
 
+#include <chrono>
 #include <thread>
 
 #include <caravan/core.hpp>
@@ -37,6 +38,16 @@ TEST_CASE("PMacc async context owns work and drives host continuations", "[async
     context.wait(operation);
     backend.join();
     CHECK(ran);
+
+    caravan::EventSource externalCompletion;
+    std::thread external(
+        [&]
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            externalCompletion.setReady();
+        });
+    context.wait(externalCompletion.event());
+    external.join();
 
     caravan::EventSource pending;
     caravan::EventSource checked;

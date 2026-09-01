@@ -56,6 +56,9 @@ namespace pmacc::async
         {
             if(caravan::isExecutorThread() && event.state() == caravan::CompletionState::pending)
                 throw std::logic_error("A PMacc async continuation cannot wait on pending work");
+            auto scheduler = m_loop.scheduler();
+            auto wake = event.continueWith(scheduler, [](caravan::Event) {});
+            static_cast<void>(wake);
             while(event.state() == caravan::CompletionState::pending)
                 m_loop.runOne();
             event.wait();
