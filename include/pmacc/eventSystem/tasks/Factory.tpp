@@ -33,7 +33,6 @@
 #include "pmacc/eventSystem/tasks/TaskSendMPI.hpp"
 #include "pmacc/eventSystem/tasks/TaskSetCurrentSizeOnDevice.hpp"
 #include "pmacc/eventSystem/tasks/TaskSetValue.hpp"
-#include "pmacc/eventSystem/tasks/TaskSignal.hpp"
 #include "pmacc/memory/buffers/DeviceBuffer.hpp"
 #include "pmacc/memory/buffers/Exchange.hpp"
 #include "pmacc/memory/buffers/HostBuffer.hpp"
@@ -186,18 +185,4 @@ namespace pmacc
         return event;
     }
 
-    template<unsigned T_dim>
-    inline EventTask Factory::createTaskSignal(uint32_t currentStep, auto& checkpointing, bool writeOutput)
-    {
-        auto* task = new Signal<T_dim, std::remove_reference_t<decltype(checkpointing)>>(
-            currentStep,
-            checkpointing,
-            writeOutput);
-
-        EventTask event(task->getId());
-
-        task->init();
-        Manager::getInstance().addCooperativeTask(task);
-        return event;
-    }
 } // namespace pmacc

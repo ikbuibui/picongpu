@@ -131,14 +131,14 @@ namespace pmacc
             size_t receiveBytes,
             uint32_t tag) override;
 
-        caravan::Future<caravan::AllReduceResult> startSignalAllReduce(
+        caravan::mpi::OperationSender<caravan::AllReduceResult> signalAllReduce(
             void const* input,
             void* output,
             size_t bytes,
             caravan::ScalarType type,
             caravan::ReduceOperation operation);
 
-        caravan::Event startBarrierAsync();
+        caravan::mpi::OperationSender<void> barrier();
 
         void progressAsync() override
         {
