@@ -31,6 +31,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 namespace pmacc
 {
@@ -462,6 +463,32 @@ namespace pmacc
             return ev;
         }
 
+        /** Start one explicit send and receive branch per active direction and return their flat join. */
+        template<typename T_Queue>
+        caravan::Event asyncCommunication(async::Context& context, T_Queue& queue)
+        {
+            std::vector<caravan::Event> branches;
+            branches.reserve(maxExchange * 2u);
+            for(uint32_t i = 0; i < maxExchange; ++i)
+            {
+                if(hasReceiveExchange(i))
+                {
+                    auto receive = receiveExchanges[i]->receiveAsync(context, queue, receiveCompletions[i]);
+                    receiveCompletions[i] = receive.event();
+                    branches.push_back(receiveCompletions[i]);
+                }
+
+                auto const sendEx = Mask::getMirroredExchangeType(i);
+                if(hasSendExchange(sendEx))
+                {
+                    sendCompletions[sendEx]
+                        = sendExchanges[sendEx]->sendAsync(context, queue, sendCompletions[sendEx]);
+                    branches.push_back(sendCompletions[sendEx]);
+                }
+            }
+            return caravan::whenAll(branches);
+        }
+
         /**
          * Starts sync data from own device buffer to neighbor device buffer.
          *
@@ -545,6 +572,8 @@ namespace pmacc
         std::unique_ptr<Exchange<BORDERTYPE, DIM>> receiveExchanges[27];
         EventTask receiveEvents[27];
         EventTask sendEvents[27];
+        caravan::Event receiveCompletions[27];
+        caravan::Event sendCompletions[27];
 
         uint32_t maxExchange; // use max exchanges and run over the array is faster as use set from stl
     };

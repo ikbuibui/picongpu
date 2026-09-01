@@ -73,7 +73,9 @@ The immediate implementation order is:
    complete the first real alpaka/device sender architecture test; and only then
 7. **Phase 5 representative path implemented:** replace PMacc polling task chains
    with local sender composition and retain Event only at unavoidable legacy
-   boundaries.
+   boundaries; and
+8. **Phase 6 M1 implemented:** port generic grid-buffer exchange branches and the
+   complete `gameOfLife2D` step graph to explicit sender/Event composition.
 
 ---
 
@@ -1699,6 +1701,11 @@ been introduced.
 ---
 
 ## Phase 6: PMacc communication and target examples
+
+**Current state:** M1 is implemented. `Exchange` and `GridBuffer` expose explicit
+send/receive branches with flat Event joins, and `gameOfLife2D` composes halo
+communication, core, and border work without an `EventTask`/Manager boundary.
+The broader M2/M3 communication migration remains.
 
 1. Port `Exchange` send and receive to explicit operation chains.
 2. Preserve host staging, double buffering, and GPU-aware MPI.
