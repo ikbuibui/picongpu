@@ -12,8 +12,6 @@
 #include <utility>
 #include <vector>
 
-#include <caravan/core/eager.hpp>
-
 namespace caravan
 {
     namespace detail
@@ -188,41 +186,6 @@ namespace caravan
         ~MpiContext();
 
         TopologySnapshot topology() const;
-
-        Future<AllReduceResult> allReduce(
-            Event dataReady,
-            BufferLease input,
-            BufferLease output,
-            ScalarType type,
-            ReduceOperation operation,
-            CommunicatorId communicator = worldCommunicator);
-
-        Future<ReduceResult> reduce(
-            Event dataReady,
-            BufferLease input,
-            BufferLease output,
-            ScalarType type,
-            ReduceOperation operation,
-            Peer root,
-            CommunicatorId communicator = worldCommunicator);
-
-        Future<GatherResult> gather(
-            Event dataReady,
-            BufferLease input,
-            BufferLease output,
-            Peer root,
-            CommunicatorId communicator = worldCommunicator);
-
-        Future<GatherResult> gatherV(
-            Event dataReady,
-            BufferLease input,
-            BufferLease output,
-            std::vector<std::size_t> receiveBytes,
-            std::vector<std::size_t> displacements,
-            Peer root,
-            CommunicatorId communicator = worldCommunicator);
-
-        Event barrier(Event predecessor, CommunicatorId communicator = worldCommunicator);
 
     private:
         class Impl;
