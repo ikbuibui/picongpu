@@ -12,6 +12,7 @@
 #include <alpaka/alpaka.hpp>
 
 #include <memory>
+#include <thread>
 
 #include <caravan/alpaka.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -57,10 +58,20 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
             pmacc::async::copy(queue, output.getOwnedAlpakaView(), device->getOwnedAlpakaView(), extent)));
 
     pmacc::async::Context context;
-    auto completion = context.spawn(std::move(step));
+    auto const applicationThread = std::this_thread::get_id();
+    bool continued = false;
+    auto completion = context.spawn(
+        caravan::then(
+            context.onControl(std::move(step)),
+            [&]
+            {
+                CHECK(std::this_thread::get_id() == applicationThread);
+                continued = true;
+            }));
     input.reset();
     device.reset();
     context.wait(completion);
 
     CHECK(output.data()[0] == 42);
+    CHECK(continued);
 }

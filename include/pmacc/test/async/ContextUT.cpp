@@ -13,19 +13,29 @@ TEST_CASE("PMacc async context owns work and drives host continuations", "[async
 {
     pmacc::async::Context context;
     auto const applicationThread = std::this_thread::get_id();
+    std::thread::id completionThread;
     bool ran = false;
+    caravan::EventSource backendCompletion;
 
     auto operation = context.spawn(
         caravan::then(
-            caravan::asSender(caravan::readyEvent()),
+            context.onControl(caravan::asSender(backendCompletion.event())),
             [&]
             {
                 ran = true;
                 CHECK(std::this_thread::get_id() == applicationThread);
+                CHECK(std::this_thread::get_id() != completionThread);
             }));
 
+    std::thread backend(
+        [&]
+        {
+            completionThread = std::this_thread::get_id();
+            backendCompletion.setReady();
+        });
     CHECK(operation.state() == caravan::CompletionState::pending);
     context.wait(operation);
+    backend.join();
     CHECK(ran);
 
     caravan::EventSource pending;
