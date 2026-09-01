@@ -22,7 +22,7 @@
 
 #pragma once
 
-#include "pmacc/fields/tasks/FieldFactory.hpp"
+#include "pmacc/async/Operations.hpp"
 #include "pmacc/lockstep.hpp"
 #include "pmacc/mappings/kernel/ExchangeMapping.hpp"
 #include "pmacc/mappings/kernel/MappingDescription.hpp"
@@ -138,6 +138,38 @@ namespace pmacc
                  * @param superCellSize compile time supercell size
                  * @param exchangeType the exchange direction which needs to be copied
                  */
+                template<typename T_Queue, typename T_SrcBuffer, typename T_SuperCellSize>
+                auto sender(
+                    T_Queue& queue,
+                    T_SrcBuffer& srcBuffer,
+                    T_SuperCellSize const& superCellSize,
+                    uint32_t const exchangeType) const
+                {
+                    boost::ignore_unused(superCellSize);
+                    using SuperCellSize = T_SuperCellSize;
+                    constexpr uint32_t dim = T_SuperCellSize::dim;
+                    using MappingDesc = MappingDescription<dim, SuperCellSize>;
+
+                    auto const numGuardSuperCells = srcBuffer.getGridLayout().guardSizeND() / SuperCellSize::toRT();
+                    MappingDesc const mappingDesc(srcBuffer.getGridLayout().sizeND(), numGuardSuperCells);
+                    ExchangeMapping<GUARD, MappingDesc> mapper(mappingDesc, exchangeType);
+                    DataSpace<dim> const direction = Mask::getRelativeDirections<dim>(mapper.getExchangeType());
+                    auto source = srcBuffer.getDeviceBuffer().getOwnedAlpakaView();
+                    auto exchange = srcBuffer.getSendExchange(exchangeType).getDeviceBuffer().getOwnedAlpakaView();
+
+                    return PMACC_LOCKSTEP_KERNEL(KernelCopyGuardToExchange{})
+                        .config(mapper.getGridDim(), SuperCellSize{})
+                        .sender(
+                            queue,
+                            async::retain(
+                                srcBuffer.getSendExchange(exchangeType).getDeviceBuffer().getDataBox(),
+                                exchange),
+                            async::retain(srcBuffer.getDeviceBuffer().getDataBox(), source),
+                            srcBuffer.getSendExchange(exchangeType).getDeviceBuffer().capacityND(),
+                            direction,
+                            mapper);
+                }
+
                 template<typename T_SrcBuffer, typename T_SuperCellSize>
                 void operator()(
                     T_SrcBuffer& srcBuffer,

@@ -24,4 +24,155 @@
 #include "IdProvider.hpp"
 #include "memory/SuperCell.hpp"
 
+#include <pmacc/HandleGuardRegion.hpp>
+#include <pmacc/fields/Communication.hpp>
+#include <pmacc/particles/Communication.hpp>
+#include <pmacc/particles/policies/DoNothing.hpp>
+
 #include <catch2/catch_test_macros.hpp>
+
+namespace
+{
+    struct MockStack
+    {
+        size_t getMaxParticlesCount() const
+        {
+            return 2u;
+        }
+
+        size_t getDeviceParticlesCurrentSize() const
+        {
+            return *size;
+        }
+
+        size_t getHostParticlesCurrentSize() const
+        {
+            return *size;
+        }
+
+        size_t const* size;
+    };
+
+    struct MockParticlesBuffer
+    {
+        bool hasSendExchange(uint32_t exchange) const
+        {
+            return exchange == 1u;
+        }
+
+        bool hasReceiveExchange(uint32_t exchange) const
+        {
+            return exchange == 1u;
+        }
+
+        MockStack getSendExchangeStack(uint32_t) const
+        {
+            return {&sendSize};
+        }
+
+        MockStack getReceiveExchangeStack(uint32_t) const
+        {
+            return {&receiveSize};
+        }
+
+        caravan::Event sendCompletion(uint32_t) const
+        {
+            return {};
+        }
+
+        void setReceiveCompletion(uint32_t, caravan::Event)
+        {
+        }
+
+        template<typename T_Queue>
+        caravan::Event asyncSendParticles(pmacc::async::Context& context, T_Queue& queue, uint32_t, caravan::Event)
+        {
+            return context.spawn(caravan::alpaka::submit(queue, [](T_Queue&) {}));
+        }
+
+        template<typename T_Queue>
+        caravan::Event asyncReceiveParticles(pmacc::async::Context& context, T_Queue& queue, uint32_t, caravan::Event)
+        {
+            return context.spawn(
+                caravan::alpaka::submit(queue, [this](T_Queue&) { receiveSize = receiveChunks.at(receiveChunk++); }));
+        }
+
+        std::array<size_t, 2u> sendChunks{2u, 1u};
+        std::array<size_t, 2u> receiveChunks{2u, 1u};
+        size_t sendChunk = 0u;
+        size_t receiveChunk = 0u;
+        size_t sendSize = 0u;
+        size_t receiveSize = 0u;
+    };
+
+    struct MockParticles
+    {
+        using HandleGuardRegion
+            = pmacc::HandleGuardRegion<pmacc::particles::policies::DoNothing, pmacc::particles::policies::DoNothing>;
+
+        struct FrameType
+        {
+            static char const* getName()
+            {
+                return "mock";
+            }
+        };
+
+        static constexpr uint32_t dim = TEST_DIM;
+
+        MockParticlesBuffer& getParticlesBuffer()
+        {
+            return buffer;
+        }
+
+        template<typename T_Queue>
+        auto copyGuardToExchangeAsync(T_Queue& queue, uint32_t)
+        {
+            return caravan::alpaka::submit(
+                queue,
+                [this](T_Queue&) { buffer.sendSize = buffer.sendChunks.at(buffer.sendChunk++); });
+        }
+
+        template<typename T_Queue>
+        auto insertParticlesAsync(T_Queue& queue, uint32_t, size_t count)
+        {
+            return caravan::alpaka::submit(queue, [this, count](T_Queue&) { inserted += count; });
+        }
+
+        template<typename T_Queue>
+        auto fillBorderGapsAsync(T_Queue& queue)
+        {
+            return caravan::alpaka::submit(queue, [this](T_Queue&) { gapsFilled = true; });
+        }
+
+        MockParticlesBuffer buffer;
+        size_t inserted = 0u;
+        bool gapsFilled = false;
+    };
+} // namespace
+
+TEST_CASE("Particle communication handles exact and partial chunks", "[particles][async]")
+{
+    auto& queue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    pmacc::async::Context context;
+    MockParticles particles;
+    context.wait(pmacc::particles::asyncCommunication(context, queue, particles));
+    CHECK(particles.buffer.sendChunk == 2u);
+    CHECK(particles.buffer.receiveChunk == 2u);
+    CHECK(particles.inserted == 3u);
+    CHECK(particles.gapsFilled);
+}
+
+TEST_CASE("Particle communication handles empty chunks", "[particles][async]")
+{
+    auto& queue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    pmacc::async::Context context;
+    MockParticles particles;
+    particles.buffer.sendChunks = {0u, 0u};
+    particles.buffer.receiveChunks = {0u, 0u};
+    context.wait(pmacc::particles::asyncCommunication(context, queue, particles));
+    CHECK(particles.buffer.sendChunk == 1u);
+    CHECK(particles.buffer.receiveChunk == 1u);
+    CHECK(particles.inserted == 0u);
+    CHECK(particles.gapsFilled);
+}

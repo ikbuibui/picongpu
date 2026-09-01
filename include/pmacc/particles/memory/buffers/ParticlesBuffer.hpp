@@ -39,6 +39,7 @@
 #include "pmacc/particles/memory/frames/Frame.hpp"
 #include "pmacc/traits/GetUniqueTypeId.hpp"
 
+#include <array>
 #include <memory>
 
 namespace pmacc
@@ -249,6 +250,46 @@ namespace pmacc
          * GridBuffer
          *
          */
+        caravan::Event sendCompletion(uint32_t exchange) const
+        {
+            std::array completions{
+                framesExchanges->sendCompletion(exchange),
+                exchangeMemoryIndexer->sendCompletion(exchange)};
+            return caravan::whenAll(completions);
+        }
+
+        void setReceiveCompletion(uint32_t exchange, caravan::Event completion)
+        {
+            framesExchanges->setReceiveCompletion(exchange, completion);
+            exchangeMemoryIndexer->setReceiveCompletion(exchange, std::move(completion));
+        }
+
+        template<typename T_Queue>
+        caravan::Event asyncSendParticles(
+            async::Context& context,
+            T_Queue& queue,
+            uint32_t exchange,
+            caravan::Event previous = {})
+        {
+            std::array branches{
+                framesExchanges->asyncSend(context, queue, exchange, previous),
+                exchangeMemoryIndexer->asyncSend(context, queue, exchange, std::move(previous))};
+            return caravan::whenAll(branches);
+        }
+
+        template<typename T_Queue>
+        caravan::Event asyncReceiveParticles(
+            async::Context& context,
+            T_Queue& queue,
+            uint32_t exchange,
+            caravan::Event previous = {})
+        {
+            std::array branches{
+                framesExchanges->asyncReceive(context, queue, exchange, previous).event(),
+                exchangeMemoryIndexer->asyncReceive(context, queue, exchange, std::move(previous)).event()};
+            return caravan::whenAll(branches);
+        }
+
         EventTask asyncCommunication(EventTask serialEvent)
         {
             return framesExchanges->asyncCommunication(serialEvent)
