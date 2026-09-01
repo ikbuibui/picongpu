@@ -2,6 +2,11 @@
 
 ## Status
 
+The implementation review and concrete near-term corrective actions for commit
+`3073aba0a37ee5763521ee79f838f8e71ef85daf` are tracked in
+[`PLAN_REVIEW_ACTIONS.md`](PLAN_REVIEW_ACTIONS.md). That document supplements this
+plan; it does not replace the architecture or migration phases below.
+
 Caravan is being developed inside the PMacc/PIConGPU repository while the
 legacy PMacc event system is still in use.
 
@@ -890,12 +895,14 @@ resources to enforce its one-caller contract. Generic Caravan MPI APIs should no
 pretend those resources are backend-neutral.
 
 Collective ordering remains an application correctness responsibility across
-ranks, but managed helpers must not reorder collective initiation within one
-communicator merely because later sender dependencies become ready first. Maintain
-an initiation sequence/lane per managed communicator. Point-to-point operations
-need not be serialized behind that lane. Expert invocation that executes
-collectives must participate in a documented ordering mechanism or explicitly be
-caller-managed.
+ranks. PMacc uses the explicit managed-sequence model: it reserves logical order
+with `mpi::CollectiveLane::submit()` when building the graph, before predecessor
+readiness. Failed and stopped predecessors retire their entries without initiating
+MPI. The lane releases the next entry after native operation start, not completion,
+and does not serialize point-to-point operations. Every rank must submit and start
+the same managed sequence on a communicator. Primitive typed senders remain lazy
+and independently usable; code mixing unmanaged or expert collectives with a
+managed lane is responsible for their relative ordering.
 
 ---
 
