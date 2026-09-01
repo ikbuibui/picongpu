@@ -154,9 +154,21 @@ namespace pmacc
             this->fillGaps(AreaMapperFactory<BORDER>{});
         }
 
+        template<typename T_Queue>
+        auto fillBorderGapsAsync(T_Queue& queue)
+        {
+            auto const mapper = AreaMapperFactory<BORDER>{}(this->cellDescription);
+            return PMACC_LOCKSTEP_KERNEL(KernelFillGaps{})
+                .config(mapper.getGridDim(), *particlesBuffer)
+                .sender(queue, particlesBuffer->getDeviceParticleBox(), mapper);
+        }
+
         /* Delete all particles in GUARD for one direction.
          */
         void deleteGuardParticles(uint32_t exchangeType);
+
+        template<typename T_Queue>
+        auto deleteGuardParticlesAsync(T_Queue& queue, uint32_t exchangeType);
 
         /* Delete all particle in an area*/
         template<uint32_t T_area>
@@ -173,9 +185,15 @@ namespace pmacc
          */
         void copyGuardToExchange(uint32_t exchangeType);
 
+        template<typename T_Queue>
+        auto copyGuardToExchangeAsync(T_Queue& queue, uint32_t exchangeType);
+
         /* Insert all particles which are in device exchange buffer
          */
         void insertParticles(uint32_t exchangeType);
+
+        template<typename T_Queue>
+        auto insertParticlesAsync(T_Queue& queue, uint32_t exchangeType, size_t numParticles);
 
         ParticlesBoxType getDeviceParticlesBox()
         {

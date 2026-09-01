@@ -681,10 +681,13 @@ added later only if it materially simplifies the call site.
    MPI.
 4. Return immutable receive metadata/counts.
 5. Validate buffer reuse across directions and time steps.
-6. Replace field polling task classes and factories.
+6. Replace field polling task classes and factories. Explicit field
+   pack/send/receive/insert branches are implemented; legacy PIConGPU callers still
+   keep the old classes alive.
 7. Replace particle enum/polling state machines with sender continuation,
    coroutine, or standard-execution-compatible chunk loops over the same backend
-   operations.
+   operations. Continuation-driven exact-capacity and multi-chunk exchange is
+   implemented; legacy PIConGPU callers still need conversion before deletion.
 8. Port remaining reductions, gathers, signals, tests, and helpers. The signal
    all-reduce and barrier helpers now expose typed senders directly.
 9. Delete `TaskSendMPI`, `TaskReceiveMPI`, `TaskSignal`, and other migration
