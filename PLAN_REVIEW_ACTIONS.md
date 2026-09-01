@@ -511,6 +511,14 @@ Equivalent names from the selected implementation are acceptable for the spike.
 - adopting standard composition would not require rewriting MPI progress or
   alpaka native integration.
 
+### Outcome
+
+Completed with NVIDIA/stdexec `nvhpc-25.09`. A thin adapter runs the representative
+CPU chain without backend changes, and the chain translates with nvcc 13.3. The
+stdexec async-scope path does not instantiate under that nvcc version; HIP was not
+available. Decisions, measurements, diagnostics, and reproduction steps are in
+[`docs/CARAVAN_STDEXEC_SPIKE.md`](docs/CARAVAN_STDEXEC_SPIKE.md).
+
 ---
 
 ## A8: Measure before optimizing the custom core
@@ -822,7 +830,7 @@ application storage.
 - [x] A5 normal/native MPI header split enforced.
 - [x] A6 eager predecessor-taking `MpiContext` API removed or confined to a
       named temporary PMacc adapter.
-- [ ] A7 standard-execution spike completed and compatibility claims updated.
+- [x] A7 standard-execution spike completed and compatibility claims updated.
 
 ## Must pass before the PIConGPU entry gate
 
