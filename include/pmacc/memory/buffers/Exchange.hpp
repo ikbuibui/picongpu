@@ -457,7 +457,7 @@ namespace pmacc
             if(result.bytes % sizeof(TYPE) != 0u)
                 throw std::runtime_error("Received exchange byte count is not an element count");
             auto const elements = result.bytes / sizeof(TYPE);
-            if(elements > deviceBuffer->capacityND().productOfComponents())
+            if(elements > static_cast<size_t>(deviceBuffer->capacityND().productOfComponents()))
                 throw std::runtime_error("Received exchange exceeds its device buffer");
             return {elements, result};
         }

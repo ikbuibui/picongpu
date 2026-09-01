@@ -76,7 +76,7 @@ TEST_CASE("CommunicatorMPI consumes Caravan topology snapshots")
         static_cast<void>(gather.participate(true));
         pmacc::HostBuffer<int, DIM2> local(pmacc::DataSpace<DIM2>{1, 1});
         local.data()[0] = topology.rank + 1;
-        auto gathered = gather.gatherSlice(
+        auto gathered = gather.gatherSliceExplicit(
             local,
             pmacc::DataSpace<DIM2>{topology.size, 1},
             pmacc::DataSpace<DIM2>{topology.rank, 0});

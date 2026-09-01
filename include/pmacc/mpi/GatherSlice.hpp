@@ -48,9 +48,7 @@ namespace pmacc
             int numRanksInPlane = 0;
 
         public:
-            GatherSlice()
-            {
-            }
+            GatherSlice() = default;
 
             virtual ~GatherSlice()
             {
@@ -135,14 +133,24 @@ namespace pmacc
                 DataSpace<DIM2> globalSliceExtent,
                 DataSpace<DIM2> localSliceOffset) const
             {
+                // Preserve the legacy implicit dependency for unmigrated callers.
+                eventSystem::getTransactionEvent().waitForFinished();
+                return gatherSliceExplicit(localInputSlice, globalSliceExtent, localSliceOffset);
+            }
+
+            /** Gather after the caller has explicitly completed writes to localInputSlice. */
+            template<typename T_DataType>
+            auto gatherSliceExplicit(
+                HostBuffer<T_DataType, DIM2>& localInputSlice,
+                DataSpace<DIM2> globalSliceExtent,
+                DataSpace<DIM2> localSliceOffset) const
+            {
                 using ValueType = T_DataType;
                 // Guard against wrong usage, only MPI ranks which are participating into the gather are allowed to
                 // call corresponding MPI functions.
                 if(!isParticipating())
                     return std::shared_ptr<HostBuffer<ValueType, DIM2>>{};
 
-                // avoid deadlock between not finished pmacc tasks and mpi blocking collectives
-                eventSystem::getTransactionEvent().waitForFinished();
                 // get number of elements per participating mpi rank
                 auto extentPerDevice = std::vector<DataSpace<DIM2>>(numRanksInPlane);
                 auto offsetPerDevice = std::vector<DataSpace<DIM2>>(numRanksInPlane);
