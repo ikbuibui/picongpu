@@ -685,9 +685,10 @@ added later only if it materially simplifies the call site.
 7. Replace particle enum/polling state machines with sender continuation,
    coroutine, or standard-execution-compatible chunk loops over the same backend
    operations.
-8. Port remaining reductions, gathers, signals, tests, and helpers.
+8. Port remaining reductions, gathers, signals, tests, and helpers. The signal
+   all-reduce and barrier helpers now expose typed senders directly.
 9. Delete `TaskSendMPI`, `TaskReceiveMPI`, `TaskSignal`, and other migration
-   adapters after their last user is removed.
+   adapters after their last user is removed. `TaskSignal` is deleted.
 10. Delete Manager, transaction, observer, task-ID, logical-and, and polling task
     infrastructure only after complete PMacc regression passes.
 
