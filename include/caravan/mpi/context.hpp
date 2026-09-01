@@ -32,6 +32,23 @@ namespace caravan
 
     inline constexpr CommunicatorId worldCommunicator{0u};
 
+    class MpiContext;
+
+    namespace detail
+    {
+        struct ManagedCollectiveTicket
+        {
+            CommunicatorId communicator;
+            std::size_t sequence;
+        };
+
+        struct CollectiveAccess
+        {
+            static ManagedCollectiveTicket reserve(MpiContext& context, CommunicatorId communicator);
+            static void release(MpiContext& context, ManagedCollectiveTicket ticket, std::function<void()> start);
+        };
+    } // namespace detail
+
     struct Peer
     {
         int value;
@@ -218,7 +235,11 @@ namespace caravan
 
         std::unique_ptr<Impl> m_implementation;
 
+        detail::ManagedCollectiveTicket reserveManagedCollective(CommunicatorId communicator);
+        void releaseManagedCollective(detail::ManagedCollectiveTicket ticket, std::function<void()> start);
+
         friend class MpiRuntime;
+        friend struct detail::CollectiveAccess;
         friend struct detail::NativeAccess;
     };
 
