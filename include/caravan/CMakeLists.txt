@@ -34,6 +34,7 @@ if(CARAVAN_BUILD_ALPAKA)
 endif()
 
 option(CARAVAN_BUILD_TESTING "Build Caravan tests" ${PROJECT_IS_TOP_LEVEL})
+option(CARAVAN_BUILD_STDEXEC_SPIKE "Build the optional NVIDIA/stdexec interoperability spike" OFF)
 if(CARAVAN_BUILD_TESTING)
     enable_testing()
     add_executable(caravan-core-test test/core.cpp)
@@ -54,6 +55,23 @@ if(CARAVAN_BUILD_TESTING)
                 $<TARGET_FILE:caravan-alpaka-mpi-test> ${MPIEXEC_POSTFLAGS}
         )
         set_tests_properties(caravan-alpaka-mpi PROPERTIES PROCESSORS 1 TIMEOUT 30)
+    endif()
+
+    if(CARAVAN_BUILD_STDEXEC_SPIKE)
+        if(NOT TARGET caravan::alpaka)
+            message(FATAL_ERROR "CARAVAN_BUILD_STDEXEC_SPIKE requires CARAVAN_BUILD_ALPAKA")
+        endif()
+        find_path(CARAVAN_STDEXEC_INCLUDE_DIR NAMES stdexec/execution.hpp REQUIRED)
+        alpaka_add_executable(caravan-stdexec-spike test/stdexec.cpp)
+        target_include_directories(caravan-stdexec-spike PRIVATE ${CARAVAN_STDEXEC_INCLUDE_DIR})
+        target_link_libraries(caravan-stdexec-spike PRIVATE caravan::alpaka caravan::mpi)
+        add_test(
+            NAME caravan-stdexec-spike
+            COMMAND
+                ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 ${MPIEXEC_PREFLAGS} $<TARGET_FILE:caravan-stdexec-spike>
+                ${MPIEXEC_POSTFLAGS}
+        )
+        set_tests_properties(caravan-stdexec-spike PROPERTIES PROCESSORS 1 TIMEOUT 30)
     endif()
 
     add_executable(caravan-mpi-header-test test/mpi_header.cpp)
