@@ -23,7 +23,7 @@
 #include "include/StencilFourPoint.hpp"
 
 #include <pmacc/Environment.hpp>
-#include <pmacc/algorithms/GlobalReduce.hpp>
+#include <pmacc/async.hpp>
 #include <pmacc/dimensions/DataSpace.hpp>
 #include <pmacc/lockstep.hpp>
 #include <pmacc/mappings/kernel/AreaMapping.hpp>
@@ -31,8 +31,6 @@
 #include <pmacc/math/Vector.hpp>
 #include <pmacc/memory/buffers/GridBuffer.hpp>
 #include <pmacc/mpi/GatherSlice.hpp>
-#include <pmacc/mpi/MPIReduce.hpp>
-#include <pmacc/mpi/reduceMethods/Reduce.hpp>
 
 #include <fstream>
 #include <iostream>
@@ -46,8 +44,13 @@
 #define DX 4 // GRID SPACING
 #define DT 1 // TIME STEP - STABLE IF DT < (DX * DX) / (4 * THERMAL_DIFFUSIVITY)
 
-template<typename T_Gather, typename T_GridBuffer>
-inline auto createPng(uint32_t currentStep, T_Gather& gather, std::unique_ptr<T_GridBuffer> const& gridBuffer)
+template<typename T_Gather, typename T_GridBuffer, typename T_Queue>
+inline auto createPng(
+    uint32_t currentStep,
+    T_Gather& gather,
+    std::unique_ptr<T_GridBuffer> const& gridBuffer,
+    pmacc::async::Context& asyncContext,
+    T_Queue& queue)
 {
     /* gather::operator() gathers all the buffers and assembles those to
      * a complete picture discarding the guards.
@@ -63,9 +66,14 @@ inline auto createPng(uint32_t currentStep, T_Gather& gather, std::unique_ptr<T_
             bufferLayout.guardSizeND());
         // create a contiguous buffer required for gathering the data
         auto dataWithoutGuard = std::make_unique<pmacc::HostBuffer<float, DIM2>>(localDataExtents);
-        dataWithoutGuard->copyFrom(*view.get());
-        auto picture = gather->gatherSlice(
-            *dataWithoutGuard.get(),
+        auto copy = pmacc::async::copy(
+            queue,
+            dataWithoutGuard->getOwnedAlpakaView(),
+            view->getOwnedAlpakaView(),
+            localDataExtents.toAlpakaMemVec());
+        asyncContext.wait(asyncContext.spawn(std::move(copy)));
+        auto picture = gather->gatherSliceExplicit(
+            *dataWithoutGuard,
             subGrid.getGlobalDomain().size,
             subGrid.getLocalDomain().offset);
         PngCreator png;
@@ -131,106 +139,124 @@ auto run(caravan::MpiContext& mpi) -> int
     pmacc::AreaMapping<pmacc::type::CORE, MappingDesc> coreMapper(*mapping);
     pmacc::AreaMapping<pmacc::type::BORDER, MappingDesc> borderMapper(*mapping);
 
-    auto setBoundaryConditions = SetBoundaryConditions{};
-
-    /** the databox should be accessed from the buffer->getDataBox,
-     *  as the state of the databox can change when someone else writes to the buffer
-     */
-    auto kernel = PMACC_LOCKSTEP_KERNEL(setBoundaryConditions)
-                      .config(borderMapper.getGridDim(), typename MappingDesc::SuperCellSize{});
-    kernel(
-        buff1->getDeviceBuffer().getDataBox(),
-        NUM_DEVICES_PER_DIM,
-        gc.getPosition(),
-        subGrid.getLocalDomain().offset,
-        gridSize,
-        borderMapper);
-    kernel(
-        buff2->getDeviceBuffer().getDataBox(),
-        NUM_DEVICES_PER_DIM,
-        gc.getPosition(),
-        subGrid.getLocalDomain().offset,
-        gridSize,
-        borderMapper);
-
-    // create png on host of the initial conditions
-    auto gather = std::make_unique<pmacc::mpi::GatherSlice>();
-    createPng(0u, gather, buff1);
-
-    // buffer to store residual
+    pmacc::async::Context asyncContext;
+    auto& communicationQueue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    auto& computeQueue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    using SuperCell = typename MappingDesc::SuperCellSize;
     auto residualBuffer = std::make_unique<pmacc::HostDeviceBuffer<float, DIM1>>(pmacc::DataSpace<DIM1>::create(1));
 
-    auto hReducedResidual = pmacc::HostBuffer<float, DIM1>(pmacc::DataSpace<DIM1>::create(1));
+    // Buffer construction still uses the legacy allocator path. Finish those initial fills before explicit work.
+    ::alpaka::wait(pmacc::manager::Device<pmacc::ComputeDevice>::get().current());
+    auto boundaryKernel
+        = PMACC_LOCKSTEP_KERNEL(SetBoundaryConditions{}).config(borderMapper.getGridDim(), SuperCell{});
+    auto initialBoundaries = caravan::alpaka::then(
+        boundaryKernel.sender(
+            computeQueue,
+            pmacc::async::retain(buff1->getDeviceBuffer().getDataBox(), buff1->getDeviceBuffer().getOwnedAlpakaView()),
+            NUM_DEVICES_PER_DIM,
+            gc.getPosition(),
+            subGrid.getLocalDomain().offset,
+            gridSize,
+            borderMapper),
+        boundaryKernel.sender(
+            computeQueue,
+            pmacc::async::retain(buff2->getDeviceBuffer().getDataBox(), buff2->getDeviceBuffer().getOwnedAlpakaView()),
+            NUM_DEVICES_PER_DIM,
+            gc.getPosition(),
+            subGrid.getLocalDomain().offset,
+            gridSize,
+            borderMapper));
+    asyncContext.wait(asyncContext.spawn(std::move(initialBoundaries)));
 
-    // scope for reduce
+    auto gather = std::make_unique<pmacc::mpi::GatherSlice>();
+    createPng(0u, gather, buff1, asyncContext, computeQueue);
+
+    float reducedResidual = 0.0f;
+    bool const isReductionRoot = mpi.topology().rank == 0;
+
+    for(uint32_t i = 0; i < NUM_STEPS; i++)
     {
-        pmacc::mpi::MPIReduce reduce;
+        auto communication = buff1->asyncCommunication(asyncContext, communicationQueue);
 
-        // run the simulation for steps
-        for(uint32_t i = 0; i < NUM_STEPS; i++)
-        {
-            using SuperCell = typename MappingDesc::SuperCellSize;
-            auto splitEvent = pmacc::eventSystem::getTransactionEvent();
-            auto send = buff1->asyncCommunication(splitEvent);
+        auto core = PMACC_LOCKSTEP_KERNEL(StencilFourPoint{})
+                        .config(coreMapper.getGridDim(), SuperCell{})
+                        .sender(
+                            computeQueue,
+                            pmacc::async::retain(
+                                buff1->getDeviceBuffer().getDataBox(),
+                                buff1->getDeviceBuffer().getOwnedAlpakaView()),
+                            pmacc::async::retain(
+                                buff2->getDeviceBuffer().getDataBox(),
+                                buff2->getDeviceBuffer().getOwnedAlpakaView()),
+                            pmacc::async::retain(
+                                residualBuffer->getDeviceBuffer().getDataBox(),
+                                residualBuffer->getDeviceBuffer().getOwnedAlpakaView()),
+                            THERMAL_DIFFUSIVITY,
+                            DX,
+                            DT,
+                            coreMapper);
+        auto boundary = boundaryKernel.sender(
+            computeQueue,
+            pmacc::async::retain(buff1->getDeviceBuffer().getDataBox(), buff1->getDeviceBuffer().getOwnedAlpakaView()),
+            NUM_DEVICES_PER_DIM,
+            gc.getPosition(),
+            subGrid.getLocalDomain().offset,
+            gridSize,
+            borderMapper);
+        auto coreAndBoundary = caravan::alpaka::then(std::move(core), std::move(boundary));
 
-            /* Update Core Cells */
-            PMACC_LOCKSTEP_KERNEL(StencilFourPoint{})
-                .config(coreMapper.getGridDim(), SuperCell{})(
-                    buff1->getDeviceBuffer().getDataBox(),
-                    buff2->getDeviceBuffer().getDataBox(),
-                    residualBuffer->getDeviceBuffer().getDataBox(),
-                    THERMAL_DIFFUSIVITY,
-                    DX,
-                    DT,
-                    coreMapper);
+        auto deviceStep = caravan::letValue(
+            asyncContext.onControl(
+                caravan::whenAll(std::move(coreAndBoundary), caravan::asSender(std::move(communication)))),
+            [&,
+             readView = buff1->getDeviceBuffer().getOwnedAlpakaView(),
+             writeView = buff2->getDeviceBuffer().getOwnedAlpakaView(),
+             residualView = residualBuffer->getDeviceBuffer().getOwnedAlpakaView(),
+             residualHostView = residualBuffer->getHostBuffer().getOwnedAlpakaView()]() mutable
+            {
+                auto border
+                    = PMACC_LOCKSTEP_KERNEL(StencilFourPoint{})
+                          .config(borderMapper.getGridDim(), SuperCell{})
+                          .sender(
+                              computeQueue,
+                              pmacc::async::retain(buff1->getDeviceBuffer().getDataBox(), readView),
+                              pmacc::async::retain(buff2->getDeviceBuffer().getDataBox(), writeView),
+                              pmacc::async::retain(residualBuffer->getDeviceBuffer().getDataBox(), residualView),
+                              THERMAL_DIFFUSIVITY,
+                              DX,
+                              DT,
+                              borderMapper);
+                auto copyResidual = pmacc::async::copy(
+                    computeQueue,
+                    std::move(residualHostView),
+                    residualView,
+                    pmacc::DataSpace<DIM1>::create(1).toAlpakaMemVec());
+                auto resetResidual = pmacc::async::fill(computeQueue, std::move(residualView), 0u);
+                return caravan::alpaka::then(
+                    caravan::alpaka::then(std::move(border), std::move(copyResidual)),
+                    std::move(resetResidual));
+            });
+        auto step = caravan::letValue(
+            asyncContext.onControl(std::move(deviceStep)),
+            [&]
+            {
+                return caravan::mpi::reduce(
+                    mpi,
+                    caravan::BufferLease::borrowed(residualBuffer->getHostBuffer().data(), sizeof(float)),
+                    caravan::BufferLease::borrowed(&reducedResidual, sizeof(reducedResidual)),
+                    caravan::ScalarType::float32,
+                    caravan::ReduceOperation::sum,
+                    caravan::Peer{0});
+            });
+        asyncContext.wait(asyncContext.spawn(std::move(step)));
 
-            /** Reset boundary borders to boundary conditions
-             * not required for iter 0 as borders havent been updated yet, but is done anyway
-             */
-            PMACC_LOCKSTEP_KERNEL(SetBoundaryConditions{})
-                .config(borderMapper.getGridDim(), SuperCell{})(
-                    buff1->getDeviceBuffer().getDataBox(),
-                    NUM_DEVICES_PER_DIM,
-                    gc.getPosition(),
-                    subGrid.getLocalDomain().offset,
-                    gridSize,
-                    borderMapper);
-
-            pmacc::eventSystem::setTransactionEvent(send);
-
-            /* Update Border Cells */
-            PMACC_LOCKSTEP_KERNEL(StencilFourPoint{})
-                .config(borderMapper.getGridDim(), SuperCell{})(
-                    buff1->getDeviceBuffer().getDataBox(),
-                    buff2->getDeviceBuffer().getDataBox(),
-                    residualBuffer->getDeviceBuffer().getDataBox(),
-                    THERMAL_DIFFUSIVITY,
-                    DX,
-                    DT,
-                    borderMapper);
-
-            // Swap the read and write buffers
-            std::swap(buff1, buff2);
-            residualBuffer->deviceToHost();
-
-            // MPI Reduce the residual
-            reduce(
-                pmacc::math::operation::Add(),
-                hReducedResidual.data(),
-                residualBuffer->getHostBuffer().data(),
-                1, // this is a 1D dataspace, just access it?
-                pmacc::mpi::reduceMethods::Reduce());
-            // Reset residuals to zero for next iteration
-            residualBuffer->reset(false);
-            createPng(i + 1u, gather, buff1);
-
-            if(reduce.hasResult(pmacc::mpi::reduceMethods::Reduce()))
-                std::cout << "Residual at time " << DT * i << " = " << hReducedResidual.getDataBox()[0] << std::endl;
-        }
+        std::swap(buff1, buff2);
+        createPng(i + 1u, gather, buff1, asyncContext, computeQueue);
+        if(isReductionRoot)
+            std::cout << "Residual at time " << DT * i << " = " << reducedResidual << std::endl;
     }
-    /* Finalize */
+
     gather.reset();
-    pmacc::eventSystem::getTransactionEvent().waitForFinished();
     pmacc::Environment<DIM2>::get().finalize();
 
     return 0;

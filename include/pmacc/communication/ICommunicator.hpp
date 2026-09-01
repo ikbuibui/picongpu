@@ -25,6 +25,7 @@
 #include "pmacc/memory/dataTypes/Mask.hpp"
 #include "pmacc/types.hpp"
 
+#include <caravan/core.hpp>
 #include <caravan/mpi.hpp>
 
 namespace pmacc
