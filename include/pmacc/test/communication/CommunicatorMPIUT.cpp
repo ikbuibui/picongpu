@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
  */
 #include <pmacc/Environment.hpp>
+#include <pmacc/async/Context.hpp>
 #include <pmacc/dimensions/DataSpace.hpp>
 #include <pmacc/math/operation/Add.hpp>
 #include <pmacc/mpi/GatherSlice.hpp>
@@ -41,20 +42,19 @@ TEST_CASE("CommunicatorMPI consumes Caravan topology snapshots")
 
     std::array<std::uint32_t, 2> signalInput{static_cast<std::uint32_t>(topology.rank + 1), 1u};
     std::array<std::uint32_t, 2> signalOutput{};
-    auto signalReduction = communicator.startSignalAllReduce(
+    pmacc::async::Context context;
+    auto signalReduction = context.spawnFuture<caravan::AllReduceResult>(communicator.signalAllReduce(
         signalInput.data(),
         signalOutput.data(),
         sizeof(signalInput),
         caravan::ScalarType::uint32,
-        caravan::ReduceOperation::sum);
-    progressUntil(signalReduction);
+        caravan::ReduceOperation::sum));
+    context.wait(signalReduction.event());
     if(signalReduction.result().elements != signalInput.size()
        || signalOutput[0] != static_cast<std::uint32_t>(topology.size * (topology.size + 1) / 2)
        || signalOutput[1] != static_cast<std::uint32_t>(topology.size))
-        throw std::runtime_error("Signal all-reduce adapter failed");
-    auto barrier = communicator.startBarrierAsync();
-    progressUntil(barrier);
-    barrier.wait();
+        throw std::runtime_error("Signal all-reduce sender failed");
+    context.wait(context.spawn(communicator.barrier()));
 
     {
         pmacc::mpi::MPIReduce reduce;
