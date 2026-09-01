@@ -389,12 +389,12 @@ namespace caravan
             {
                 {
                     std::lock_guard lock(m_resultMutex);
-                    if(m_result == CompletionState::ready && event.state() == CompletionState::failed)
+                    if(event.state() == CompletionState::failed && m_result != CompletionState::failed)
                     {
                         m_result = CompletionState::failed;
                         m_error = event.error();
                     }
-                    else if(m_result == CompletionState::ready && event.state() == CompletionState::stopped)
+                    else if(event.state() == CompletionState::stopped && m_result == CompletionState::ready)
                         m_result = CompletionState::stopped;
                 }
 
