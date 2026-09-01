@@ -352,8 +352,11 @@ adapters at boundaries.
 
 ### 6. `std::execution` is the long-term generic composition target
 
-P2300-compatible semantics are an architectural constraint from Phase 2 onward,
-not merely a late optional adapter exercise.
+P2300-aligned semantics are an architectural constraint from Phase 2 onward,
+not merely a late optional adapter exercise. The completed interoperability spike
+is recorded in [`docs/CARAVAN_STDEXEC_SPIKE.md`](docs/CARAVAN_STDEXEC_SPIKE.md):
+the migration senders require a thin adapter and are not source-compatible P2300
+senders.
 
 In particular:
 
@@ -1101,7 +1104,8 @@ sender-first architecture.
 
 ### Long-term outcomes
 
-1. Current custom core implements P2300-compatible semantics and bridges.
+1. Current custom core implements P2300-shaped migration semantics and a tested
+   thin stdexec adapter; its senders are not direct standard sender models.
 2. Standard/P2300 composition replaces most `Flow`/continuation code while keeping
    Caravan MPI/alpaka implementations.
 3. If standard facilities satisfy eager spawning, scopes, waits, value/error/stopped
