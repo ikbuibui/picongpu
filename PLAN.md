@@ -63,8 +63,11 @@ system.
 
 The C1-C6 correctness gate in `PLAN_HARDENING_REWORK.md` is implemented. Focused
 Caravan tests pass with one, two, and four MPI ranks, and the PMacc 2D/3D context,
-communicator, and particle tests pass. Sanitizers, allocator-failure injection,
-fatal MPI-error injection, and target GPU validation remain open.
+communicator, and particle tests pass. The Caravan accelerator and
+accelerator-to-MPI chains, plus both target PMacc examples, compile and run on
+CUDA and HIP as recorded in [`docs/CARAVAN_DEVICE_TESTING.md`](docs/CARAVAN_DEVICE_TESTING.md).
+Sanitizers, allocator-failure injection, fatal MPI-error injection, GPU-aware MPI,
+and target performance baselines remain open.
 
 The immediate implementation order is:
 
@@ -81,8 +84,8 @@ The immediate implementation order is:
    request/invoke/native context in an extension/native header;
 5. **Implemented:** remove predecessor handling from the MPI engine; temporary
    Event-taking wrappers compose or subscribe above the backend;
-6. **CPU prototype implemented; target accelerator runtime validation remains:**
-   complete the first real alpaka/device sender architecture test; and only then
+6. **Implemented and validated on CUDA and HIP target accelerators:** complete
+   the first real alpaka/device sender architecture test; and only then
 7. **Phase 5 representative path implemented:** replace PMacc polling task chains
    with local sender composition and retain Event only at unavoidable legacy
    boundaries; and
@@ -1402,10 +1405,10 @@ with P2300 semantics and the clarified Caravan scope.
 **Current state:** the hardware-independent architecture work and C1-C6 correctness
 hardening are implemented and covered by core, MPI, alpaka, and alpaka-to-MPI
 composition tests, including managed-collective abandonment and mixed-error MPI
-request lifetime coverage. The remaining exit-gate work requires sanitizers,
-allocator-failure injection, and an accelerator environment: run the representative
-chain on a target accelerator and validate HIP translation. The optional resource
-tracker is deliberately not implemented; the boundary specified in 2.10 is
+request lifetime coverage. The representative accelerator and accelerator-to-MPI
+chains compile and run on CUDA 12.9/A30 and HIP 7.0/RX 7900 XTX. The remaining
+exit-gate work requires sanitizers and allocator-failure injection. The optional
+resource tracker is deliberately not implemented; the boundary specified in 2.10 is
 sufficient until a measured PMacc use case justifies Phase 11.
 
 ### 2.1 Complete the minimum typed sender vocabulary
@@ -1498,11 +1501,11 @@ sufficient until a measured PMacc use case justifies Phase 11.
 
 ### 2.7 Build the alpaka/device sender prototype
 
-**Current state:** the lazy borrowed-queue batch sender, kernel/copy/fill CPU test,
-explicit capture-lifetime test, same-queue FIFO path, run-loop completion transfer,
-and CUDA translation-unit compile checks for both the backend and cross-backend
-chain are implemented. Target accelerator runtime and HIP translation validation
-remain open.
+**Current state:** the lazy borrowed-queue batch sender, kernel/copy/fill test,
+explicit capture-lifetime test, same- and cross-queue native paths, run-loop
+completion transfer, and cross-backend chain are implemented. Translation and
+runtime pass on CPU, CUDA 12.9/A30, and HIP 7.0/RX 7900 XTX; reproducible commands
+are recorded in [`docs/CARAVAN_DEVICE_TESTING.md`](docs/CARAVAN_DEVICE_TESTING.md).
 
 Implement this prototype before deepening generic abstractions or migrating PMacc
 polling chains. MPI validates native progress; alpaka must validate the genuinely
@@ -1535,8 +1538,8 @@ This is now a design gate, not merely a future adapter experiment.
 **Current state:** a test composes a lazy alpaka batch into MPI send/receive and an
 explicit `RunLoopScheduler` host continuation, spawned through `AsyncScope`. It
 checks lazy start, the host-visible accelerator/MPI boundary, continuation thread
-placement, eager Event bridging, CPU runtime behavior, and CUDA translation. HIP
-translation and target-accelerator runtime validation remain open.
+placement, eager Event bridging, and CPU runtime behavior. CUDA and HIP translation
+and target-accelerator runtime validation pass.
 
 1. Compose the Phase 2 alpaka prototype into one sender chain:
    accelerator operation -> MPI request -> host continuation.
@@ -1635,9 +1638,9 @@ worker and progresses independently of application polling.
 
 ## Phase 4: Alpaka accelerator backend
 
-**Current state:** implemented and CPU-runtime tested. CUDA translation of the
-backend, primitive chain, and alpaka-to-MPI chain is validated. Target-accelerator
-runtime and HIP translation remain the hardware-dependent Phase 2 validation gate.
+**Current state:** implemented and runtime tested on CPU, CUDA 12.9/A30, and
+HIP 7.0/RX 7900 XTX. The backend primitive chain and alpaka-to-MPI chain compile
+and run on both target accelerators.
 
 The implementation expands the Phase 2 prototype rather than adding a second
 abstraction.
@@ -1699,7 +1702,7 @@ Phase 6.
 7. **Implemented:** PMacc exposes borrowed alpaka views and explicit `OwnedView` /
    `Retained` allocation capture for asynchronous operation state.
 8. **Implemented and tested:** explicit kernel, copy, byte-fill, and size-transfer
-   sender call sites use the alpaka backend; CPU runtime and CUDA translation pass.
+   sender call sites use the alpaka backend; CPU, CUDA, and HIP runtime validation pass.
 9. **Implemented on migrated paths:** `async::Context::wait` drives the local run
    loop; the remaining Manager wait in `gameOfLife2D` is confined to its unmigrated
    Phase 6 communication boundary.
@@ -1729,8 +1732,9 @@ reduction, while its gather path uses an explicit completed-input boundary. The
 four-rank CPU residual regression and CUDA translation pass. M3 has also replaced
 the polling signal task and eager signal/barrier adapters with explicitly scoped
 typed MPI senders. Generic field pack/receive/insert branches and continuation-driven
-particle chunk exchange are now available without polling tasks; target-GPU runtime
-validation, PIConGPU call-site conversion, and adapter deletion remain.
+particle chunk exchange are now available without polling tasks. Both target
+examples pass CUDA and HIP runtime regressions; GPU-aware MPI, PIConGPU call-site
+conversion, and adapter deletion remain.
 
 1. Port `Exchange` send and receive to explicit operation chains.
 2. Preserve host staging, double buffering, and GPU-aware MPI.

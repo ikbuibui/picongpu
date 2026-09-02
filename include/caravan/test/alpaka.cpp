@@ -32,7 +32,13 @@ int main()
 {
     using Dim = alpaka::DimInt<1u>;
     using Idx = std::size_t;
+#if ALPAKA_ACC_GPU_CUDA_ENABLED
+    using Acc = alpaka::AccGpuCudaRt<Dim, Idx>;
+#elif ALPAKA_ACC_GPU_HIP_ENABLED
+    using Acc = alpaka::AccGpuHipRt<Dim, Idx>;
+#else
     using Acc = alpaka::AccCpuSerial<Dim, Idx>;
+#endif
     using Queue = alpaka::Queue<Acc, alpaka::NonBlocking>;
 
     auto const device = alpaka::getDevByIdx(alpaka::Platform<Acc>{}, 0u);
