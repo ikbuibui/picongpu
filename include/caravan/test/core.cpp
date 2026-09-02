@@ -177,8 +177,10 @@ namespace
         caravan::EventSource source;
         unsigned calls = 0u;
         auto first = source.event().then(executor, [&] { ++calls; });
-        assert(source.setReady());
-        assert(!source.setReady());
+        auto const firstCompletion = source.setReady();
+        auto const duplicateCompletion = source.setReady();
+        assert(firstCompletion);
+        assert(!duplicateCompletion);
         first.wait();
 
         auto second = source.event().then(executor, [&] { ++calls; });
@@ -649,7 +651,8 @@ namespace
         }
 
         int status = 0;
-        assert(waitpid(child, &status, 0) == child);
+        auto const waitedChild = waitpid(child, &status, 0);
+        assert(waitedChild == child);
         assert(WIFEXITED(status) && WEXITSTATUS(status) == 42);
 #endif
     }
