@@ -236,6 +236,39 @@ int main(int argc, char** argv)
             dependencyScope.join().wait();
 
             caravan::mpi::CollectiveLane collectiveLane{mpi, cartesian.communicator};
+            bool abandonedFactoryCalled = false;
+            {
+                auto abandoned = collectiveLane.submit(
+                    caravan::asSender(caravan::readyEvent()),
+                    [&]
+                    {
+                        abandonedFactoryCalled = true;
+                        return caravan::mpi::barrier(mpi, cartesian.communicator);
+                    });
+                static_cast<void>(abandoned);
+            }
+            caravan::syncWait(collectiveLane.submit(
+                caravan::asSender(caravan::readyEvent()),
+                [&] { return caravan::mpi::barrier(mpi, cartesian.communicator); }));
+            assert(!abandonedFactoryCalled);
+
+            {
+                auto unstarted = collectiveLane.submit(
+                    caravan::asSender(caravan::readyEvent()),
+                    [&]
+                    {
+                        abandonedFactoryCalled = true;
+                        return caravan::mpi::barrier(mpi, cartesian.communicator);
+                    });
+                caravan::EventSource unstartedOutput;
+                auto operation = std::move(unstarted).connect(VoidReceiver{unstartedOutput});
+                static_cast<void>(operation);
+            }
+            caravan::syncWait(collectiveLane.submit(
+                caravan::asSender(caravan::readyEvent()),
+                [&] { return caravan::mpi::barrier(mpi, cartesian.communicator); }));
+            assert(!abandonedFactoryCalled);
+
             caravan::EventSource firstCollectiveReady;
             caravan::EventSource secondCollectiveReady;
             auto firstCollectiveInput = std::make_shared<std::int32_t>(topology.rank + 1);
@@ -341,6 +374,23 @@ int main(int argc, char** argv)
             {
             }
             followingStop.wait();
+
+            auto throwingCollective = collectiveScope.spawn(collectiveLane.submit(
+                caravan::asSender(caravan::readyEvent()),
+                []() -> caravan::mpi::OperationSender<void>
+                { throw std::runtime_error("expected collective factory failure"); }));
+            auto followingThrow = collectiveScope.spawn(collectiveLane.submit(
+                caravan::asSender(caravan::readyEvent()),
+                [&mpi, communicator = cartesian.communicator] { return caravan::mpi::barrier(mpi, communicator); }));
+            try
+            {
+                throwingCollective.wait();
+                assert(false);
+            }
+            catch(std::runtime_error const&)
+            {
+            }
+            followingThrow.wait();
             collectiveScope.join().wait();
 
             int const destination = (topology.rank + 1) % topology.size;
@@ -672,6 +722,75 @@ int main(int argc, char** argv)
                     return *nativeOutput;
                 }));
             assert(nativeReduction == topology.size * (topology.size + 1) / 2);
+
+            constexpr int mixedErrorTag = 922;
+            constexpr int mixedPendingTag = 923;
+            auto truncatedReceive = std::make_shared<int>(-1);
+            auto pendingReceiveValue = std::make_shared<int>(-1);
+            auto retainedAfterError = std::make_shared<int>(42);
+            std::weak_ptr<int> retainedAfterErrorLifetime = retainedAfterError;
+            bool mixedCompletionCalled = false;
+            auto mixedErrorSender = caravan::mpi::request<void>(
+                mpi,
+                [truncatedReceive,
+                 pendingReceiveValue,
+                 retained = std::move(retainedAfterError),
+                 communicator = cartesian.communicator,
+                 rank = cartesian.rank](caravan::NativeMpiContext& context) mutable
+                {
+                    caravan::NativeRequestBatch batch(
+                        std::vector<MPI_Request>(2, MPI_REQUEST_NULL),
+                        {truncatedReceive, pendingReceiveValue, std::move(retained)});
+                    int error = MPI_Irecv(
+                        truncatedReceive.get(),
+                        0,
+                        MPI_INT,
+                        rank,
+                        mixedErrorTag,
+                        context.communicator(communicator),
+                        &batch.requests[0]);
+                    if(error == MPI_SUCCESS)
+                        error = MPI_Irecv(
+                            pendingReceiveValue.get(),
+                            1,
+                            MPI_INT,
+                            rank,
+                            mixedPendingTag,
+                            context.communicator(communicator),
+                            &batch.requests[1]);
+                    if(error != MPI_SUCCESS)
+                        throw std::runtime_error("mixed native request start failed");
+                    return batch;
+                },
+                [&](std::span<MPI_Status const>) { mixedCompletionCalled = true; });
+            caravan::AsyncScope mixedErrorScope;
+            auto mixedError = mixedErrorScope.spawn(std::move(mixedErrorSender));
+            std::array<int, 2> oversizedMessage{1, 2};
+            static_cast<void>(caravan::syncWait<caravan::SendResult>(caravan::mpi::send(
+                mpi,
+                caravan::BufferLease::borrowed(oversizedMessage.data(), sizeof(oversizedMessage)),
+                caravan::Peer{cartesian.rank},
+                caravan::MessageTag{mixedErrorTag},
+                cartesian.communicator)));
+            assert(mixedError.state() == caravan::CompletionState::pending);
+            assert(!retainedAfterErrorLifetime.expired());
+            int pendingMessage = 3;
+            static_cast<void>(caravan::syncWait<caravan::SendResult>(caravan::mpi::send(
+                mpi,
+                caravan::BufferLease::borrowed(&pendingMessage, sizeof(pendingMessage)),
+                caravan::Peer{cartesian.rank},
+                caravan::MessageTag{mixedPendingTag},
+                cartesian.communicator)));
+            try
+            {
+                mixedError.wait();
+                assert(false);
+            }
+            catch(std::runtime_error const&)
+            {
+            }
+            mixedErrorScope.join().wait();
+            assert(!mixedCompletionCalled);
 
             caravan::syncWait(
                 caravan::mpi::request<void>(
