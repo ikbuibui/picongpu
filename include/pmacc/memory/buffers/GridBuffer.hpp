@@ -469,53 +469,63 @@ namespace pmacc
             return sendCompletions[exchange];
         }
 
+        caravan::Event receiveCompletion(uint32_t exchange) const
+        {
+            return receiveCompletions[exchange];
+        }
+
+        void setSendCompletion(uint32_t exchange, caravan::Event completion)
+        {
+            sendCompletions[exchange] = std::move(completion);
+        }
+
         void setReceiveCompletion(uint32_t exchange, caravan::Event completion)
         {
             receiveCompletions[exchange] = std::move(completion);
         }
 
+        /** Describe one lazy send for an active exchange direction. */
         template<typename T_Queue>
-        caravan::Event asyncSend(
-            async::Context& context,
-            T_Queue& queue,
-            uint32_t exchange,
-            caravan::Event previous = {})
+        auto send(T_Queue& queue, uint32_t exchange)
         {
-            if(!hasSendExchange(exchange))
-                return {};
-            std::array dependencies{std::move(previous), sendCompletions[exchange]};
-            sendCompletions[exchange]
-                = sendExchanges[exchange]->sendAsync(context, queue, caravan::whenAll(dependencies));
-            return sendCompletions[exchange];
+            return sendExchanges[exchange]->send(queue);
         }
 
+        /** Describe one lazy receive for an active exchange direction. */
         template<typename T_Queue>
-        caravan::Future<typename Exchange<BORDERTYPE, DIM>::ReceiveMetadata> asyncReceive(
-            async::Context& context,
-            T_Queue& queue,
-            uint32_t exchange,
-            caravan::Event previous = {})
+        auto receive(T_Queue& queue, uint32_t exchange)
         {
-            std::array dependencies{std::move(previous), receiveCompletions[exchange]};
-            auto receive = receiveExchanges[exchange]->receiveAsync(context, queue, caravan::whenAll(dependencies));
-            receiveCompletions[exchange] = receive.event();
-            return receive;
+            return receiveExchanges[exchange]->receive(queue);
         }
 
-        /** Start one explicit send and receive branch per active direction and return their flat join. */
+        /** Eager runtime-sized adapter used by PMacc examples during migration. */
         template<typename T_Queue>
-        caravan::Event asyncCommunication(async::Context& context, T_Queue& queue)
+        caravan::Event spawnCommunication(async::Context& context, T_Queue& queue)
         {
             std::vector<caravan::Event> branches;
             branches.reserve(maxExchange * 2u);
             for(uint32_t i = 0; i < maxExchange; ++i)
             {
                 if(hasReceiveExchange(i))
-                    branches.push_back(asyncReceive(context, queue, i).event());
+                {
+                    auto completion
+                        = context.spawnFuture<typename Exchange<BORDERTYPE, DIM>::ReceiveMetadata>(caravan::letValue(
+                            caravan::asSender(receiveCompletions[i]),
+                            [this, &queue, i] { return receive(queue, i); }));
+                    receiveCompletions[i] = completion.event();
+                    branches.push_back(completion.event());
+                }
 
                 auto const sendEx = Mask::getMirroredExchangeType(i);
                 if(hasSendExchange(sendEx))
-                    branches.push_back(asyncSend(context, queue, sendEx));
+                {
+                    auto completion = context.spawn(
+                        caravan::letValue(
+                            caravan::asSender(sendCompletions[sendEx]),
+                            [this, &queue, sendEx] { return send(queue, sendEx); }));
+                    sendCompletions[sendEx] = completion;
+                    branches.push_back(std::move(completion));
+                }
             }
             return caravan::whenAll(branches);
         }

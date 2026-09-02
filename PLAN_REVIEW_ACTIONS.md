@@ -686,8 +686,9 @@ added later only if it materially simplifies the call site.
    keep the old classes alive.
 7. Replace particle enum/polling state machines with sender continuation,
    coroutine, or standard-execution-compatible chunk loops over the same backend
-   operations. Continuation-driven exact-capacity and multi-chunk exchange is
-   implemented; legacy PIConGPU callers still need conversion before deletion.
+   operations. Lazy dedicated sender operation states now handle exact-capacity
+   and multi-chunk exchange; legacy PIConGPU callers still need conversion before
+   deletion.
 8. Port remaining reductions, gathers, signals, tests, and helpers. The signal
    all-reduce and barrier helpers now expose typed senders directly.
 9. Delete `TaskSendMPI`, `TaskReceiveMPI`, `TaskSignal`, and other migration

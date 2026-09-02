@@ -40,6 +40,7 @@ namespace
     {
         none,
         packingCompletion,
+        packingStopped,
         sizeExtraction,
         sendInitiation,
         sendCompletion,
@@ -53,6 +54,13 @@ namespace
     {
         caravan::EventSource source;
         source.setFailed(std::make_exception_ptr(std::runtime_error("injected particle failure")));
+        return source.event();
+    }
+
+    caravan::Event stoppedEvent()
+    {
+        caravan::EventSource source;
+        source.setStopped();
         return source.event();
     }
 
@@ -108,29 +116,46 @@ namespace
             return {};
         }
 
+        caravan::Event receiveCompletion(uint32_t) const
+        {
+            return {};
+        }
+
+        void setSendCompletion(uint32_t, caravan::Event)
+        {
+        }
+
         void setReceiveCompletion(uint32_t, caravan::Event)
         {
         }
 
         template<typename T_Queue>
-        caravan::Event asyncSendParticles(pmacc::async::Context& context, T_Queue& queue, uint32_t, caravan::Event)
+        auto sendParticles(T_Queue& queue, uint32_t)
         {
-            if(failure == FailurePoint::sendInitiation)
-                throw std::runtime_error("injected particle send initiation failure");
-            if(failure == FailurePoint::sendCompletion)
-                return failedEvent();
-            return context.spawn(caravan::alpaka::submit(queue, [](T_Queue&) {}));
+            return caravan::alpaka::submit(
+                queue,
+                [this](T_Queue&)
+                {
+                    if(failure == FailurePoint::sendInitiation)
+                        throw std::runtime_error("injected particle send initiation failure");
+                    if(failure == FailurePoint::sendCompletion)
+                        throw std::runtime_error("injected particle send completion failure");
+                });
         }
 
         template<typename T_Queue>
-        caravan::Event asyncReceiveParticles(pmacc::async::Context& context, T_Queue& queue, uint32_t, caravan::Event)
+        auto receiveParticles(T_Queue& queue, uint32_t)
         {
-            if(failure == FailurePoint::receiveInitiation)
-                throw std::runtime_error("injected particle receive initiation failure");
-            if(failure == FailurePoint::receiveCompletion)
-                return failedEvent();
-            return context.spawn(
-                caravan::alpaka::submit(queue, [this](T_Queue&) { receiveSize = receiveChunks.at(receiveChunk++); }));
+            return caravan::alpaka::submit(
+                queue,
+                [this](T_Queue&)
+                {
+                    if(failure == FailurePoint::receiveInitiation)
+                        throw std::runtime_error("injected particle receive initiation failure");
+                    receiveSize = receiveChunks.at(receiveChunk++);
+                    if(failure == FailurePoint::receiveCompletion)
+                        throw std::runtime_error("injected particle receive completion failure");
+                });
         }
 
         std::array<size_t, 2u> sendChunks{2u, 1u};
@@ -169,6 +194,8 @@ namespace
                 throw std::runtime_error("injected particle retry failure");
             if(buffer.failure == FailurePoint::packingCompletion)
                 return caravan::asSender(failedEvent());
+            if(buffer.failure == FailurePoint::packingStopped)
+                return caravan::asSender(stoppedEvent());
             buffer.sendSize = buffer.sendChunks.at(buffer.sendChunk++);
             return caravan::asSender(caravan::readyEvent());
         }
@@ -194,12 +221,36 @@ namespace
     };
 } // namespace
 
+TEST_CASE("Particle chunk senders are lazy", "[particles][async]")
+{
+    auto& queue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    pmacc::async::Context context;
+    MockParticles particles;
+    auto sender = pmacc::particles::sendChunks(queue, particles, 1u);
+    static_assert(caravan::Sender<decltype(sender)>);
+    static_assert(caravan::Sender<decltype(pmacc::particles::receiveChunks(queue, particles, 1u))>);
+    CHECK(particles.buffer.sendChunk == 0u);
+    context.wait(context.spawn(std::move(sender)));
+    CHECK(particles.buffer.sendChunk == 2u);
+}
+
+TEST_CASE("Particle chunk senders propagate stopped completion", "[particles][async]")
+{
+    auto& queue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    pmacc::async::Context context;
+    MockParticles particles;
+    particles.buffer.failure = FailurePoint::packingStopped;
+    CHECK_THROWS_AS(
+        context.wait(context.spawn(pmacc::particles::sendChunks(queue, particles, 1u))),
+        caravan::StoppedError);
+}
+
 TEST_CASE("Particle communication handles exact and partial chunks", "[particles][async]")
 {
     auto& queue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
     pmacc::async::Context context;
     MockParticles particles;
-    context.wait(pmacc::particles::asyncCommunication(context, queue, particles));
+    context.wait(pmacc::particles::spawnCommunication(context, queue, particles));
     CHECK(particles.buffer.sendChunk == 2u);
     CHECK(particles.buffer.receiveChunk == 2u);
     CHECK(particles.inserted == 3u);
@@ -213,7 +264,7 @@ TEST_CASE("Particle communication handles empty chunks", "[particles][async]")
     MockParticles particles;
     particles.buffer.sendChunks = {0u, 0u};
     particles.buffer.receiveChunks = {0u, 0u};
-    context.wait(pmacc::particles::asyncCommunication(context, queue, particles));
+    context.wait(pmacc::particles::spawnCommunication(context, queue, particles));
     CHECK(particles.buffer.sendChunk == 1u);
     CHECK(particles.buffer.receiveChunk == 1u);
     CHECK(particles.inserted == 0u);
@@ -237,7 +288,7 @@ TEST_CASE("Particle communication forwards callback failures", "[particles][asyn
         MockParticles particles;
         particles.buffer.failure = failure;
         CHECK_THROWS_AS(
-            context.wait(pmacc::particles::asyncCommunication(context, queue, particles)),
+            context.wait(pmacc::particles::spawnCommunication(context, queue, particles)),
             std::runtime_error);
     }
 }

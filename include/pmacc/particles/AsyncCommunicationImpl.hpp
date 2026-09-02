@@ -52,7 +52,7 @@ namespace pmacc
                 T_Particles& data,
                 caravan::Event previous = {}) const
             {
-                return particles::asyncCommunication(context, queue, data, std::move(previous));
+                return particles::spawnCommunication(context, queue, data, std::move(previous));
             }
 
             template<class T_Particles>
