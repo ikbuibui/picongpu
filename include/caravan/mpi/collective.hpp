@@ -17,6 +17,48 @@ namespace caravan::mpi
 {
     namespace collective_detail
     {
+        /** Move-only ownership of one reserved collective slot.
+         *
+         * Destroying an unreleased token skips its slot without running user code.
+         * The associated MpiContext must outlive the token.
+         */
+        class ManagedCollectiveToken
+        {
+        public:
+            ManagedCollectiveToken(MpiContext& context, caravan::detail::ManagedCollectiveTicket ticket)
+                : m_context(&context)
+                , m_ticket(ticket)
+            {
+            }
+
+            ManagedCollectiveToken(ManagedCollectiveToken const&) = delete;
+            ManagedCollectiveToken& operator=(ManagedCollectiveToken const&) = delete;
+
+            ManagedCollectiveToken(ManagedCollectiveToken&& other) noexcept
+                : m_context(std::exchange(other.m_context, nullptr))
+                , m_ticket(other.m_ticket)
+            {
+            }
+
+            ManagedCollectiveToken& operator=(ManagedCollectiveToken&&) = delete;
+
+            ~ManagedCollectiveToken()
+            {
+                if(m_context)
+                    caravan::detail::CollectiveAccess::abandon(*m_context, m_ticket);
+            }
+
+            void release(std::function<void()> start)
+            {
+                caravan::detail::CollectiveAccess::release(*m_context, m_ticket, std::move(start));
+                m_context = nullptr;
+            }
+
+        private:
+            MpiContext* m_context;
+            caravan::detail::ManagedCollectiveTicket m_ticket;
+        };
+
         template<typename T_Sender, typename T_Factory, typename T_Receiver>
         class ManagedCollectiveOperation
         {
@@ -84,13 +126,11 @@ namespace caravan::mpi
 
         public:
             ManagedCollectiveOperation(
-                MpiContext& context,
-                caravan::detail::ManagedCollectiveTicket ticket,
+                ManagedCollectiveToken token,
                 T_Sender sender,
                 T_Factory factory,
                 T_Receiver receiver)
-                : m_context(&context)
-                , m_ticket(ticket)
+                : m_token(std::move(token))
                 , m_factory(std::move(factory))
                 , m_receiver(std::move(receiver))
                 , m_predecessor(std::move(sender).connect(PredecessorReceiver{this}))
@@ -124,11 +164,12 @@ namespace caravan::mpi
                 }
             }
 
-            void release(std::function<void()> start) noexcept
+            template<typename T_Start>
+            void release(T_Start start) noexcept
             {
                 try
                 {
-                    caravan::detail::CollectiveAccess::release(*m_context, m_ticket, std::move(start));
+                    m_token.release(std::function<void()>{std::move(start)});
                 }
                 catch(...)
                 {
@@ -136,8 +177,7 @@ namespace caravan::mpi
                 }
             }
 
-            MpiContext* m_context;
-            caravan::detail::ManagedCollectiveTicket m_ticket;
+            ManagedCollectiveToken m_token;
             T_Factory m_factory;
             T_Receiver m_receiver;
             decltype(std::declval<T_Sender&&>().connect(std::declval<PredecessorReceiver>())) m_predecessor;
@@ -151,13 +191,8 @@ namespace caravan::mpi
             using completion_signatures
                 = CompletionSignaturesOf<caravan::detail::SuccessorSender<T_Sender, T_Factory>>;
 
-            ManagedCollectiveSender(
-                MpiContext& context,
-                caravan::detail::ManagedCollectiveTicket ticket,
-                T_Sender sender,
-                T_Factory factory)
-                : m_context(&context)
-                , m_ticket(ticket)
+            ManagedCollectiveSender(ManagedCollectiveToken token, T_Sender sender, T_Factory factory)
+                : m_token(std::move(token))
                 , m_sender(std::move(sender))
                 , m_factory(std::move(factory))
             {
@@ -167,16 +202,14 @@ namespace caravan::mpi
             auto connect(T_Receiver&& receiver) &&
             {
                 return ManagedCollectiveOperation<T_Sender, T_Factory, std::decay_t<T_Receiver>>{
-                    *m_context,
-                    m_ticket,
+                    std::move(m_token),
                     std::move(m_sender),
                     std::move(m_factory),
                     std::forward<T_Receiver>(receiver)};
             }
 
         private:
-            MpiContext* m_context;
-            caravan::detail::ManagedCollectiveTicket m_ticket;
+            ManagedCollectiveToken m_token;
             T_Sender m_sender;
             T_Factory m_factory;
         };
@@ -184,9 +217,9 @@ namespace caravan::mpi
 
     /** Plan collective initiation order independently of predecessor readiness.
      *
-     * Every rank must submit and start the same sequence on this communicator.
-     * Each factory must return exactly one collective sender for that communicator.
-     * Failed/stopped predecessors retire their entry without initiating MPI.
+     * Every rank must submit the same sequence on this communicator. An unstarted
+     * or destroyed entry is skipped, while failed/stopped predecessors retire
+     * their entries without initiating MPI. MpiContext must outlive all entries.
      */
     class CollectiveLane
     {
@@ -200,10 +233,11 @@ namespace caravan::mpi
         template<Sender T_Sender, typename T_Factory>
         auto submit(T_Sender sender, T_Factory factory)
         {
-            auto const ticket = caravan::detail::CollectiveAccess::reserve(*m_context, m_communicator);
-            return collective_detail::ManagedCollectiveSender<T_Sender, std::decay_t<T_Factory>>{
+            collective_detail::ManagedCollectiveToken token{
                 *m_context,
-                ticket,
+                caravan::detail::CollectiveAccess::reserve(*m_context, m_communicator)};
+            return collective_detail::ManagedCollectiveSender<T_Sender, std::decay_t<T_Factory>>{
+                std::move(token),
                 std::move(sender),
                 std::move(factory)};
         }

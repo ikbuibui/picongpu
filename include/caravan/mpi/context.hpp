@@ -44,6 +44,7 @@ namespace caravan
         {
             static ManagedCollectiveTicket reserve(MpiContext& context, CommunicatorId communicator);
             static void release(MpiContext& context, ManagedCollectiveTicket ticket, std::function<void()> start);
+            static void abandon(MpiContext& context, ManagedCollectiveTicket ticket) noexcept;
         };
     } // namespace detail
 
@@ -200,6 +201,7 @@ namespace caravan
 
         detail::ManagedCollectiveTicket reserveManagedCollective(CommunicatorId communicator);
         void releaseManagedCollective(detail::ManagedCollectiveTicket ticket, std::function<void()> start);
+        void abandonManagedCollective(detail::ManagedCollectiveTicket ticket) noexcept;
 
         friend class MpiRuntime;
         friend struct detail::CollectiveAccess;

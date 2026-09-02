@@ -221,10 +221,10 @@ namespace caravan
         }
 
         template<typename T_Executor, typename T_Operation>
-        Event then(T_Executor& executor, T_Operation&& operation) const;
+        Event then(T_Executor executor, T_Operation&& operation) const;
 
         template<typename T_Executor, typename T_Continuation>
-        Event continueWith(T_Executor& executor, T_Continuation&& continuation) const;
+        Event continueWith(T_Executor executor, T_Continuation&& continuation) const;
 
     private:
         explicit Event(std::shared_ptr<detail::State> state) : m_state(std::move(state))
@@ -296,14 +296,14 @@ namespace caravan
     }
 
     template<typename T_Executor, typename T_Operation>
-    Event Event::then(T_Executor& executor, T_Operation&& operation) const
+    Event Event::then(T_Executor executor, T_Operation&& operation) const
     {
         EventSource successor;
         auto result = successor.event();
         auto predecessor = *this;
         auto work = std::make_shared<std::decay_t<T_Operation>>(std::forward<T_Operation>(operation));
         subscribe(
-            [predecessor, successor, work, executor = &executor]
+            [predecessor, successor, work, executor = std::move(executor)]() mutable
             {
                 if(predecessor.state() == CompletionState::failed)
                 {
@@ -331,7 +331,7 @@ namespace caravan
                 };
                 try
                 {
-                    executor->post(std::move(task));
+                    executor.post(std::move(task));
                 }
                 catch(...)
                 {
@@ -342,14 +342,14 @@ namespace caravan
     }
 
     template<typename T_Executor, typename T_Continuation>
-    Event Event::continueWith(T_Executor& executor, T_Continuation&& continuation) const
+    Event Event::continueWith(T_Executor executor, T_Continuation&& continuation) const
     {
         EventSource successor;
         auto result = successor.event();
         auto predecessor = *this;
         auto work = std::make_shared<std::decay_t<T_Continuation>>(std::forward<T_Continuation>(continuation));
         subscribe(
-            [predecessor, successor, work, executor = &executor]
+            [predecessor, successor, work, executor = std::move(executor)]() mutable
             {
                 auto task = [predecessor, successor, work]
                 {
@@ -366,7 +366,7 @@ namespace caravan
                 };
                 try
                 {
-                    executor->post(std::move(task));
+                    executor.post(std::move(task));
                 }
                 catch(...)
                 {
@@ -465,7 +465,7 @@ namespace caravan
         }
 
         template<typename T_Executor, typename T_Operation>
-        auto then(T_Executor& executor, T_Operation&& operation) const;
+        auto then(T_Executor executor, T_Operation&& operation) const;
 
     private:
         explicit Future(std::shared_ptr<detail::FutureState<T>> state) : m_state(std::move(state))
@@ -516,7 +516,7 @@ namespace caravan
 
     template<typename T>
     template<typename T_Executor, typename T_Operation>
-    auto Future<T>::then(T_Executor& executor, T_Operation&& operation) const
+    auto Future<T>::then(T_Executor executor, T_Operation&& operation) const
     {
         using Result = std::invoke_result_t<std::decay_t<T_Operation>&, T const&>;
         auto predecessor = *this;
@@ -527,7 +527,7 @@ namespace caravan
             EventSource successor;
             auto result = successor.event();
             event().subscribe(
-                [predecessor, successor, work, executor = &executor]
+                [predecessor, successor, work, executor = std::move(executor)]() mutable
                 {
                     auto predecessorEvent = predecessor.event();
                     if(predecessorEvent.state() == CompletionState::failed)
@@ -555,7 +555,7 @@ namespace caravan
                     };
                     try
                     {
-                        executor->post(std::move(task));
+                        executor.post(std::move(task));
                     }
                     catch(...)
                     {
@@ -570,7 +570,7 @@ namespace caravan
             Promise<Value> successor;
             auto result = successor.future();
             event().subscribe(
-                [predecessor, successor, work, executor = &executor]
+                [predecessor, successor, work, executor = std::move(executor)]() mutable
                 {
                     auto predecessorEvent = predecessor.event();
                     if(predecessorEvent.state() == CompletionState::failed)
@@ -597,7 +597,7 @@ namespace caravan
                     };
                     try
                     {
-                        executor->post(std::move(task));
+                        executor.post(std::move(task));
                     }
                     catch(...)
                     {
@@ -730,10 +730,15 @@ namespace caravan
         };
     } // namespace detail
 
-    /** Start a sender and block at an imperative boundary. */
+    /** Start a sender and block at an imperative boundary.
+     *
+     * Executor/progress threads must use a consumer that drives their progress mechanism instead.
+     */
     template<typename T, typename T_Sender>
     T syncWait(T_Sender sender)
     {
+        if(isExecutorThread())
+            throw std::logic_error("An executor thread cannot call Caravan syncWait");
         Promise<T> output;
         auto result = output.future();
         auto operation = std::move(sender).connect(detail::SyncWaitReceiver<T>{output});
@@ -744,6 +749,8 @@ namespace caravan
     template<typename T_Sender>
     void syncWait(T_Sender sender)
     {
+        if(isExecutorThread())
+            throw std::logic_error("An executor thread cannot call Caravan syncWait");
         EventSource output;
         auto result = output.event();
         auto operation = std::move(sender).connect(detail::SyncWaitVoidReceiver{output});

@@ -10,6 +10,8 @@
 #include "pmacc/type/Exchange.hpp"
 
 #include <array>
+#include <exception>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <utility>
@@ -52,7 +54,14 @@ namespace pmacc::particles
             {
                 std::array dependencies{std::move(previous), particles.getParticlesBuffer().sendCompletion(exchange)};
                 auto completion = context.spawn(caravan::asSender(result.event()));
-                startPack(caravan::whenAll(dependencies));
+                try
+                {
+                    startPack(caravan::whenAll(dependencies));
+                }
+                catch(...)
+                {
+                    result.setFailed(std::current_exception());
+                }
                 return completion;
             }
 
@@ -104,7 +113,20 @@ namespace pmacc::particles
             template<typename T_Callback>
             void watch(caravan::Event event, T_Callback callback)
             {
-                static_cast<void>(event.continueWith(scheduler, std::move(callback)));
+                auto observed = event.continueWith(
+                    scheduler,
+                    [callback = std::move(callback), output = result](caravan::Event completion) mutable
+                    {
+                        try
+                        {
+                            std::invoke(callback, std::move(completion));
+                        }
+                        catch(...)
+                        {
+                            output.setFailed(std::current_exception());
+                        }
+                    });
+                watchCompletions.emplace_back(std::move(observed));
             }
 
             async::Context& context;
@@ -116,6 +138,7 @@ namespace pmacc::particles
             size_t lastSize = 0u;
             size_t retries = 0u;
             caravan::EventSource result;
+            std::vector<caravan::Event> watchCompletions;
         };
 
         template<typename T_Particles, typename T_Queue>
@@ -135,7 +158,14 @@ namespace pmacc::particles
             caravan::Event run(caravan::Event previous)
             {
                 auto completion = context.spawn(caravan::asSender(result.event()));
-                startReceive(std::move(previous));
+                try
+                {
+                    startReceive(std::move(previous));
+                }
+                catch(...)
+                {
+                    result.setFailed(std::current_exception());
+                }
                 return completion;
             }
 
@@ -190,7 +220,20 @@ namespace pmacc::particles
             template<typename T_Callback>
             void watch(caravan::Event event, T_Callback callback)
             {
-                static_cast<void>(event.continueWith(scheduler, std::move(callback)));
+                auto observed = event.continueWith(
+                    scheduler,
+                    [callback = std::move(callback), output = result](caravan::Event completion) mutable
+                    {
+                        try
+                        {
+                            std::invoke(callback, std::move(completion));
+                        }
+                        catch(...)
+                        {
+                            output.setFailed(std::current_exception());
+                        }
+                    });
+                watchCompletions.emplace_back(std::move(observed));
             }
 
             async::Context& context;
@@ -201,6 +244,7 @@ namespace pmacc::particles
             size_t maxSize;
             size_t lastSize = 0u;
             caravan::EventSource result;
+            std::vector<caravan::Event> watchCompletions;
         };
     } // namespace detail
 
