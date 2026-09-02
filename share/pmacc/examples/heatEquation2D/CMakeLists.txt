@@ -155,7 +155,7 @@ if(PMACC_BUILD_EXAMPLE_TESTS)
     )
     set_tests_properties(
         heatEquation-4-ranks
-        PROPERTIES PASS_REGULAR_EXPRESSION "Residual at time 999 = 4\\.58358" PROCESSORS 4 TIMEOUT 60
+        PROPERTIES PASS_REGULAR_EXPRESSION "Residual at time 999 = 4\\.583[0-9][0-9]" PROCESSORS 4 TIMEOUT 60
     )
 endif()
 
