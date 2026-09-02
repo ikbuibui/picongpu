@@ -11,9 +11,9 @@
 
 #include <array>
 #include <exception>
-#include <functional>
 #include <iostream>
-#include <memory>
+#include <list>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -21,238 +21,452 @@ namespace pmacc::particles
 {
     namespace detail
     {
-        inline bool forwardTerminal(caravan::Event const& event, caravan::EventSource const& result)
+        template<typename T_Particles, typename T_Queue, typename T_Receiver>
+        class SendChunksOperation
         {
-            if(event.state() == caravan::CompletionState::failed)
+            struct PackReceiver
             {
-                result.setFailed(event.error());
-                return true;
-            }
-            if(event.state() == caravan::CompletionState::stopped)
-            {
-                result.setStopped();
-                return true;
-            }
-            return false;
-        }
+                template<typename... T>
+                void set_value(T&&...) noexcept
+                {
+                    owner->afterPack();
+                }
 
-        template<typename T_Particles, typename T_Queue>
-        class SendChunks : public std::enable_shared_from_this<SendChunks<T_Particles, T_Queue>>
-        {
+                void set_error(std::exception_ptr error) noexcept
+                {
+                    owner->fail(std::move(error));
+                }
+
+                void set_stopped() noexcept
+                {
+                    owner->stop();
+                }
+
+                SendChunksOperation* owner;
+            };
+
+            struct SendReceiver
+            {
+                template<typename... T>
+                void set_value(T&&...) noexcept
+                {
+                    owner->afterSend();
+                }
+
+                void set_error(std::exception_ptr error) noexcept
+                {
+                    owner->fail(std::move(error));
+                }
+
+                void set_stopped() noexcept
+                {
+                    owner->stop();
+                }
+
+                SendChunksOperation* owner;
+            };
+
+            using PackSender = decltype(std::declval<T_Particles&>().copyGuardToExchangeAsync(
+                std::declval<T_Queue&>(),
+                std::declval<uint32_t>()));
+            using SendSender = decltype(std::declval<T_Particles&>().getParticlesBuffer().sendParticles(
+                std::declval<T_Queue&>(),
+                std::declval<uint32_t>()));
+
+            class PackOperation
+            {
+            public:
+                PackOperation(PackSender sender, SendChunksOperation* owner)
+                    : operation(std::move(sender).connect(PackReceiver{owner}))
+                {
+                }
+
+                void start() noexcept
+                {
+                    operation.start();
+                }
+
+            private:
+                decltype(std::declval<PackSender&&>().connect(std::declval<PackReceiver>())) operation;
+            };
+
+            class SendOperation
+            {
+            public:
+                SendOperation(SendSender sender, SendChunksOperation* owner)
+                    : operation(std::move(sender).connect(SendReceiver{owner}))
+                {
+                }
+
+                void start() noexcept
+                {
+                    operation.start();
+                }
+
+            private:
+                decltype(std::declval<SendSender&&>().connect(std::declval<SendReceiver>())) operation;
+            };
+
         public:
-            SendChunks(async::Context& context, T_Queue& queue, T_Particles& particles, uint32_t exchange)
-                : context(context)
-                , scheduler(context.scheduler())
-                , queue(queue)
+            SendChunksOperation(T_Queue& queue, T_Particles& particles, uint32_t exchange, T_Receiver receiver)
+                : queue(queue)
                 , particles(particles)
                 , exchange(exchange)
-                , maxSize(particles.getParticlesBuffer().getSendExchangeStack(exchange).getMaxParticlesCount())
+                , receiver(std::move(receiver))
             {
             }
 
-            caravan::Event run(caravan::Event previous)
+            SendChunksOperation(SendChunksOperation const&) = delete;
+            SendChunksOperation& operator=(SendChunksOperation const&) = delete;
+            SendChunksOperation(SendChunksOperation&&) = delete;
+            SendChunksOperation& operator=(SendChunksOperation&&) = delete;
+
+            void start() & noexcept
             {
-                std::array dependencies{std::move(previous), particles.getParticlesBuffer().sendCompletion(exchange)};
-                auto completion = context.spawn(caravan::asSender(result.event()));
                 try
                 {
-                    startPack(caravan::whenAll(dependencies));
+                    maxSize = particles.getParticlesBuffer().getSendExchangeStack(exchange).getMaxParticlesCount();
+                    startPack();
                 }
                 catch(...)
                 {
-                    result.setFailed(std::current_exception());
+                    fail(std::current_exception());
                 }
-                return completion;
             }
 
         private:
-            void startPack(caravan::Event previous)
+            void startPack()
             {
-                auto self = this->shared_from_this();
-                auto packed = context.spawn(
-                    caravan::letValue(
-                        caravan::asSender(std::move(previous)),
-                        [self] { return self->particles.copyGuardToExchangeAsync(self->queue, self->exchange); }));
-                watch(std::move(packed), [self](caravan::Event event) { self->afterPack(std::move(event)); });
+                packs.emplace_back(particles.copyGuardToExchangeAsync(queue, exchange), this);
+                packs.back().start();
             }
 
-            void afterPack(caravan::Event event)
+            void afterPack() noexcept
             {
-                if(forwardTerminal(event, result))
-                    return;
-                lastSize
-                    = particles.getParticlesBuffer().getSendExchangeStack(exchange).getDeviceParticlesCurrentSize();
-                PMACC_ASSERT(lastSize <= maxSize);
-                auto sent
-                    = particles.getParticlesBuffer().asyncSendParticles(context, queue, exchange, std::move(event));
-                auto self = this->shared_from_this();
-                watch(std::move(sent), [self](caravan::Event completion) { self->afterSend(std::move(completion)); });
-            }
-
-            void afterSend(caravan::Event event)
-            {
-                if(forwardTerminal(event, result))
-                    return;
-                if(lastSize == maxSize)
+                try
                 {
-                    ++retries;
-                    startPack(std::move(event));
-                    return;
+                    lastSize = particles.getParticlesBuffer()
+                                   .getSendExchangeStack(exchange)
+                                   .getDeviceParticlesCurrentSize();
+                    PMACC_ASSERT(lastSize <= maxSize);
+                    sends.emplace_back(particles.getParticlesBuffer().sendParticles(queue, exchange), this);
+                    sends.back().start();
                 }
-                if(retries != 0u)
-                    std::cerr << "Performance warning: send/receive buffer for species "
-                              << T_Particles::FrameType::getName() << " is too small (max: " << maxSize
-                              << ", direction: " << exchange << " '" << ExchangeTypeNames{}[exchange]
-                              << "', retries: " << retries
-                              << "). To remove this warning consider increasing BYTES_EXCHANGE_{X,Y,Z} in "
-                                 "memory.param"
-                              << std::endl;
-                result.setReady();
+                catch(...)
+                {
+                    fail(std::current_exception());
+                }
             }
 
-            template<typename T_Callback>
-            void watch(caravan::Event event, T_Callback callback)
+            void afterSend() noexcept
             {
-                auto observed = event.continueWith(
-                    scheduler,
-                    [callback = std::move(callback), output = result](caravan::Event completion) mutable
+                try
+                {
+                    if(lastSize == maxSize)
                     {
-                        try
-                        {
-                            std::invoke(callback, std::move(completion));
-                        }
-                        catch(...)
-                        {
-                            output.setFailed(std::current_exception());
-                        }
-                    });
-                watchCompletions.emplace_back(std::move(observed));
+                        ++retries;
+                        startPack();
+                        return;
+                    }
+                    if(retries != 0u)
+                        std::cerr << "Performance warning: send/receive buffer for species "
+                                  << T_Particles::FrameType::getName() << " is too small (max: " << maxSize
+                                  << ", direction: " << exchange << " '" << ExchangeTypeNames{}[exchange]
+                                  << "', retries: " << retries
+                                  << "). To remove this warning consider increasing BYTES_EXCHANGE_{X,Y,Z} in "
+                                     "memory.param"
+                                  << std::endl;
+                    receiver.set_value();
+                }
+                catch(...)
+                {
+                    fail(std::current_exception());
+                }
             }
 
-            async::Context& context;
-            caravan::RunLoopScheduler scheduler;
+            void fail(std::exception_ptr error) noexcept
+            {
+                receiver.set_error(std::move(error));
+            }
+
+            void stop() noexcept
+            {
+                receiver.set_stopped();
+            }
+
             T_Queue& queue;
             T_Particles& particles;
             uint32_t exchange;
-            size_t maxSize;
+            T_Receiver receiver;
+            size_t maxSize = 0u;
             size_t lastSize = 0u;
             size_t retries = 0u;
-            caravan::EventSource result;
-            std::vector<caravan::Event> watchCompletions;
+            // ponytail: retain stage states for synchronous completion; reuse slots if P1 shows this allocation
+            // matters.
+            std::list<PackOperation> packs;
+            std::list<SendOperation> sends;
         };
 
-        template<typename T_Particles, typename T_Queue>
-        class ReceiveChunks : public std::enable_shared_from_this<ReceiveChunks<T_Particles, T_Queue>>
+        template<typename T_Particles, typename T_Queue, typename T_Receiver>
+        class ReceiveChunksOperation
         {
+            struct ReceiveReceiver
+            {
+                template<typename... T>
+                void set_value(T&&...) noexcept
+                {
+                    owner->afterReceive();
+                }
+
+                void set_error(std::exception_ptr error) noexcept
+                {
+                    owner->fail(std::move(error));
+                }
+
+                void set_stopped() noexcept
+                {
+                    owner->stop();
+                }
+
+                ReceiveChunksOperation* owner;
+            };
+
+            struct InsertReceiver
+            {
+                template<typename... T>
+                void set_value(T&&...) noexcept
+                {
+                    owner->afterInsert();
+                }
+
+                void set_error(std::exception_ptr error) noexcept
+                {
+                    owner->fail(std::move(error));
+                }
+
+                void set_stopped() noexcept
+                {
+                    owner->stop();
+                }
+
+                ReceiveChunksOperation* owner;
+            };
+
+            using ReceiveSender = decltype(std::declval<T_Particles&>().getParticlesBuffer().receiveParticles(
+                std::declval<T_Queue&>(),
+                std::declval<uint32_t>()));
+            using InsertSender = decltype(std::declval<T_Particles&>().insertParticlesAsync(
+                std::declval<T_Queue&>(),
+                std::declval<uint32_t>(),
+                std::declval<size_t>()));
+
+            class ReceiveOperation
+            {
+            public:
+                ReceiveOperation(ReceiveSender sender, ReceiveChunksOperation* owner)
+                    : operation(std::move(sender).connect(ReceiveReceiver{owner}))
+                {
+                }
+
+                void start() noexcept
+                {
+                    operation.start();
+                }
+
+            private:
+                decltype(std::declval<ReceiveSender&&>().connect(std::declval<ReceiveReceiver>())) operation;
+            };
+
+            class InsertOperation
+            {
+            public:
+                InsertOperation(InsertSender sender, ReceiveChunksOperation* owner)
+                    : operation(std::move(sender).connect(InsertReceiver{owner}))
+                {
+                }
+
+                void start() noexcept
+                {
+                    operation.start();
+                }
+
+            private:
+                decltype(std::declval<InsertSender&&>().connect(std::declval<InsertReceiver>())) operation;
+            };
+
         public:
-            ReceiveChunks(async::Context& context, T_Queue& queue, T_Particles& particles, uint32_t exchange)
-                : context(context)
-                , scheduler(context.scheduler())
-                , queue(queue)
+            ReceiveChunksOperation(T_Queue& queue, T_Particles& particles, uint32_t exchange, T_Receiver receiver)
+                : queue(queue)
                 , particles(particles)
                 , exchange(exchange)
-                , maxSize(particles.getParticlesBuffer().getReceiveExchangeStack(exchange).getMaxParticlesCount())
+                , receiver(std::move(receiver))
             {
             }
 
-            caravan::Event run(caravan::Event previous)
+            ReceiveChunksOperation(ReceiveChunksOperation const&) = delete;
+            ReceiveChunksOperation& operator=(ReceiveChunksOperation const&) = delete;
+            ReceiveChunksOperation(ReceiveChunksOperation&&) = delete;
+            ReceiveChunksOperation& operator=(ReceiveChunksOperation&&) = delete;
+
+            void start() & noexcept
             {
-                auto completion = context.spawn(caravan::asSender(result.event()));
                 try
                 {
-                    startReceive(std::move(previous));
+                    maxSize = particles.getParticlesBuffer().getReceiveExchangeStack(exchange).getMaxParticlesCount();
+                    startReceive();
                 }
                 catch(...)
                 {
-                    result.setFailed(std::current_exception());
+                    fail(std::current_exception());
                 }
-                return completion;
             }
 
         private:
-            void startReceive(caravan::Event previous)
+            void startReceive()
             {
-                auto received = particles.getParticlesBuffer()
-                                    .asyncReceiveParticles(context, queue, exchange, std::move(previous));
-                auto self = this->shared_from_this();
-                watch(
-                    std::move(received),
-                    [self](caravan::Event completion) { self->afterReceive(std::move(completion)); });
+                receives.emplace_back(particles.getParticlesBuffer().receiveParticles(queue, exchange), this);
+                receives.back().start();
             }
 
-            void afterReceive(caravan::Event event)
+            void afterReceive() noexcept
             {
-                if(forwardTerminal(event, result))
-                    return;
-                lastSize
-                    = particles.getParticlesBuffer().getReceiveExchangeStack(exchange).getHostParticlesCurrentSize();
-                PMACC_ASSERT(lastSize <= maxSize);
-                if(lastSize == 0u)
+                try
                 {
-                    result.setReady();
-                    return;
-                }
-
-                auto self = this->shared_from_this();
-                auto inserted = context.spawn(
-                    caravan::letValue(
-                        caravan::asSender(std::move(event)),
-                        [self]
-                        {
-                            return self->particles.insertParticlesAsync(self->queue, self->exchange, self->lastSize);
-                        }));
-                particles.getParticlesBuffer().setReceiveCompletion(exchange, inserted);
-                watch(
-                    std::move(inserted),
-                    [self](caravan::Event completion) { self->afterInsert(std::move(completion)); });
-            }
-
-            void afterInsert(caravan::Event event)
-            {
-                if(forwardTerminal(event, result))
-                    return;
-                if(lastSize == maxSize)
-                    startReceive(std::move(event));
-                else
-                    result.setReady();
-            }
-
-            template<typename T_Callback>
-            void watch(caravan::Event event, T_Callback callback)
-            {
-                auto observed = event.continueWith(
-                    scheduler,
-                    [callback = std::move(callback), output = result](caravan::Event completion) mutable
+                    lastSize = particles.getParticlesBuffer()
+                                   .getReceiveExchangeStack(exchange)
+                                   .getHostParticlesCurrentSize();
+                    PMACC_ASSERT(lastSize <= maxSize);
+                    if(lastSize == 0u)
                     {
-                        try
-                        {
-                            std::invoke(callback, std::move(completion));
-                        }
-                        catch(...)
-                        {
-                            output.setFailed(std::current_exception());
-                        }
-                    });
-                watchCompletions.emplace_back(std::move(observed));
+                        receiver.set_value();
+                        return;
+                    }
+                    inserts.emplace_back(particles.insertParticlesAsync(queue, exchange, lastSize), this);
+                    inserts.back().start();
+                }
+                catch(...)
+                {
+                    fail(std::current_exception());
+                }
             }
 
-            async::Context& context;
-            caravan::RunLoopScheduler scheduler;
+            void afterInsert() noexcept
+            {
+                try
+                {
+                    if(lastSize == maxSize)
+                        startReceive();
+                    else
+                        receiver.set_value();
+                }
+                catch(...)
+                {
+                    fail(std::current_exception());
+                }
+            }
+
+            void fail(std::exception_ptr error) noexcept
+            {
+                receiver.set_error(std::move(error));
+            }
+
+            void stop() noexcept
+            {
+                receiver.set_stopped();
+            }
+
             T_Queue& queue;
             T_Particles& particles;
             uint32_t exchange;
-            size_t maxSize;
+            T_Receiver receiver;
+            size_t maxSize = 0u;
             size_t lastSize = 0u;
-            caravan::EventSource result;
-            std::vector<caravan::Event> watchCompletions;
+            // ponytail: retain stage states for synchronous completion; reuse slots if P1 shows this allocation
+            // matters.
+            std::list<ReceiveOperation> receives;
+            std::list<InsertOperation> inserts;
         };
     } // namespace detail
 
-    /** Exchange all particle chunks and fill received border gaps without polling tasks.
-     * @pre particles and queue outlive the returned Event.
-     */
     template<typename T_Particles, typename T_Queue>
-    caravan::Event asyncCommunication(
+    class SendChunksSender
+    {
+    public:
+        using completion_signatures = caravan::CompletionSignatures<
+            caravan::ValueSignature<>,
+            caravan::ErrorSignature<std::exception_ptr>,
+            caravan::StoppedSignature>;
+
+        SendChunksSender(T_Queue& queue, T_Particles& particles, uint32_t exchange)
+            : queue(&queue)
+            , particles(&particles)
+            , exchange(exchange)
+        {
+        }
+
+        template<typename T_Receiver>
+        auto connect(T_Receiver&& receiver) &&
+        {
+            return detail::SendChunksOperation<T_Particles, T_Queue, std::decay_t<T_Receiver>>{
+                *queue,
+                *particles,
+                exchange,
+                std::forward<T_Receiver>(receiver)};
+        }
+
+    private:
+        T_Queue* queue;
+        T_Particles* particles;
+        uint32_t exchange;
+    };
+
+    template<typename T_Particles, typename T_Queue>
+    auto sendChunks(T_Queue& queue, T_Particles& particles, uint32_t exchange)
+    {
+        return SendChunksSender<T_Particles, T_Queue>{queue, particles, exchange};
+    }
+
+    template<typename T_Particles, typename T_Queue>
+    class ReceiveChunksSender
+    {
+    public:
+        using completion_signatures = caravan::CompletionSignatures<
+            caravan::ValueSignature<>,
+            caravan::ErrorSignature<std::exception_ptr>,
+            caravan::StoppedSignature>;
+
+        ReceiveChunksSender(T_Queue& queue, T_Particles& particles, uint32_t exchange)
+            : queue(&queue)
+            , particles(&particles)
+            , exchange(exchange)
+        {
+        }
+
+        template<typename T_Receiver>
+        auto connect(T_Receiver&& receiver) &&
+        {
+            return detail::ReceiveChunksOperation<T_Particles, T_Queue, std::decay_t<T_Receiver>>{
+                *queue,
+                *particles,
+                exchange,
+                std::forward<T_Receiver>(receiver)};
+        }
+
+    private:
+        T_Queue* queue;
+        T_Particles* particles;
+        uint32_t exchange;
+    };
+
+    template<typename T_Particles, typename T_Queue>
+    auto receiveChunks(T_Queue& queue, T_Particles& particles, uint32_t exchange)
+    {
+        return ReceiveChunksSender<T_Particles, T_Queue>{queue, particles, exchange};
+    }
+
+    /** Eager runtime-sized adapter for all particle exchange directions. */
+    template<typename T_Particles, typename T_Queue>
+    caravan::Event spawnCommunication(
         async::Context& context,
         T_Queue& queue,
         T_Particles& particles,
@@ -260,6 +474,7 @@ namespace pmacc::particles
     {
         using HandleGuardRegion = typename T_Particles::HandleGuardRegion;
         using HandleNotExchanged = typename HandleGuardRegion::HandleNotExchanged;
+        auto& buffer = particles.getParticlesBuffer();
         std::vector<caravan::Event> sends;
         std::vector<caravan::Event> receives;
         constexpr auto numExchanges = traits::NumberOfExchanges<T_Particles::dim>::value;
@@ -268,11 +483,15 @@ namespace pmacc::particles
 
         for(uint32_t exchange = 1u; exchange < numExchanges; ++exchange)
         {
-            if(particles.getParticlesBuffer().hasSendExchange(exchange))
+            if(buffer.hasSendExchange(exchange))
             {
-                auto state
-                    = std::make_shared<detail::SendChunks<T_Particles, T_Queue>>(context, queue, particles, exchange);
-                sends.push_back(state->run(previous));
+                std::array dependencies{previous, buffer.sendCompletion(exchange)};
+                auto completion = context.spawn(
+                    caravan::letValue(
+                        caravan::asSender(caravan::whenAll(dependencies)),
+                        [&queue, &particles, exchange] { return sendChunks(queue, particles, exchange); }));
+                buffer.setSendCompletion(exchange, completion);
+                sends.push_back(std::move(completion));
             }
             else
                 sends.push_back(context.spawn(
@@ -281,14 +500,15 @@ namespace pmacc::particles
                         [&queue, &particles, exchange]
                         { return HandleNotExchanged{}.handleOutgoingAsync(queue, particles, exchange); })));
 
-            if(particles.getParticlesBuffer().hasReceiveExchange(exchange))
+            if(buffer.hasReceiveExchange(exchange))
             {
-                auto state = std::make_shared<detail::ReceiveChunks<T_Particles, T_Queue>>(
-                    context,
-                    queue,
-                    particles,
-                    exchange);
-                receives.push_back(state->run(previous));
+                std::array dependencies{previous, buffer.receiveCompletion(exchange)};
+                auto completion = context.spawn(
+                    caravan::letValue(
+                        caravan::asSender(caravan::whenAll(dependencies)),
+                        [&queue, &particles, exchange] { return receiveChunks(queue, particles, exchange); }));
+                buffer.setReceiveCompletion(exchange, completion);
+                receives.push_back(std::move(completion));
             }
             else
                 receives.push_back(context.spawn(
