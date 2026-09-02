@@ -29,10 +29,33 @@
 #include <pmacc/particles/Communication.hpp>
 #include <pmacc/particles/policies/DoNothing.hpp>
 
+#include <exception>
+#include <stdexcept>
+
 #include <catch2/catch_test_macros.hpp>
 
 namespace
 {
+    enum class FailurePoint
+    {
+        none,
+        packingCompletion,
+        sizeExtraction,
+        sendInitiation,
+        sendCompletion,
+        receiveInitiation,
+        receiveCompletion,
+        insertion,
+        retrySetup
+    };
+
+    caravan::Event failedEvent()
+    {
+        caravan::EventSource source;
+        source.setFailed(std::make_exception_ptr(std::runtime_error("injected particle failure")));
+        return source.event();
+    }
+
     struct MockStack
     {
         size_t getMaxParticlesCount() const
@@ -42,15 +65,20 @@ namespace
 
         size_t getDeviceParticlesCurrentSize() const
         {
+            if(*failure == FailurePoint::sizeExtraction)
+                throw std::runtime_error("injected particle size failure");
             return *size;
         }
 
         size_t getHostParticlesCurrentSize() const
         {
+            if(*failure == FailurePoint::sizeExtraction)
+                throw std::runtime_error("injected particle size failure");
             return *size;
         }
 
         size_t const* size;
+        FailurePoint const* failure;
     };
 
     struct MockParticlesBuffer
@@ -67,12 +95,12 @@ namespace
 
         MockStack getSendExchangeStack(uint32_t) const
         {
-            return {&sendSize};
+            return {&sendSize, &failure};
         }
 
         MockStack getReceiveExchangeStack(uint32_t) const
         {
-            return {&receiveSize};
+            return {&receiveSize, &failure};
         }
 
         caravan::Event sendCompletion(uint32_t) const
@@ -87,12 +115,20 @@ namespace
         template<typename T_Queue>
         caravan::Event asyncSendParticles(pmacc::async::Context& context, T_Queue& queue, uint32_t, caravan::Event)
         {
+            if(failure == FailurePoint::sendInitiation)
+                throw std::runtime_error("injected particle send initiation failure");
+            if(failure == FailurePoint::sendCompletion)
+                return failedEvent();
             return context.spawn(caravan::alpaka::submit(queue, [](T_Queue&) {}));
         }
 
         template<typename T_Queue>
         caravan::Event asyncReceiveParticles(pmacc::async::Context& context, T_Queue& queue, uint32_t, caravan::Event)
         {
+            if(failure == FailurePoint::receiveInitiation)
+                throw std::runtime_error("injected particle receive initiation failure");
+            if(failure == FailurePoint::receiveCompletion)
+                return failedEvent();
             return context.spawn(
                 caravan::alpaka::submit(queue, [this](T_Queue&) { receiveSize = receiveChunks.at(receiveChunk++); }));
         }
@@ -103,6 +139,7 @@ namespace
         size_t receiveChunk = 0u;
         size_t sendSize = 0u;
         size_t receiveSize = 0u;
+        FailurePoint failure = FailurePoint::none;
     };
 
     struct MockParticles
@@ -126,17 +163,23 @@ namespace
         }
 
         template<typename T_Queue>
-        auto copyGuardToExchangeAsync(T_Queue& queue, uint32_t)
+        auto copyGuardToExchangeAsync(T_Queue&, uint32_t)
         {
-            return caravan::alpaka::submit(
-                queue,
-                [this](T_Queue&) { buffer.sendSize = buffer.sendChunks.at(buffer.sendChunk++); });
+            if(buffer.failure == FailurePoint::retrySetup && buffer.sendChunk != 0u)
+                throw std::runtime_error("injected particle retry failure");
+            if(buffer.failure == FailurePoint::packingCompletion)
+                return caravan::asSender(failedEvent());
+            buffer.sendSize = buffer.sendChunks.at(buffer.sendChunk++);
+            return caravan::asSender(caravan::readyEvent());
         }
 
         template<typename T_Queue>
-        auto insertParticlesAsync(T_Queue& queue, uint32_t, size_t count)
+        auto insertParticlesAsync(T_Queue&, uint32_t, size_t count)
         {
-            return caravan::alpaka::submit(queue, [this, count](T_Queue&) { inserted += count; });
+            if(buffer.failure == FailurePoint::insertion)
+                return caravan::asSender(failedEvent());
+            inserted += count;
+            return caravan::asSender(caravan::readyEvent());
         }
 
         template<typename T_Queue>
@@ -175,4 +218,26 @@ TEST_CASE("Particle communication handles empty chunks", "[particles][async]")
     CHECK(particles.buffer.receiveChunk == 1u);
     CHECK(particles.inserted == 0u);
     CHECK(particles.gapsFilled);
+}
+
+TEST_CASE("Particle communication forwards callback failures", "[particles][async]")
+{
+    auto& queue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    for(auto const failure :
+        {FailurePoint::packingCompletion,
+         FailurePoint::sizeExtraction,
+         FailurePoint::sendInitiation,
+         FailurePoint::sendCompletion,
+         FailurePoint::receiveInitiation,
+         FailurePoint::receiveCompletion,
+         FailurePoint::insertion,
+         FailurePoint::retrySetup})
+    {
+        pmacc::async::Context context;
+        MockParticles particles;
+        particles.buffer.failure = failure;
+        CHECK_THROWS_AS(
+            context.wait(pmacc::particles::asyncCommunication(context, queue, particles)),
+            std::runtime_error);
+    }
 }

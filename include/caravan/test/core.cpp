@@ -129,20 +129,46 @@ namespace
         T m_value;
     };
 
+    struct StartTrackingSender
+    {
+        using completion_signatures = caravan::detail::DefaultCompletionSignatures<caravan::ValueSignature<>>;
+
+        template<typename T_Receiver>
+        struct Operation
+        {
+            void start() & noexcept
+            {
+                *started = true;
+                receiver.set_value();
+            }
+
+            bool* started;
+            T_Receiver receiver;
+        };
+
+        template<typename T_Receiver>
+        auto connect(T_Receiver&& receiver) &&
+        {
+            return Operation<std::decay_t<T_Receiver>>{started, std::forward<T_Receiver>(receiver)};
+        }
+
+        bool* started;
+    };
+
     struct RecursionTrackingExecutor
     {
         template<typename T_Function>
         void post(T_Function&& function)
         {
-            ++depth;
-            if(depth > maxDepth)
-                maxDepth = depth;
+            ++*depth;
+            if(*depth > *maxDepth)
+                *maxDepth = *depth;
             std::forward<T_Function>(function)();
-            --depth;
+            --*depth;
         }
 
-        unsigned depth = 0u;
-        unsigned maxDepth = 0u;
+        unsigned* depth;
+        unsigned* maxDepth;
     };
 
     void testCompletionAndContinuations()
@@ -160,16 +186,44 @@ namespace
         assert(calls == 2u);
     }
 
+    void testSchedulerHandleLifetime()
+    {
+        caravan::RunLoop loop;
+        caravan::EventSource source;
+        caravan::Promise<int> promise;
+        caravan::Event continued;
+        caravan::Event observed;
+        caravan::Future<int> mapped;
+        bool ran = false;
+        bool observationRan = false;
+        {
+            auto scheduler = loop.scheduler();
+            continued = source.event().then(scheduler, [&] { ran = true; });
+            observed = source.event().continueWith(scheduler, [&](caravan::Event) { observationRan = true; });
+            mapped = promise.future().then(scheduler, [](int value) { return value * 2; });
+        }
+
+        source.setReady();
+        promise.setValue(21);
+        loop.runReady();
+        continued.wait();
+        observed.wait();
+        assert(mapped.result() == 42);
+        assert(ran && observationRan);
+    }
+
     void testNoRecursiveInlineChains()
     {
-        RecursionTrackingExecutor executor;
+        unsigned depth = 0u;
+        unsigned maxDepth = 0u;
+        RecursionTrackingExecutor executor{&depth, &maxDepth};
         caravan::EventSource source;
         auto tail = source.event();
         for(unsigned i = 0u; i < 1000u; ++i)
             tail = tail.then(executor, [] {});
         source.setReady();
         tail.wait();
-        assert(executor.maxDepth == 1u);
+        assert(maxDepth == 1u);
     }
 
     void testWhenAllAndFailure()
@@ -299,6 +353,20 @@ namespace
     void testSyncWait()
     {
         caravan::syncWait(caravan::asSender(caravan::readyEvent()));
+
+        bool started = false;
+        {
+            caravan::ExecutorThreadGuard guard;
+            try
+            {
+                caravan::syncWait(StartTrackingSender{&started});
+                assert(false);
+            }
+            catch(std::logic_error const&)
+            {
+            }
+        }
+        assert(!started);
 
         caravan::EventSource failed;
         failed.setFailed(std::make_exception_ptr(std::runtime_error("sync wait failure")));
@@ -651,6 +719,7 @@ int main()
 {
     assert(caravan::readyEvent().isReady());
     testCompletionAndContinuations();
+    testSchedulerHandleLifetime();
     testNoRecursiveInlineChains();
     testWhenAllAndFailure();
     testFuture();
