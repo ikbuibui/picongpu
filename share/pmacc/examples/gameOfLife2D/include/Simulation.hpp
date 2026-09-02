@@ -207,7 +207,7 @@ namespace gol
         {
             auto& communicationQueue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
             auto& computeQueue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
-            auto communication = read->asyncCommunication(asyncContext, communicationQueue);
+            auto communication = read->spawnCommunication(asyncContext, communicationQueue);
             auto core = evo.runAsync<CORE>(
                 computeQueue,
                 pmacc::async::retain(

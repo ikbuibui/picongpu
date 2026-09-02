@@ -75,8 +75,9 @@ namespace pmacc
             return AsyncCommunication<T_Data>()(data, parent);
         }
 
+        /** Eager runtime-sized adapter for migrated PMacc communication. */
         template<typename T_Data, typename T_Queue>
-        caravan::Event asyncCommunication(
+        caravan::Event spawnCommunication(
             async::Context& context,
             T_Queue& queue,
             T_Data& data,

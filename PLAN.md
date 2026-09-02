@@ -24,6 +24,10 @@ The implementation completed so far remains valuable and is not discarded:
   snapshots, and buffer lifetime retention exist;
 - PMacc can attach its environment to the current MPI runtime and routes several
   signal, reduction, gather, barrier, and point-to-point paths through it;
+- PMacc exchange, field-direction, and particle-chunk primitives are lazy senders;
+  runtime-sized communication starts at explicitly named eager boundaries, and
+  particle chunk retries use dedicated operation states rather than Event callback
+  state machines;
 - PMacc now has an explicit async context owning a Caravan scope and manually
   driven run loop, and the `gameOfLife2D` local core/border step uses lazy kernel
   senders with explicit allocation retention; buffer accessors no longer mutate
@@ -1682,9 +1686,8 @@ these completion paths.
 PMacc path. The `gameOfLife2D` core/border step uses explicit lazy kernel senders,
 a PMacc-owned async scope/run loop, and explicit allocation retention. Scheduler
 handles are retained by value, invalid blocking waits are rejected before sender
-start, and particle callback failures terminate without leaving the scope pending.
-The communication call remains the deliberate legacy `EventTask` boundary for
-Phase 6.
+start, and particle sender failures terminate without leaving the scope pending.
+The former communication boundary has since been migrated in Phase 6.
 
 1. **Implemented:** PMacc's explicit `async::Context` owns dynamically spawned
    migration work in a Caravan `AsyncScope`.
@@ -1731,8 +1734,8 @@ boundary. `heatEquation2D` also composes residual copy/reset and typed MPI
 reduction, while its gather path uses an explicit completed-input boundary. The
 four-rank CPU residual regression and CUDA translation pass. M3 has also replaced
 the polling signal task and eager signal/barrier adapters with explicitly scoped
-typed MPI senders. Generic field pack/receive/insert branches and continuation-driven
-particle chunk exchange are now available without polling tasks. Both target
+typed MPI senders. Generic field pack/receive/insert branches and dedicated
+recursive particle chunk senders are now available without polling tasks. Both target
 examples pass CUDA and HIP runtime regressions; GPU-aware MPI, PIConGPU call-site
 conversion, and adapter deletion remain.
 

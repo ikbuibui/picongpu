@@ -50,12 +50,18 @@ namespace
 
 namespace
 {
-    [[maybe_unused]] caravan::Event compileFieldCommunication(
-        pmacc::async::Context& context,
-        pmacc::ComputeDeviceQueue& queue,
-        MockField& field)
+    [[maybe_unused]] auto compileFieldSend(pmacc::ComputeDeviceQueue& queue, MockField& field)
     {
-        return pmacc::fields::asyncCommunication(context, queue, field);
+        auto sender = pmacc::fields::sendExchange(queue, field, 1u);
+        static_assert(caravan::Sender<decltype(sender)>);
+        return sender;
+    }
+
+    [[maybe_unused]] auto compileFieldReceive(pmacc::ComputeDeviceQueue& queue, MockField& field)
+    {
+        auto sender = pmacc::fields::receiveExchange(queue, field, 1u);
+        static_assert(caravan::Sender<decltype(sender)>);
+        return sender;
     }
 
     [[maybe_unused]] auto compileParticleStackSizes(

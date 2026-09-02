@@ -38,16 +38,15 @@ validation gates remain open.
 
 The current implementation has two main kinds of work remaining:
 
-1. **Transitional complexity:** the legacy Manager/task system, eager Event
-   adapters, and new sender infrastructure coexist; the particle migration still
-   uses callback state machines even though their failure paths are now terminal
-   and quiescent.
+1. **Transitional complexity:** the legacy Manager/task system, explicit
+   runtime-sized eager adapters, and new sender infrastructure coexist; remaining
+   PIConGPU callers still keep the old PMacc task paths alive.
 2. **Unverified performance and platforms:** allocation counts, MPI progress cost,
-   sanitizer runs, target GPU behavior, and the performance gates in `PLAN.md`
-   have not been demonstrated.
+   sanitizer runs, GPU-aware MPI, and the performance gates in `PLAN.md` have not
+   been demonstrated.
 
 The C1-C6 gate for expanding migration is satisfied. The PMacc API-stability and
-PIConGPU entry gates remain blocked by S1-S6, P1-P3, M1-M2, and V1.
+PIConGPU entry gates remain blocked by S3-S6, P1-P3, M1-M2, and V1.
 
 ---
 
@@ -87,8 +86,8 @@ Every change in this plan must preserve the following invariants.
 | C4 | P0 | Implemented | Preserve MPI requests and buffers on progress errors | MPI production use |
 | C5 | P0 | Implemented | Propagate particle callback failures | Particle migration |
 | C6 | P0 | Implemented | Give MPI submission strong exception safety | Reliable shutdown/error handling |
-| S1 | P1 | Open | Establish sender-first PMacc APIs and name eager adapters | Stable PMacc API |
-| S2 | P1 | Open | Replace particle callback state machines | Particle migration exit |
+| S1 | P1 | Implemented | Establish sender-first PMacc APIs and name eager adapters | Stable PMacc API |
+| S2 | P1 | Implemented | Replace particle callback state machines | Particle migration exit |
 | S3 | P1 | Open | Simplify `AsyncScope` to counting-scope semantics | Eager allocation work |
 | S4 | P1 | Open | Reduce communicator and MPI type-erasure layers | Stable MPI hot path |
 | S5 | P1 | Partly implemented | Simplify collective ordering state | MPI maintainability |
@@ -99,9 +98,9 @@ Every change in this plan must preserve the following invariants.
 | M1-M2 | P1 | Open | Complete PMacc migration and delete legacy paths | PIConGPU entry gate |
 | V1 | P1 | In progress | Run sanitizer, multi-rank, GPU, and performance validation | Production acceptance |
 
-C1-C6 are implemented. P1 measurements may proceed concurrently with S1-S6, but
-structural allocation optimizations in P2 must use those measurements and must not
-weaken the invariants above.
+C1-C6 and S1-S2 are implemented. P1 measurements may proceed concurrently with
+S3-S6, but structural allocation optimizations in P2 must use those measurements
+and must not weaken the invariants above.
 
 ---
 
@@ -320,6 +319,12 @@ sequence state before queue insertion is known to have succeeded.
 
 ## S1: Make PMacc APIs sender-first
 
+**Implementation status: complete for the migrated PMacc API.** Exchange,
+GridBuffer, field-direction, and particle-chunk primitives return lazy typed
+senders without `Context` or predecessor `Event` parameters. Runtime-sized
+field, particle, and GridBuffer entry points are explicitly named
+`spawnCommunication` and retain the deliberate eager boundary.
+
 Normal composable PMacc operations should return lazy senders:
 
 ```cpp
@@ -349,26 +354,22 @@ Rules:
 
 ## S2: Replace particle callback state machines
 
-The current `enable_shared_from_this`/`watch`/`after*` implementation must not be the
-final particle API.
+**Implementation status: complete.** Particle send and receive chunk loops are
+lazy senders with dedicated recursive operation states. Value, error, and stopped
+completion are forwarded structurally; the former `enable_shared_from_this`,
+Event watcher, and control-scheduler callback chain is removed. Completed typed
+stage states are retained inside the operation to make synchronous completion
+safe; P1 will determine whether their list-node allocations need reusable slots.
 
-Evaluate two implementations against the supported toolchains:
+The dedicated operation-state option was selected instead of adding a general
+coroutine runtime solely for this loop. The implementation:
 
-1. a coroutine returning a sender-compatible task; and
-2. one dedicated recursive sender operation state.
-
-The selected implementation must:
-
-- keep the chunk loop lazy until start;
-- retain all per-direction state in one operation state;
-- propagate value/error/stopped structurally;
-- avoid one eager Event and scheduler hop per state transition;
-- support empty, partial, exact-capacity, and multi-chunk transfers; and
-- expose no state enum, callback chain, or Manager protocol to callers.
-
-Prefer the coroutine when CUDA/HIP host translation and compile cost are acceptable.
-Otherwise use the dedicated operation state. Do not introduce a general Caravan
-coroutine runtime solely for this loop.
+- keeps the chunk loop lazy until start;
+- retains all per-direction state in one operation state;
+- propagates value/error/stopped structurally;
+- avoids one eager Event and scheduler hop per state transition;
+- supports empty, partial, exact-capacity, and multi-chunk transfers; and
+- exposes no state enum, callback chain, or Manager protocol to callers.
 
 ## S3: Replace the scope registry with counting-scope semantics
 
@@ -642,8 +643,8 @@ Track deleted concepts and call sites, not only added sender equivalents.
 
 ## Before declaring the PMacc API stable
 
-- [ ] S1 normal PMacc operations are sender-first.
-- [ ] S2 particle chunking no longer uses the callback state machine.
+- [x] S1 normal PMacc operations are sender-first.
+- [x] S2 particle chunking no longer uses the callback state machine.
 - [ ] S3 scope uses counting-scope rather than registry semantics.
 - [ ] S4 communicator and MPI type erasure have been reduced or justified by
       measurements.
