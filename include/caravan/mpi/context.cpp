@@ -98,21 +98,41 @@ namespace caravan
             std::lock_guard lock(m_queueMutex);
             if(!m_accepting)
                 throw std::runtime_error("MPI context is shutting down");
-            return {communicator, m_managedCollectiveSubmitted[communicator.value]++};
+            auto& lane = m_managedCollectives[communicator.value];
+            auto const sequence = lane.submitted;
+            lane.entries.emplace(sequence, ManagedCollectiveEntry{});
+            ++lane.submitted;
+            ++m_outstanding;
+            return {communicator, sequence};
         }
 
         void releaseManagedCollective(detail::ManagedCollectiveTicket ticket, std::function<void()> start)
         {
             {
-                std::unique_lock lock(m_queueMutex);
-                if(!m_accepting)
-                {
-                    lock.unlock();
-                    std::invoke(std::move(start));
+                std::lock_guard lock(m_queueMutex);
+                auto lane = m_managedCollectives.find(ticket.communicator.value);
+                if(lane == m_managedCollectives.end())
+                    throw std::logic_error("Unknown managed collective ticket");
+                auto entry = lane->second.entries.find(ticket.sequence);
+                if(entry == lane->second.entries.end() || entry->second.released)
+                    throw std::logic_error("Inactive managed collective ticket");
+                entry->second.start = std::move(start);
+                entry->second.released = true;
+            }
+            m_queueReady.notify_one();
+        }
+
+        void abandonManagedCollective(detail::ManagedCollectiveTicket ticket) noexcept
+        {
+            {
+                std::lock_guard lock(m_queueMutex);
+                auto lane = m_managedCollectives.find(ticket.communicator.value);
+                if(lane == m_managedCollectives.end())
                     return;
-                }
-                m_queue.emplace_back([this, ticket, start = std::move(start)]() mutable
-                                     { startManagedCollective(ticket, std::move(start)); });
+                auto entry = lane->second.entries.find(ticket.sequence);
+                if(entry == lane->second.entries.end() || entry->second.released)
+                    return;
+                entry->second.released = true;
             }
             m_queueReady.notify_one();
         }
@@ -124,6 +144,7 @@ namespace caravan
             for(;;)
             {
                 drainQueue();
+                drainManagedCollectives();
                 progress();
 
                 std::unique_lock lock(m_queueMutex);
@@ -133,10 +154,14 @@ namespace caravan
                     releaseCommunicators();
                     return;
                 }
-                if(m_requests.empty() && m_queue.empty())
+                if(m_requests.empty() && m_queue.empty() && !hasReadyManagedCollective())
                     m_queueReady.wait(
                         lock,
-                        [this] { return !m_queue.empty() || (m_stopping && m_outstanding == 0u); });
+                        [this]
+                        {
+                            return !m_queue.empty() || hasReadyManagedCollective()
+                                   || (m_stopping && m_outstanding == 0u);
+                        });
             }
         }
 
@@ -146,6 +171,10 @@ namespace caravan
                 std::lock_guard lock(m_queueMutex);
                 m_accepting = false;
                 m_stopping = true;
+                for(auto& [communicator, lane] : m_managedCollectives)
+                    for(auto& [sequence, entry] : lane.entries)
+                        if(!entry.released)
+                            entry.released = true;
             }
             m_queueReady.notify_one();
         }
@@ -157,33 +186,36 @@ namespace caravan
             std::vector<MPI_Status> statuses;
             std::vector<std::shared_ptr<void>> lifetimes;
             std::size_t remaining;
+            std::exception_ptr failure;
             bool terminal = false;
 
-            bool complete(NativeMpiContext& context, std::size_t index, MPI_Status const& status)
+            bool retire(
+                NativeMpiContext& context,
+                std::size_t index,
+                MPI_Status const& status,
+                std::exception_ptr error = {})
             {
                 if(terminal)
                     return false;
                 statuses[index] = status;
+                if(error && !failure)
+                    failure = std::move(error);
                 if(--remaining != 0u)
                     return false;
                 terminal = true;
-                try
+                if(failure)
+                    output.failed(std::move(failure));
+                else
                 {
-                    output.completed(context, statuses);
+                    try
+                    {
+                        output.completed(context, statuses);
+                    }
+                    catch(...)
+                    {
+                        output.failed(std::current_exception());
+                    }
                 }
-                catch(...)
-                {
-                    output.failed(std::current_exception());
-                }
-                return true;
-            }
-
-            bool fail(std::exception_ptr error)
-            {
-                if(terminal)
-                    return false;
-                terminal = true;
-                output.failed(std::move(error));
                 return true;
             }
         };
@@ -194,84 +226,106 @@ namespace caravan
             std::size_t index;
         };
 
-        struct CollectiveTicket
+        struct ManagedCollectiveEntry
         {
-            CommunicatorId communicator;
-            std::size_t sequence;
+            std::function<void()> start;
+            bool released = false;
+        };
+
+        struct ManagedCollectiveLane
+        {
+            std::size_t submitted = 0u;
+            std::size_t next = 0u;
+            std::unordered_map<std::size_t, ManagedCollectiveEntry> entries;
         };
 
         template<typename T_Output, typename T_Start>
-        void submit(T_Output output, T_Start&& start, std::optional<CommunicatorId> collective)
+        void submit(T_Output output, T_Start&& start, std::optional<CommunicatorId>)
         {
-            std::optional<CollectiveTicket> ticket;
+            auto fail = output.failed;
+            std::function<void()> command;
+            try
             {
-                std::unique_lock lock(m_queueMutex);
-                if(!m_accepting)
+                command = [this, output = std::move(output), start = std::forward<T_Start>(start)]() mutable
                 {
-                    lock.unlock();
-                    output.setFailed(std::make_exception_ptr(std::runtime_error("MPI context is shutting down")));
-                    return;
-                }
-                ++m_outstanding;
-                if(collective)
-                    ticket = CollectiveTicket{*collective, m_collectiveSubmitted[collective->value]++};
-                m_queue.emplace_back(
-                    [this, output = std::move(output), start = std::forward<T_Start>(start), ticket]() mutable
+                    try
                     {
-                        auto ready = [this, output = std::move(output), start = std::move(start)]() mutable
-                        {
-                            try
-                            {
-                                std::invoke(start, output);
-                            }
-                            catch(...)
-                            {
-                                output.setFailed(std::current_exception());
-                                finishOperation();
-                            }
-                        };
-                        if(ticket)
-                            startCollective(*ticket, std::move(ready));
-                        else
-                            ready();
-                    });
+                        std::invoke(start, output);
+                    }
+                    catch(...)
+                    {
+                        output.setFailed(std::current_exception());
+                        finishOperation();
+                    }
+                };
+            }
+            catch(...)
+            {
+                fail(std::current_exception());
+                return;
+            }
+
+            bool accepted = false;
+            try
+            {
+                std::lock_guard lock(m_queueMutex);
+                if(m_accepting)
+                {
+                    m_queue.emplace_back(std::move(command));
+                    ++m_outstanding;
+                    accepted = true;
+                }
+            }
+            catch(...)
+            {
+                fail(std::current_exception());
+                return;
+            }
+            if(!accepted)
+            {
+                fail(std::make_exception_ptr(std::runtime_error("MPI context is shutting down")));
+                return;
             }
             m_queueReady.notify_one();
         }
 
-        void startCollective(CollectiveTicket ticket, std::function<void()> start)
+        bool hasReadyManagedCollective() const
         {
-            assertOwner();
-            auto& pending = m_collectivePending[ticket.communicator.value];
-            pending.emplace(ticket.sequence, std::move(start));
-            auto& next = m_collectiveNext[ticket.communicator.value];
-            for(;;)
+            for(auto const& [communicator, lane] : m_managedCollectives)
             {
-                auto const found = pending.find(next);
-                if(found == pending.end())
-                    return;
-                auto ready = std::move(found->second);
-                pending.erase(found);
-                ++next;
-                ready();
+                auto const entry = lane.entries.find(lane.next);
+                if(entry != lane.entries.end() && entry->second.released)
+                    return true;
             }
+            return false;
         }
 
-        void startManagedCollective(detail::ManagedCollectiveTicket ticket, std::function<void()> start)
+        void drainManagedCollectives()
         {
             assertOwner();
-            auto& pending = m_managedCollectivePending[ticket.communicator.value];
-            pending.emplace(ticket.sequence, std::move(start));
-            auto& next = m_managedCollectiveNext[ticket.communicator.value];
             for(;;)
             {
-                auto const found = pending.find(next);
-                if(found == pending.end())
+                std::function<void()> start;
+                bool found = false;
+                {
+                    std::lock_guard lock(m_queueMutex);
+                    for(auto& [communicator, lane] : m_managedCollectives)
+                    {
+                        auto entry = lane.entries.find(lane.next);
+                        if(entry == lane.entries.end() || !entry->second.released)
+                            continue;
+                        start = std::move(entry->second.start);
+                        lane.entries.erase(entry);
+                        ++lane.next;
+                        --m_outstanding;
+                        found = true;
+                        break;
+                    }
+                }
+                if(!found)
                     return;
-                auto ready = std::move(found->second);
-                pending.erase(found);
-                ++next;
-                ready();
+                if(start)
+                    start();
             }
         }
 
@@ -376,7 +430,7 @@ namespace caravan
             {
                 if(batch.requests[index] == MPI_REQUEST_NULL)
                 {
-                    if(group->complete(context, index, MPI_Status{}))
+                    if(group->retire(context, index, MPI_Status{}))
                         finishOperation();
                     continue;
                 }
@@ -417,16 +471,10 @@ namespace caravan
             }
         }
 
-        void failActive(NativeCompletion& active, std::exception_ptr failure)
-        {
-            if(active.group->fail(std::move(failure)))
-                finishOperation();
-        }
-
-        void completeActive(NativeCompletion& active, MPI_Status const& status)
+        void retireActive(NativeCompletion& active, MPI_Status const& status, std::exception_ptr failure = {})
         {
             auto context = nativeContext();
-            if(active.group->complete(context, active.index, status))
+            if(active.group->retire(context, active.index, status, std::move(failure)))
                 finishOperation();
         }
 
@@ -445,14 +493,10 @@ namespace caravan
                 &completed,
                 m_completedIndices.data(),
                 m_statuses.data());
-            if(error != MPI_SUCCESS)
+            if(error != MPI_SUCCESS && error != MPI_ERR_IN_STATUS)
             {
-                auto failure = std::make_exception_ptr(mpiError("MPI_Testsome", error));
-                for(auto& active : m_active)
-                    failActive(active, failure);
-                m_requests.clear();
-                m_active.clear();
-                return;
+                MPI_Abort(MPI_COMM_WORLD, error);
+                std::terminate();
             }
             if(completed == MPI_UNDEFINED || completed == 0)
                 return;
@@ -461,7 +505,14 @@ namespace caravan
             {
                 auto const position = static_cast<std::size_t>(i);
                 auto const index = static_cast<std::size_t>(m_completedIndices[position]);
-                completeActive(m_active[index], m_statuses[position]);
+                auto const requestError = error == MPI_ERR_IN_STATUS ? m_statuses[position].MPI_ERROR : MPI_SUCCESS;
+                if(requestError == MPI_ERR_PENDING || m_requests[index] != MPI_REQUEST_NULL)
+                    continue;
+                retireActive(
+                    m_active[index],
+                    m_statuses[position],
+                    requestError == MPI_SUCCESS ? std::exception_ptr{}
+                                                : std::make_exception_ptr(mpiError("MPI request", requestError)));
             }
 
             std::size_t output = 0u;
@@ -497,13 +548,7 @@ namespace caravan
         std::size_t m_outstanding = 0u;
         bool m_accepting = true;
         bool m_stopping = false;
-        std::unordered_map<std::uint32_t, std::size_t> m_collectiveSubmitted;
-        std::unordered_map<std::uint32_t, std::size_t> m_collectiveNext;
-        std::unordered_map<std::uint32_t, std::unordered_map<std::size_t, std::function<void()>>> m_collectivePending;
-        std::unordered_map<std::uint32_t, std::size_t> m_managedCollectiveSubmitted;
-        std::unordered_map<std::uint32_t, std::size_t> m_managedCollectiveNext;
-        std::unordered_map<std::uint32_t, std::unordered_map<std::size_t, std::function<void()>>>
-            m_managedCollectivePending;
+        std::unordered_map<std::uint32_t, ManagedCollectiveLane> m_managedCollectives;
         std::vector<MPI_Comm> m_communicators{MPI_COMM_WORLD};
         std::vector<MPI_Request> m_requests;
         std::vector<NativeCompletion> m_active;
@@ -552,6 +597,11 @@ namespace caravan
         m_implementation->releaseManagedCollective(ticket, std::move(start));
     }
 
+    void MpiContext::abandonManagedCollective(detail::ManagedCollectiveTicket ticket) noexcept
+    {
+        m_implementation->abandonManagedCollective(ticket);
+    }
+
     detail::ManagedCollectiveTicket detail::CollectiveAccess::reserve(MpiContext& context, CommunicatorId communicator)
     {
         return context.reserveManagedCollective(communicator);
@@ -563,6 +613,11 @@ namespace caravan
         std::function<void()> start)
     {
         context.releaseManagedCollective(ticket, std::move(start));
+    }
+
+    void detail::CollectiveAccess::abandon(MpiContext& context, detail::ManagedCollectiveTicket ticket) noexcept
+    {
+        context.abandonManagedCollective(ticket);
     }
 
     void detail::NativeAccess::submit(MpiContext& context, detail::NativeSubmission submission)

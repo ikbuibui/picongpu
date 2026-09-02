@@ -4,8 +4,9 @@
 
 The implementation review and concrete near-term corrective actions for commit
 `3073aba0a37ee5763521ee79f838f8e71ef85daf` are tracked in
-[`PLAN_REVIEW_ACTIONS.md`](PLAN_REVIEW_ACTIONS.md). That document supplements this
-plan; it does not replace the architecture or migration phases below.
+[`PLAN_HARDENING_REWORK.md`](PLAN_HARDENING_REWORK.md) and
+[`PLAN_REVIEW_ACTIONS.md`](PLAN_REVIEW_ACTIONS.md). Those documents supplement this
+plan; they do not replace the architecture or migration phases below.
 
 Caravan is being developed inside the PMacc/PIConGPU repository while the
 legacy PMacc event system is still in use.
@@ -43,7 +44,13 @@ The implementation completed so far remains valuable and is not discarded:
   same-queue FIFO without a host wait, and publishes completion through an alpaka
   host callback;
 - legacy `TaskSendMPI` and `TaskReceiveMPI` can temporarily consume Caravan
-  completion handles during migration.
+  completion handles during migration;
+- the C1-C6 correctness hardening is implemented: eager continuations retain
+  scheduler handles by value, blocking consumers reject invalid executor-thread
+  use before start, managed collective reservations are abandonment-safe, mixed
+  MPI progress errors retain active requests and leases, particle callback failures
+  terminate their result, and MPI submission commits state with strong exception
+  safety.
 
 The architecture described below changes the *role* of this implementation:
 the dedicated MPI worker becomes the first MPI progress/lifecycle policy rather
@@ -53,6 +60,11 @@ becomes an alpaka backend policy rather than a universal execution model.
 Breaking PMacc and PIConGPU interfaces is allowed during the migration. Do not
 retain compatibility scaffolding merely to avoid porting users of the legacy
 system.
+
+The C1-C6 correctness gate in `PLAN_HARDENING_REWORK.md` is implemented. Focused
+Caravan tests pass with one, two, and four MPI ranks, and the PMacc 2D/3D context,
+communicator, and particle tests pass. Sanitizers, allocator-failure injection,
+fatal MPI-error injection, and target GPU validation remain open.
 
 The immediate implementation order is:
 
@@ -1387,12 +1399,14 @@ This phase occurs before adding more PMacc functionality. Reuse the working
 completion/MPI code, but change the conceptual/API boundaries so new work aligns
 with P2300 semantics and the clarified Caravan scope.
 
-**Current state:** the hardware-independent architecture work is implemented and
-covered by core, MPI, alpaka, and alpaka-to-MPI composition tests. The remaining
-exit-gate work requires an accelerator environment: run the representative chain
-on a target accelerator and validate HIP translation. The optional resource tracker
-is deliberately not implemented; the boundary specified in 2.10 is sufficient
-until a measured PMacc use case justifies Phase 11.
+**Current state:** the hardware-independent architecture work and C1-C6 correctness
+hardening are implemented and covered by core, MPI, alpaka, and alpaka-to-MPI
+composition tests, including managed-collective abandonment and mixed-error MPI
+request lifetime coverage. The remaining exit-gate work requires sanitizers,
+allocator-failure injection, and an accelerator environment: run the representative
+chain on a target accelerator and validate HIP translation. The optional resource
+tracker is deliberately not implemented; the boundary specified in 2.10 is
+sufficient until a measured PMacc use case justifies Phase 11.
 
 ### 2.1 Complete the minimum typed sender vocabulary
 
@@ -1577,11 +1591,13 @@ global Caravan supervisor or general task/scheduler hierarchy has been introduce
 
 ## Phase 3: Complete the dedicated-thread MPI backend and PMacc MPI migration
 
-**Current state:** implemented for the PMacc migration scope. PMacc startup,
-topology, point-to-point operations, signals, barriers, reductions, and gathers
-use the managed Caravan MPI context. Native MPI calls are confined to
-`MPIReduce`'s generic request initiation hook, and a PMacc CI check rejects calls
-outside that integration boundary. No PMacc-scoped MPI-enabled third-party call
+**Current state:** implemented and correctness-hardened for the PMacc migration
+scope. PMacc startup, topology, point-to-point operations, signals, barriers,
+reductions, and gathers use the managed Caravan MPI context. Native MPI calls are
+confined to `MPIReduce`'s generic request initiation hook, and a PMacc CI check
+rejects calls outside that integration boundary. Managed collective abandonment,
+submission rollback, and mixed failed/pending request lifetime behavior are covered
+by one-, two-, and four-rank tests. No PMacc-scoped MPI-enabled third-party call
 requires `invokeBlocking`; PIConGPU plugin/library use remains deferred to Phase 8.
 
 Begin this phase only after the Phase 2 alpaka sender prototype has exercised the
@@ -1659,10 +1675,13 @@ these completion paths.
 
 ## Phase 5: Explicit PMacc dependencies, async scope, run loop, and ownership migration
 
-**Current state:** implemented for the representative PMacc path. The
-`gameOfLife2D` core/border step uses explicit lazy kernel senders, a PMacc-owned
-async scope/run loop, and explicit allocation retention. Its communication call
-remains the deliberate legacy `EventTask` boundary for Phase 6.
+**Current state:** implemented and correctness-hardened for the representative
+PMacc path. The `gameOfLife2D` core/border step uses explicit lazy kernel senders,
+a PMacc-owned async scope/run loop, and explicit allocation retention. Scheduler
+handles are retained by value, invalid blocking waits are rejected before sender
+start, and particle callback failures terminate without leaving the scope pending.
+The communication call remains the deliberate legacy `EventTask` boundary for
+Phase 6.
 
 1. **Implemented:** PMacc's explicit `async::Context` owns dynamically spawned
    migration work in a Caravan `AsyncScope`.
