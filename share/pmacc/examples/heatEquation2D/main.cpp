@@ -176,7 +176,7 @@ auto run(caravan::MpiContext& mpi) -> int
 
     for(uint32_t i = 0; i < NUM_STEPS; i++)
     {
-        auto communication = buff1->asyncCommunication(asyncContext, communicationQueue);
+        auto communication = buff1->spawnCommunication(asyncContext, communicationQueue);
 
         auto core = PMACC_LOCKSTEP_KERNEL(StencilFourPoint{})
                         .config(coreMapper.getGridDim(), SuperCell{})
