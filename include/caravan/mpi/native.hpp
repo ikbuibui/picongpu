@@ -349,34 +349,41 @@ namespace caravan
                     if(std::exchange(m_started, true))
                         std::terminate();
 
-                    detail::NativeAccess::submit(
-                        *m_context,
-                        detail::NativeSubmission{
-                            [this](NativeMpiContext& context) { return detail::invokeNative(m_start, context); },
-                            [this](NativeMpiContext& context, std::span<MPI_Status const> statuses)
-                            {
-                                if constexpr(std::is_void_v<T>)
+                    try
+                    {
+                        detail::NativeAccess::submit(
+                            *m_context,
+                            detail::NativeSubmission{
+                                [this](NativeMpiContext& context) { return detail::invokeNative(m_start, context); },
+                                [this](NativeMpiContext& context, std::span<MPI_Status const> statuses)
                                 {
-                                    if constexpr(std::is_invocable_v<
-                                                     T_Complete&,
-                                                     NativeMpiContext&,
-                                                     std::span<MPI_Status const>>)
-                                        detail::invokeNative(m_complete, context, statuses);
+                                    if constexpr(std::is_void_v<T>)
+                                    {
+                                        if constexpr(std::is_invocable_v<
+                                                         T_Complete&,
+                                                         NativeMpiContext&,
+                                                         std::span<MPI_Status const>>)
+                                            detail::invokeNative(m_complete, context, statuses);
+                                        else
+                                            detail::invokeNative(m_complete, statuses);
+                                        m_receiver.set_value();
+                                    }
+                                    else if constexpr(std::is_invocable_v<
+                                                          T_Complete&,
+                                                          NativeMpiContext&,
+                                                          std::span<MPI_Status const>>)
+                                        m_receiver.set_value(detail::invokeNative(m_complete, context, statuses));
                                     else
-                                        detail::invokeNative(m_complete, statuses);
-                                    m_receiver.set_value();
-                                }
-                                else if constexpr(std::is_invocable_v<
-                                                      T_Complete&,
-                                                      NativeMpiContext&,
-                                                      std::span<MPI_Status const>>)
-                                    m_receiver.set_value(detail::invokeNative(m_complete, context, statuses));
-                                else
-                                    m_receiver.set_value(detail::invokeNative(m_complete, statuses));
-                            },
-                            [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
-                            [this] { m_receiver.set_stopped(); },
-                            m_collective});
+                                        m_receiver.set_value(detail::invokeNative(m_complete, statuses));
+                                },
+                                [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
+                                [this] { m_receiver.set_stopped(); },
+                                m_collective});
+                    }
+                    catch(...)
+                    {
+                        m_receiver.set_error(std::current_exception());
+                    }
                 }
 
             private:
@@ -467,23 +474,31 @@ namespace caravan
                     if(std::exchange(m_started, true))
                         std::terminate();
 
-                    if constexpr(T_Blocking)
-                        detail::NativeAccess::invokeBlocking(
-                            *m_context,
-                            detail::NativeBlockingSubmission{
-                                [this](NativeMpiContext& context) { complete(context); },
-                                [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
-                                [this] { m_receiver.set_stopped(); },
-                                m_collective});
-                    else
-                        detail::NativeAccess::submit(
-                            *m_context,
-                            detail::NativeSubmission{
-                                [](NativeMpiContext&) { return NativeRequestBatch{}; },
-                                [this](NativeMpiContext& context, std::span<MPI_Status const>) { complete(context); },
-                                [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
-                                [this] { m_receiver.set_stopped(); },
-                                m_collective});
+                    try
+                    {
+                        if constexpr(T_Blocking)
+                            detail::NativeAccess::invokeBlocking(
+                                *m_context,
+                                detail::NativeBlockingSubmission{
+                                    [this](NativeMpiContext& context) { complete(context); },
+                                    [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
+                                    [this] { m_receiver.set_stopped(); },
+                                    m_collective});
+                        else
+                            detail::NativeAccess::submit(
+                                *m_context,
+                                detail::NativeSubmission{
+                                    [](NativeMpiContext&) { return NativeRequestBatch{}; },
+                                    [this](NativeMpiContext& context, std::span<MPI_Status const>)
+                                    { complete(context); },
+                                    [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
+                                    [this] { m_receiver.set_stopped(); },
+                                    m_collective});
+                    }
+                    catch(...)
+                    {
+                        m_receiver.set_error(std::current_exception());
+                    }
                 }
 
             private:
