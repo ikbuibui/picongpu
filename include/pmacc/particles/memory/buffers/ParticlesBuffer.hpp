@@ -258,6 +258,20 @@ namespace pmacc
             return caravan::whenAll(completions);
         }
 
+        caravan::Event receiveCompletion(uint32_t exchange) const
+        {
+            std::array completions{
+                framesExchanges->receiveCompletion(exchange),
+                exchangeMemoryIndexer->receiveCompletion(exchange)};
+            return caravan::whenAll(completions);
+        }
+
+        void setSendCompletion(uint32_t exchange, caravan::Event completion)
+        {
+            framesExchanges->setSendCompletion(exchange, completion);
+            exchangeMemoryIndexer->setSendCompletion(exchange, std::move(completion));
+        }
+
         void setReceiveCompletion(uint32_t exchange, caravan::Event completion)
         {
             framesExchanges->setReceiveCompletion(exchange, completion);
@@ -265,29 +279,21 @@ namespace pmacc
         }
 
         template<typename T_Queue>
-        caravan::Event asyncSendParticles(
-            async::Context& context,
-            T_Queue& queue,
-            uint32_t exchange,
-            caravan::Event previous = {})
+        auto sendParticles(T_Queue& queue, uint32_t exchange)
         {
-            std::array branches{
-                framesExchanges->asyncSend(context, queue, exchange, previous),
-                exchangeMemoryIndexer->asyncSend(context, queue, exchange, std::move(previous))};
-            return caravan::whenAll(branches);
+            return caravan::whenAll(
+                framesExchanges->send(queue, exchange),
+                exchangeMemoryIndexer->send(queue, exchange));
         }
 
         template<typename T_Queue>
-        caravan::Event asyncReceiveParticles(
-            async::Context& context,
-            T_Queue& queue,
-            uint32_t exchange,
-            caravan::Event previous = {})
+        auto receiveParticles(T_Queue& queue, uint32_t exchange)
         {
-            std::array branches{
-                framesExchanges->asyncReceive(context, queue, exchange, previous).event(),
-                exchangeMemoryIndexer->asyncReceive(context, queue, exchange, std::move(previous)).event()};
-            return caravan::whenAll(branches);
+            return caravan::then(
+                caravan::whenAll(
+                    framesExchanges->receive(queue, exchange),
+                    exchangeMemoryIndexer->receive(queue, exchange)),
+                [](auto&&...) {});
         }
 
         EventTask asyncCommunication(EventTask serialEvent)

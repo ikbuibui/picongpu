@@ -259,9 +259,9 @@ namespace pmacc
             caravan::ReceiveResult const mpi;
         };
 
-        /** Start an explicitly composed send after the previous use of this direction. */
+        /** Describe one lazy send. The exchange, queue, and borrowed buffers must outlive it. */
         template<typename T_Queue>
-        caravan::Event sendAsync(async::Context& context, T_Queue& queue, caravan::Event previous = {})
+        auto send(T_Queue& queue)
         {
             auto& communicator = Environment<DIM>::get().EnvironmentController().getCommunicator();
             auto source = getDeviceBuffer().getOwnedAlpakaView();
@@ -273,14 +273,12 @@ namespace pmacc
             if(!Environment<>::get().isMpiDirectEnabled())
                 hostStaging.emplace(getHostBuffer().getOwnedAlpakaView());
 
-            auto sender = caravan::letValue(
-                caravan::asSender(std::move(previous)),
+            auto queueTail = caravan::alpaka::submit(
+                queue,
                 [this,
-                 &queue,
-                 &communicator,
                  source = std::move(source),
                  deviceStaging = std::move(deviceStaging),
-                 hostStaging = std::move(hostStaging)]() mutable
+                 hostStaging = std::move(hostStaging)](T_Queue& nativeQueue) mutable
                 {
                     auto const elements = getDeviceBuffer().size();
                     auto const extent = getDeviceBuffer().sizeND(elements).toAlpakaMemVec();
@@ -288,41 +286,27 @@ namespace pmacc
                         getDeviceDoubleBuffer().setSizeHostSide(elements);
                     if(hostStaging)
                         getHostBuffer().setSizeHostSide(elements);
-
-                    auto queueTail = caravan::alpaka::submit(
-                        queue,
-                        [source = std::move(source),
-                         deviceStaging = std::move(deviceStaging),
-                         hostStaging = std::move(hostStaging),
-                         extent](T_Queue& nativeQueue) mutable
-                        {
-                            if(deviceStaging)
-                                ::alpaka::memcpy(nativeQueue, deviceStaging->view, source.view, extent);
-                            if(hostStaging)
-                                ::alpaka::memcpy(
-                                    nativeQueue,
-                                    hostStaging->view,
-                                    deviceStaging ? deviceStaging->view : source.view,
-                                    extent);
-                        });
-                    return caravan::letValue(
-                        std::move(queueTail),
-                        [this, &communicator]
-                        {
-                            auto const buffer = getCPtrCurrentSize();
-                            return communicator
-                                .send(exchange, buffer.asCharPtr(), buffer.sizeInBytes(), communicationTag);
-                        });
+                    if(deviceStaging)
+                        ::alpaka::memcpy(nativeQueue, deviceStaging->view, source.view, extent);
+                    if(hostStaging)
+                        ::alpaka::memcpy(
+                            nativeQueue,
+                            hostStaging->view,
+                            deviceStaging ? deviceStaging->view : source.view,
+                            extent);
                 });
-            return context.spawn(std::move(sender));
+            return caravan::letValue(
+                std::move(queueTail),
+                [this, &communicator]
+                {
+                    auto const buffer = getCPtrCurrentSize();
+                    return communicator.send(exchange, buffer.asCharPtr(), buffer.sizeInBytes(), communicationTag);
+                });
         }
 
-        /** Post a receive and explicitly compose size publication and device copies. */
+        /** Describe one lazy receive followed by size publication and device copies. */
         template<typename T_Queue>
-        caravan::Future<ReceiveMetadata> receiveAsync(
-            async::Context& context,
-            T_Queue& queue,
-            caravan::Event previous = {})
+        auto receive(T_Queue& queue)
         {
             auto& communicator = Environment<DIM>::get().EnvironmentController().getCommunicator();
             auto destination = getDeviceBuffer().getOwnedAlpakaView();
@@ -334,15 +318,10 @@ namespace pmacc
             if(!Environment<>::get().isMpiDirectEnabled())
                 hostStaging.emplace(getHostBuffer().getOwnedAlpakaView());
 
-            auto receive = caravan::letValue(
-                caravan::asSender(std::move(previous)),
-                [this, &communicator]
-                {
-                    auto const buffer = getCPtrCapacity();
-                    return communicator.receive(exchange, buffer.asCharPtr(), buffer.sizeInBytes(), communicationTag);
-                });
-            auto sender = caravan::letValue(
-                context.onControl(std::move(receive)),
+            auto const buffer = getCPtrCapacity();
+            auto receive = communicator.receive(exchange, buffer.asCharPtr(), buffer.sizeInBytes(), communicationTag);
+            return caravan::letValue(
+                std::move(receive),
                 [this,
                  &queue,
                  destination = std::move(destination),
@@ -387,7 +366,6 @@ namespace pmacc
                         });
                     return caravan::then(std::move(copy), [metadata] { return metadata; });
                 });
-            return context.spawnFuture<ReceiveMetadata>(std::move(sender));
         }
 
         EventTask startSend()
