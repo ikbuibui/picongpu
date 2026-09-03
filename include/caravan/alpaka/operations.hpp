@@ -124,6 +124,7 @@ namespace caravan::alpaka
     class SubmitSender
     {
         static constexpr auto stageCount = sizeof...(T_Submits);
+        static_assert(stageCount > 0u, "An alpaka submission chain must contain at least one stage");
 
     public:
         using completion_signatures

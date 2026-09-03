@@ -5,6 +5,7 @@
 #pragma once
 
 #include <condition_variable>
+#include <cstddef>
 #include <deque>
 #include <functional>
 #include <mutex>
@@ -47,11 +48,20 @@ namespace caravan
             return true;
         }
 
-        /** Execute all currently ready work without blocking. */
+        /** Execute a snapshot of ready work without blocking.
+         *
+         * Work posted while this batch runs is deferred to the next call, so a
+         * self-reposting task cannot monopolize the caller.
+         */
         void runReady()
         {
             ExecutorThreadGuard guard;
-            for(;;)
+            std::size_t ready;
+            {
+                std::lock_guard lock(m_mutex);
+                ready = m_tasks.size();
+            }
+            while(ready-- > 0u)
             {
                 std::function<void()> task;
                 {

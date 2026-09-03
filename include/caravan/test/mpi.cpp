@@ -502,6 +502,27 @@ int main(int argc, char** argv)
                 for(int rank = 0; rank < topology.size; ++rank)
                     assert((*gatherOutput)[rank] == rank);
 
+            auto overlappingGatherBuffer = std::make_shared<std::vector<int>>(topology.size + 1, topology.rank);
+            try
+            {
+                caravan::syncWait<caravan::GatherResult>(caravan::mpi::gather(
+                    mpi,
+                    caravan::ConstBufferLease{
+                        overlappingGatherBuffer,
+                        overlappingGatherBuffer->data() + 1,
+                        sizeof(int)},
+                    caravan::BufferLease{
+                        overlappingGatherBuffer,
+                        overlappingGatherBuffer->data(),
+                        overlappingGatherBuffer->size() * sizeof(int)},
+                    caravan::Peer{0},
+                    cartesian.communicator));
+                assert(false);
+            }
+            catch(std::invalid_argument const&)
+            {
+            }
+
             auto gatherVInput = std::make_shared<std::vector<int>>(topology.rank + 1, topology.rank);
             std::vector<std::size_t> gatherVCounts(topology.size);
             std::vector<std::size_t> gatherVOffsets(topology.size);
@@ -531,6 +552,28 @@ int main(int argc, char** argv)
                 for(int rank = 0; rank < topology.size; ++rank)
                     for(std::size_t i = 0u; i < static_cast<std::size_t>(rank + 1); ++i)
                         assert((*gatherVOutput)[gatherVOffsets[rank] / sizeof(int) + i] == rank);
+
+            try
+            {
+                caravan::syncWait<caravan::GatherResult>(caravan::mpi::gatherV(
+                    mpi,
+                    caravan::ConstBufferLease{
+                        overlappingGatherBuffer,
+                        overlappingGatherBuffer->data() + 1,
+                        sizeof(int)},
+                    caravan::BufferLease{
+                        overlappingGatherBuffer,
+                        overlappingGatherBuffer->data(),
+                        overlappingGatherBuffer->size() * sizeof(int)},
+                    std::vector<std::size_t>(topology.size, sizeof(int)),
+                    gatherVOffsets,
+                    caravan::Peer{0},
+                    cartesian.communicator));
+                assert(false);
+            }
+            catch(std::invalid_argument const&)
+            {
+            }
 
             std::atomic<bool> senderStarted = false;
             auto requestSender = caravan::mpi::request<int>(
