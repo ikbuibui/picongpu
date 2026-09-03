@@ -221,7 +221,7 @@ namespace picongpu
             using namespace particles::boundary;
             std::array<Description, simDim> result;
             DataSpace<DIM3> const periodic
-                = Environment<simDim>::get().EnvironmentController().getCommunicator().getPeriodic();
+                = Environment<simDim>::get().GridController().getCommunicator().getPeriodic();
             for(uint32_t d = 0; d < simDim; d++)
             {
                 result[d].kind = (periodic[d] ? Kind::Periodic : Kind::Absorbing);

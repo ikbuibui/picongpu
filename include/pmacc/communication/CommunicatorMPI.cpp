@@ -64,9 +64,6 @@ namespace pmacc
     } // namespace detail
 
     template<unsigned DIM>
-    CommunicatorMPI<DIM>::~CommunicatorMPI() = default;
-
-    template<unsigned DIM>
     void CommunicatorMPI<DIM>::init(
         caravan::MpiContext& context,
         DataSpace<DIM3> numberProcesses,
@@ -130,26 +127,6 @@ namespace pmacc
     }
 
     template<unsigned DIM>
-    caravan::Future<caravan::SendResult> CommunicatorMPI<DIM>::startSendAsync(
-        uint32_t ex,
-        char const* sendData,
-        size_t sendBytes,
-        uint32_t tag)
-    {
-        return asyncContext.spawnFuture<caravan::SendResult>(send(ex, sendData, sendBytes, tag));
-    }
-
-    template<unsigned DIM>
-    caravan::Future<caravan::ReceiveResult> CommunicatorMPI<DIM>::startReceiveAsync(
-        uint32_t ex,
-        char* receiveData,
-        size_t receiveBytes,
-        uint32_t tag)
-    {
-        return asyncContext.spawnFuture<caravan::ReceiveResult>(receive(ex, receiveData, receiveBytes, tag));
-    }
-
-    template<unsigned DIM>
     caravan::mpi::OperationSender<caravan::AllReduceResult> CommunicatorMPI<DIM>::signalAllReduce(
         void const* input,
         void* output,
@@ -171,8 +148,6 @@ namespace pmacc
     {
         return caravan::mpi::barrier(*mpiContext, communicatorId);
     }
-
-    // description in ICommunicator
 
     template<unsigned DIM>
     bool CommunicatorMPI<DIM>::slide()

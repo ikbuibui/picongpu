@@ -46,7 +46,7 @@ The current implementation has two main kinds of work remaining:
    been demonstrated.
 
 The C1-C6 gate for expanding migration is satisfied. The PMacc API-stability and
-PIConGPU entry gates remain blocked by S4-S6, P1-P3, M1-M2, and V1.
+PIConGPU entry gates remain blocked by S5-S6, P1-P3, M1-M2, and V1.
 
 ---
 
@@ -89,7 +89,7 @@ Every change in this plan must preserve the following invariants.
 | S1 | P1 | Implemented | Establish sender-first PMacc APIs and name eager adapters | Stable PMacc API |
 | S2 | P1 | Implemented | Replace particle callback state machines | Particle migration exit |
 | S3 | P1 | Implemented | Simplify `AsyncScope` to counting-scope semantics | Eager allocation work |
-| S4 | P1 | Open | Reduce communicator and MPI type-erasure layers | Stable MPI hot path |
+| S4 | P1 | Implemented | Reduce communicator and MPI type-erasure layers | Stable MPI hot path |
 | S5 | P1 | Partly implemented | Simplify collective ordering state | MPI maintainability |
 | S6 | P1 | Open | Remove smaller accidental complexity | Stable internal implementation |
 | P1 | P1 | Open | Add allocation and dispatch measurement harness | Allocation decisions |
@@ -396,6 +396,21 @@ does not otherwise use operation IDs.
 
 ## S4: Reduce communicator and MPI type-erasure layers
 
+**Implementation status: complete.** The sole communicator implementation is now
+used directly: `ICommunicator` and its dimension-erasing `EnvironmentController`
+registry are removed. Grid topology remains owned by `GridController` and
+`CommunicatorMPI`, while asynchronous execution delegates directly to the attached
+Caravan `MpiContext`. The eager communicator methods and compatibility-owned async
+context are removed; the remaining legacy MPI tasks own their temporary eager
+bridge locally until M2 deletes those tasks.
+
+Ordinary `OperationSender<T>` now stores concrete, MPI-free operation descriptors
+instead of an allocating `std::function` start closure. Native types and the
+remaining queue callback erasure stay behind the normal/native header boundary. An
+executable-local allocation check with GCC/libstdc++ records zero allocations for
+borrowed-send construction and connect; P1 remains responsible for the full,
+portable start/completion and callback-size baseline.
+
 - Audit whether `ICommunicator` still needs runtime polymorphism after legacy task
   removal.
 - Separate topology/domain configuration from async send/receive execution.
@@ -653,7 +668,7 @@ Track deleted concepts and call sites, not only added sender equivalents.
 - [x] S1 normal PMacc operations are sender-first.
 - [x] S2 particle chunking no longer uses the callback state machine.
 - [x] S3 scope uses counting-scope rather than registry semantics.
-- [ ] S4 communicator and MPI type erasure have been reduced or justified by
+- [x] S4 communicator and MPI type erasure have been reduced or justified by
       measurements.
 - [ ] S5 collective ordering state has one documented model.
 - [ ] S6 smaller redundant dependencies and unsafe edge cases are removed.
