@@ -155,6 +155,59 @@ namespace
         bool* started;
     };
 
+    struct ScopeOperationTrackingSender
+    {
+        using completion_signatures = caravan::detail::DefaultCompletionSignatures<caravan::ValueSignature<>>;
+
+        template<typename T_Receiver>
+        struct Operation
+        {
+            ~Operation()
+            {
+                *destroyed = true;
+            }
+
+            void start() & noexcept
+            {
+                receiver.set_value();
+            }
+
+            bool* destroyed;
+            T_Receiver receiver;
+        };
+
+        template<typename T_Receiver>
+        auto connect(T_Receiver&& receiver) &&
+        {
+            return Operation<std::decay_t<T_Receiver>>{destroyed, std::forward<T_Receiver>(receiver)};
+        }
+
+        bool* destroyed;
+    };
+
+    struct ThrowingConnectSender
+    {
+        using completion_signatures = caravan::detail::DefaultCompletionSignatures<caravan::ValueSignature<>>;
+
+        template<typename T_Receiver>
+        struct Operation
+        {
+            void start() & noexcept
+            {
+                receiver.set_value();
+            }
+
+            T_Receiver receiver;
+        };
+
+        template<typename T_Receiver>
+        auto connect(T_Receiver&& receiver) && -> Operation<std::decay_t<T_Receiver>>
+        {
+            static_cast<void>(receiver);
+            throw std::runtime_error("connect failed");
+        }
+    };
+
     struct RecursionTrackingExecutor
     {
         template<typename T_Function>
@@ -631,6 +684,24 @@ namespace
         catch(std::logic_error const&)
         {
         }
+
+        bool operationDestroyed = false;
+        caravan::AsyncScope synchronousScope;
+        auto synchronous = synchronousScope.spawn(ScopeOperationTrackingSender{&operationDestroyed});
+        assert(operationDestroyed);
+        synchronous.wait();
+        synchronousScope.join().wait();
+
+        caravan::AsyncScope constructionFailureScope;
+        try
+        {
+            constructionFailureScope.spawn(ThrowingConnectSender{});
+            assert(false);
+        }
+        catch(std::runtime_error const&)
+        {
+        }
+        constructionFailureScope.join().wait();
     }
 
     void testPendingScopeDestructionDiagnosed()
