@@ -94,7 +94,6 @@ namespace caravan
             std::function<void(NativeMpiContext&, std::span<MPI_Status const>)> completed;
             std::function<void(std::exception_ptr)> failed;
             std::function<void()> stopped;
-            std::optional<CommunicatorId> collective;
 
             void setFailed(std::exception_ptr error) const
             {
@@ -112,7 +111,6 @@ namespace caravan
             std::function<void(NativeMpiContext&)> invoke;
             std::function<void(std::exception_ptr)> failed;
             std::function<void()> stopped;
-            std::optional<CommunicatorId> collective;
 
             void setFailed(std::exception_ptr error) const
             {
@@ -309,15 +307,10 @@ namespace caravan
             using completion_signatures
                 = caravan::detail::DefaultCompletionSignatures<caravan::detail::ResultValueSignature<T>>;
 
-            RequestSender(
-                MpiContext& context,
-                T_Start start,
-                T_Complete complete,
-                std::optional<CommunicatorId> collective)
+            RequestSender(MpiContext& context, T_Start start, T_Complete complete)
                 : m_context(&context)
                 , m_start(std::move(start))
                 , m_complete(std::move(complete))
-                , m_collective(collective)
             {
             }
 
@@ -325,17 +318,11 @@ namespace caravan
             class Operation
             {
             public:
-                Operation(
-                    MpiContext& context,
-                    T_Start start,
-                    T_Complete complete,
-                    T_Receiver receiver,
-                    std::optional<CommunicatorId> collective)
+                Operation(MpiContext& context, T_Start start, T_Complete complete, T_Receiver receiver)
                     : m_context(&context)
                     , m_start(std::move(start))
                     , m_complete(std::move(complete))
                     , m_receiver(std::move(receiver))
-                    , m_collective(collective)
                 {
                 }
 
@@ -377,8 +364,7 @@ namespace caravan
                                         m_receiver.set_value(detail::invokeNative(m_complete, statuses));
                                 },
                                 [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
-                                [this] { m_receiver.set_stopped(); },
-                                m_collective});
+                                [this] { m_receiver.set_stopped(); }});
                     }
                     catch(...)
                     {
@@ -391,7 +377,6 @@ namespace caravan
                 T_Start m_start;
                 T_Complete m_complete;
                 T_Receiver m_receiver;
-                std::optional<CommunicatorId> m_collective;
                 bool m_started = false;
             };
 
@@ -402,34 +387,29 @@ namespace caravan
                     *m_context,
                     std::move(m_start),
                     std::move(m_complete),
-                    std::forward<T_Receiver>(receiver),
-                    m_collective};
+                    std::forward<T_Receiver>(receiver)};
             }
 
         private:
             MpiContext* m_context;
             T_Start m_start;
             T_Complete m_complete;
-            std::optional<CommunicatorId> m_collective;
         };
 
         /** Describe native MPI work without initiating it until operation start.
          *
-         * A communicator orders submissions by operation-start time. Use
-         * CollectiveLane when dependency readiness must not define logical order.
+         * The queue mutex linearizes submissions and the worker consumes that FIFO.
+         * Callers are responsible for making collective queue-commit order identical
+         * across ranks; use CollectiveLane when dependency readiness or concurrent
+         * submission can invert that order.
          */
         template<typename T, typename T_Start, typename T_Complete>
-        auto request(
-            MpiContext& context,
-            T_Start&& start,
-            T_Complete&& complete,
-            std::optional<CommunicatorId> collective = {})
+        auto request(MpiContext& context, T_Start&& start, T_Complete&& complete)
         {
             return RequestSender<T, std::decay_t<T_Start>, std::decay_t<T_Complete>>{
                 context,
                 std::forward<T_Start>(start),
-                std::forward<T_Complete>(complete),
-                collective};
+                std::forward<T_Complete>(complete)};
         }
 
         template<typename T, typename T_Operation, bool T_Blocking>
@@ -441,10 +421,9 @@ namespace caravan
             using completion_signatures
                 = caravan::detail::DefaultCompletionSignatures<caravan::detail::ResultValueSignature<T>>;
 
-            ContextSender(MpiContext& context, T_Operation operation, std::optional<CommunicatorId> collective = {})
+            ContextSender(MpiContext& context, T_Operation operation)
                 : m_context(&context)
                 , m_operation(std::move(operation))
-                , m_collective(collective)
             {
             }
 
@@ -452,15 +431,10 @@ namespace caravan
             class Operation
             {
             public:
-                Operation(
-                    MpiContext& context,
-                    T_Operation operation,
-                    T_Receiver receiver,
-                    std::optional<CommunicatorId> collective)
+                Operation(MpiContext& context, T_Operation operation, T_Receiver receiver)
                     : m_context(&context)
                     , m_operation(std::move(operation))
                     , m_receiver(std::move(receiver))
-                    , m_collective(collective)
                 {
                 }
 
@@ -482,8 +456,7 @@ namespace caravan
                                 detail::NativeBlockingSubmission{
                                     [this](NativeMpiContext& context) { complete(context); },
                                     [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
-                                    [this] { m_receiver.set_stopped(); },
-                                    m_collective});
+                                    [this] { m_receiver.set_stopped(); }});
                         else
                             detail::NativeAccess::submit(
                                 *m_context,
@@ -492,8 +465,7 @@ namespace caravan
                                     [this](NativeMpiContext& context, std::span<MPI_Status const>)
                                     { complete(context); },
                                     [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
-                                    [this] { m_receiver.set_stopped(); },
-                                    m_collective});
+                                    [this] { m_receiver.set_stopped(); }});
                     }
                     catch(...)
                     {
@@ -516,7 +488,6 @@ namespace caravan
                 MpiContext* m_context;
                 T_Operation m_operation;
                 T_Receiver m_receiver;
-                std::optional<CommunicatorId> m_collective;
                 bool m_started = false;
             };
 
@@ -526,37 +497,40 @@ namespace caravan
                 return Operation<std::decay_t<T_Receiver>>{
                     *m_context,
                     std::move(m_operation),
-                    std::forward<T_Receiver>(receiver),
-                    m_collective};
+                    std::forward<T_Receiver>(receiver)};
             }
 
         private:
             MpiContext* m_context;
             T_Operation m_operation;
-            std::optional<CommunicatorId> m_collective;
         };
 
-        /** Lazily invoke a short operation on the MPI authority. */
+        /** Lazily invoke a short operation on the MPI authority.
+         *
+         * Collective calls use the same caller-managed ordering contract as
+         * request().
+         */
         template<typename T_Operation>
-        auto invoke(MpiContext& context, T_Operation&& operation, std::optional<CommunicatorId> collective = {})
+        auto invoke(MpiContext& context, T_Operation&& operation)
         {
             using Operation = std::decay_t<T_Operation>;
             using Result
                 = std::remove_cv_t<std::remove_reference_t<std::invoke_result_t<Operation&, NativeMpiContext&>>>;
-            return ContextSender<Result, Operation, false>{context, std::forward<T_Operation>(operation), collective};
+            return ContextSender<Result, Operation, false>{context, std::forward<T_Operation>(operation)};
         }
 
-        /** Lazily invoke a blocking operation without draining unrelated requests. */
+        /** Lazily invoke a blocking operation without draining unrelated requests.
+         *
+         * Collective calls use the same caller-managed ordering contract as
+         * request().
+         */
         template<typename T_Operation>
-        auto invokeBlocking(
-            MpiContext& context,
-            T_Operation&& operation,
-            std::optional<CommunicatorId> collective = {})
+        auto invokeBlocking(MpiContext& context, T_Operation&& operation)
         {
             using Operation = std::decay_t<T_Operation>;
             using Result
                 = std::remove_cv_t<std::remove_reference_t<std::invoke_result_t<Operation&, NativeMpiContext&>>>;
-            return ContextSender<Result, Operation, true>{context, std::forward<T_Operation>(operation), collective};
+            return ContextSender<Result, Operation, true>{context, std::forward<T_Operation>(operation)};
         }
 
     } // namespace mpi
