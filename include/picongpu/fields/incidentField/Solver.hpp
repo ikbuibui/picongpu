@@ -232,7 +232,7 @@ namespace picongpu
                     auto const numLocalDomains = gridController.getGpuNodes();
 
                     DataSpace<DIM3> const periodic
-                        = Environment<simDim>::get().EnvironmentController().getCommunicator().getPeriodic();
+                        = Environment<simDim>::get().GridController().getCommunicator().getPeriodic();
 
                     for(uint32_t d = 0u; d < simDim; ++d)
                     {

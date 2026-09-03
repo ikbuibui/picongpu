@@ -60,12 +60,6 @@ namespace pmacc
              */
             HINLINE pmacc::QueueController& QueueController();
 
-            /** get the singleton EnvironmentController
-             *
-             * @return instance of EnvironmentController
-             */
-            HINLINE pmacc::EnvironmentController& EnvironmentController();
-
             /** get the singleton Factory
              *
              * @return instance of Factory

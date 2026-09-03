@@ -54,14 +54,6 @@ namespace pmacc
             return QueueController::getInstance();
         }
 
-        pmacc::EnvironmentController& Environment::EnvironmentController()
-        {
-            PMACC_ASSERT_MSG(
-                EnvironmentContext::getInstance().isMpiInitialized(),
-                "Environment< DIM >::initDevices() must be called before this method!");
-            return EnvironmentController::getInstance();
-        }
-
         pmacc::Factory& Environment::Factory()
         {
             PMACC_ASSERT_MSG(
@@ -152,7 +144,6 @@ namespace pmacc
     {
         detail::EnvironmentContext::getInstance().init(mpiContext);
         GridController().init(mpiContext, devices, periodic);
-        EnvironmentController();
         detail::EnvironmentContext::getInstance().setDevice(static_cast<int>(GridController().getHostRank()));
         QueueController().activate();
         MemoryInfo();

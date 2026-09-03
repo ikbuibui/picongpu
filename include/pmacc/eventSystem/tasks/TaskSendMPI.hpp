@@ -23,7 +23,7 @@
 #pragma once
 
 #include "pmacc/Environment.hpp"
-#include "pmacc/communication/ICommunicator.hpp"
+#include "pmacc/async/Context.hpp"
 #include "pmacc/eventSystem/tasks/MPITask.hpp"
 
 namespace pmacc
@@ -42,12 +42,12 @@ namespace pmacc
         void init() override
         {
             auto cPtr = exchange->getCPtrCurrentSize();
-            auto& communicator = Environment<DIM>::get().EnvironmentController().getCommunicator();
-            future = communicator.startSendAsync(
+            auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
+            future = context.spawnFuture<caravan::SendResult>(communicator.send(
                 exchange->getExchangeType(),
                 cPtr.asCharPtr(),
                 cPtr.sizeInBytes(),
-                exchange->getCommunicationTag());
+                exchange->getCommunicationTag()));
         }
 
         bool executeIntern() override
@@ -55,7 +55,7 @@ namespace pmacc
             if(this->isFinished())
                 return true;
 
-            Environment<DIM>::get().EnvironmentController().getCommunicator().progressAsync();
+            context.runReady();
             if(future.state() == caravan::CompletionState::pending)
                 return false;
             static_cast<void>(future.result());
@@ -79,6 +79,7 @@ namespace pmacc
 
     private:
         Exchange<TYPE, DIM>* exchange;
+        async::Context context;
         caravan::Future<caravan::SendResult> future;
     };
 
