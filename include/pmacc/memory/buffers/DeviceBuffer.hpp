@@ -101,7 +101,7 @@ namespace pmacc
             return async::OwnedView{*view, *devBuffer};
         }
 
-        /** allocate data accessible from the device
+        /** Allocate uninitialized data accessible from the device.
          *
          * @param size extent for each dimension (in elements)
          * @param sizeOnDevice memory with the current size of the grid is stored on device
@@ -128,10 +128,9 @@ namespace pmacc
             if(sizeOnDevice)
             {
                 createSizeOnDeviceBuffers();
+                this->setSize(size.productOfComponents());
             }
-            this->setSize(size.productOfComponents());
             this->isMemoryContiguous = true;
-            reset(false);
         }
 
         /** create a shallow view into an existing buffer
@@ -160,10 +159,9 @@ namespace pmacc
             if(sizeOnDevice)
             {
                 createSizeOnDeviceBuffers();
+                this->setSize(size.productOfComponents());
             }
-            this->setSize(size.productOfComponents());
             this->isMemoryContiguous = T_dim == DIM1;
-            reset(true);
         }
 
         ~DeviceBuffer() override
