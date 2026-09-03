@@ -146,19 +146,26 @@ auto run(caravan::MpiContext& mpi) -> int
     using SuperCell = typename MappingDesc::SuperCellSize;
     auto residualBuffer = std::make_unique<pmacc::HostDeviceBuffer<float, DIM1>>(pmacc::DataSpace<DIM1>::create(1));
 
-    // Buffer construction still uses the legacy allocator path. Finish those initial fills before explicit work.
-    ::alpaka::wait(pmacc::manager::Device<pmacc::ComputeDevice>::get().current());
     auto boundaryKernel
         = PMACC_LOCKSTEP_KERNEL(SetBoundaryConditions{}).config(borderMapper.getGridDim(), SuperCell{});
+    auto initialValues = caravan::alpaka::then(
+        caravan::alpaka::then(
+            pmacc::async::fill(computeQueue, buff1->getDeviceBuffer().getOwnedAlpakaView(), 0u),
+            pmacc::async::fill(computeQueue, buff2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
+        pmacc::async::fill(computeQueue, residualBuffer->getDeviceBuffer().getOwnedAlpakaView(), 0u));
     auto initialBoundaries = caravan::alpaka::then(
-        boundaryKernel.sender(
-            computeQueue,
-            pmacc::async::retain(buff1->getDeviceBuffer().getDataBox(), buff1->getDeviceBuffer().getOwnedAlpakaView()),
-            NUM_DEVICES_PER_DIM,
-            gc.getPosition(),
-            subGrid.getLocalDomain().offset,
-            gridSize,
-            borderMapper),
+        caravan::alpaka::then(
+            std::move(initialValues),
+            boundaryKernel.sender(
+                computeQueue,
+                pmacc::async::retain(
+                    buff1->getDeviceBuffer().getDataBox(),
+                    buff1->getDeviceBuffer().getOwnedAlpakaView()),
+                NUM_DEVICES_PER_DIM,
+                gc.getPosition(),
+                subGrid.getLocalDomain().offset,
+                gridSize,
+                borderMapper)),
         boundaryKernel.sender(
             computeQueue,
             pmacc::async::retain(buff2->getDeviceBuffer().getDataBox(), buff2->getDeviceBuffer().getOwnedAlpakaView()),
