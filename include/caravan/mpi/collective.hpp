@@ -217,9 +217,11 @@ namespace caravan::mpi
 
     /** Plan collective initiation order independently of predecessor readiness.
      *
-     * Every rank must submit the same sequence on this communicator. An unstarted
-     * or destroyed entry is skipped, while failed/stopped predecessors retire
-     * their entries without initiating MPI. MpiContext must outlive all entries.
+     * Every rank must submit the same sequence on this communicator. A reservation
+     * becomes committed when its predecessor completes or skipped when abandoned;
+     * committed and skipped entries retire from the front in reservation order.
+     * Failed/stopped predecessors commit terminal forwarding without initiating
+     * MPI. MpiContext must outlive all entries.
      */
     class CollectiveLane
     {
