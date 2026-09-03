@@ -25,7 +25,6 @@
 #include "pmacc/communication/CommunicatorMPI.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/eventSystem/eventSystem.hpp"
-#include "pmacc/mappings/simulation/EnvironmentController.hpp"
 #include "pmacc/mappings/simulation/SubGrid.hpp"
 
 namespace pmacc
@@ -87,8 +86,6 @@ namespace pmacc
 
                 comm.init(mpiContext, tmp, periodicTmp);
                 commIsInit = true;
-
-                Environment<DIM>::get().EnvironmentController().setCommunicator(comm);
             }
         }
 
@@ -208,7 +205,7 @@ namespace pmacc
          */
         Mask const& getCommunicationMask() const
         {
-            return Environment<DIM>::get().EnvironmentController().getCommunicationMask();
+            return comm.getCommunicationMask();
         }
 
         /**

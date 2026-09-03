@@ -263,7 +263,7 @@ namespace pmacc
         template<typename T_Queue>
         auto send(T_Queue& queue)
         {
-            auto& communicator = Environment<DIM>::get().EnvironmentController().getCommunicator();
+            auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
             auto source = getDeviceBuffer().getOwnedAlpakaView();
             std::optional<decltype(source)> deviceStaging;
             if(hasDeviceDoubleBuffer())
@@ -308,7 +308,7 @@ namespace pmacc
         template<typename T_Queue>
         auto receive(T_Queue& queue)
         {
-            auto& communicator = Environment<DIM>::get().EnvironmentController().getCommunicator();
+            auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
             auto destination = getDeviceBuffer().getOwnedAlpakaView();
             std::optional<decltype(destination)> deviceStaging;
             if(hasDeviceDoubleBuffer())
