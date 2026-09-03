@@ -73,11 +73,7 @@ TEST_CASE("vector constructor generator", "[vector]")
         async::retain(
             hostDeviceBuffer.getDeviceBuffer().data(),
             hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView()));
-    auto copy = async::copy(
-        queue,
-        hostDeviceBuffer.getHostBuffer().getOwnedAlpakaView(),
-        hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(),
-        DataSpace<DIM1>{numElements}.toAlpakaMemVec());
+    auto copy = hostDeviceBuffer.deviceToHost(queue);
     context.wait(context.spawn(caravan::alpaka::then(std::move(kernel), std::move(copy))));
 
     REQUIRE(hostDeviceBuffer.getHostBuffer().data()[0] == Vector<uint32_t, 3u>(0u, 1u, 2u).shrink<TEST_DIM>());
@@ -522,17 +518,7 @@ TEST_CASE("vector ops", "[vector]")
             hostDeviceBuffer.getDeviceBuffer().data(),
             hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView()),
         async::retain(numTestsBuffer.getDeviceBuffer().data(), numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView()));
-    auto copyResults = caravan::alpaka::then(
-        async::copy(
-            queue,
-            hostDeviceBuffer.getHostBuffer().getOwnedAlpakaView(),
-            hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(),
-            DataSpace<DIM1>{numElements}.toAlpakaMemVec()),
-        async::copy(
-            queue,
-            numTestsBuffer.getHostBuffer().getOwnedAlpakaView(),
-            numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView(),
-            DataSpace<DIM1>{1}.toAlpakaMemVec()));
+    auto copyResults = caravan::alpaka::then(hostDeviceBuffer.deviceToHost(queue), numTestsBuffer.deviceToHost(queue));
     context.wait(context.spawn(
         caravan::alpaka::then(
             caravan::alpaka::then(std::move(initialize), std::move(kernel)),
@@ -577,17 +563,7 @@ TEST_CASE("vector generic", "[vector]")
             hostDeviceBuffer.getDeviceBuffer().data(),
             hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView()),
         async::retain(numTestsBuffer.getDeviceBuffer().data(), numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView()));
-    auto copyResults = caravan::alpaka::then(
-        async::copy(
-            queue,
-            hostDeviceBuffer.getHostBuffer().getOwnedAlpakaView(),
-            hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(),
-            DataSpace<DIM1>{numElements}.toAlpakaMemVec()),
-        async::copy(
-            queue,
-            numTestsBuffer.getHostBuffer().getOwnedAlpakaView(),
-            numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView(),
-            DataSpace<DIM1>{1}.toAlpakaMemVec()));
+    auto copyResults = caravan::alpaka::then(hostDeviceBuffer.deviceToHost(queue), numTestsBuffer.deviceToHost(queue));
     context.wait(context.spawn(
         caravan::alpaka::then(
             caravan::alpaka::then(

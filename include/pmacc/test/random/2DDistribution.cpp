@@ -211,11 +211,7 @@ namespace pmacc
                     numSamples,
                     detector.getDeviceBuffer(),
                     GetRanidx<RNGProvider>());
-                auto copy = async::copy(
-                    queue,
-                    detector.getHostBuffer().getOwnedAlpakaView(),
-                    detector.getDeviceBuffer().getOwnedAlpakaView(),
-                    size.toAlpakaMemVec());
+                auto copy = detector.deviceToHost(queue);
 
                 pmacc::TimeInterval timer;
                 timer.toggleStart();

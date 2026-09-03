@@ -614,7 +614,9 @@ tests likewise own queues and compose fills, kernels, and copies as lazy sender 
 they no longer invoke transaction-backed kernel or buffer operations. RNG-provider
 initialization now returns a lazy sender for an explicit queue; PIConGPU initializes it
 through the shared async context, and the standalone RNG test composes initialization,
-fill, generation, and copy without the legacy event system. This removes the stale
+fill, generation, and copy without the legacy event system. `HostDeviceBuffer` now
+encapsulates lazy host-device copies and size propagation in queue-taking sender overloads;
+the no-argument eager overloads remain only for unmigrated callers. This removes the stale
 pre-Caravan initialization path and continues call-site migration without adding another
 compatibility layer.
 
