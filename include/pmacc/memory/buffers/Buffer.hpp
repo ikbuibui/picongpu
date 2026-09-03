@@ -102,6 +102,12 @@ namespace pmacc
             return alpaka::getPtrNative(this->currentSizeBufferHost)[0];
         }
 
+        /** Retain the host-side size storage for an asynchronous operation. */
+        auto getOwnedSizeHostBuffer() const
+        {
+            return currentSizeBufferHost;
+        }
+
         /** Update the host-side size without creating a legacy event-system dependency.
          *
          * Device-side size synchronization, when enabled, must be explicitly composed by the caller.
