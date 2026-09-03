@@ -67,7 +67,7 @@ namespace pmacc
             , m_capacityND(size)
             , isMemoryContiguous(true)
         {
-            Buffer::setSize(size.productOfComponents());
+            setSizeHostSide(size.productOfComponents());
         }
 
         virtual ~Buffer()
