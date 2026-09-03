@@ -45,8 +45,10 @@ The current implementation has two main kinds of work remaining:
    sanitizer runs, GPU-aware MPI, and the performance gates in `PLAN.md` have not
    been demonstrated.
 
-The C1-C6 gate for expanding migration is satisfied. The PMacc API-stability and
-PIConGPU entry gates remain blocked by P1-P3, M1-M2, and V1.
+The C1-C6 gate for expanding migration is satisfied. M1-M2 now proceed before
+performance work; P1-P3 are deliberately deferred until the parallel legacy
+infrastructure has been removed. The PMacc API-stability and PIConGPU entry gates
+remain blocked by M1-M2, P1-P3, and V1.
 
 ---
 
@@ -92,10 +94,10 @@ Every change in this plan must preserve the following invariants.
 | S4 | P1 | Implemented | Reduce communicator and MPI type-erasure layers | Stable MPI hot path |
 | S5 | P1 | Implemented | Simplify collective ordering state | MPI maintainability |
 | S6 | P1 | Implemented | Remove smaller accidental complexity | Stable internal implementation |
-| P1 | P1 | Open | Add allocation and dispatch measurement harness | Allocation decisions |
-| P2 | P1 | Open | Remove unconditional eager-path allocations | Performance gates |
-| P3 | P1 | Open | Bound and tune progress-loop work | MPI latency and CPU-cost gates |
-| M1-M2 | P1 | Open | Complete PMacc migration and delete legacy paths | PIConGPU entry gate |
+| P1 | P1 | Deferred | Add allocation and dispatch measurement harness | Allocation decisions |
+| P2 | P1 | Deferred | Remove unconditional eager-path allocations | Performance gates |
+| P3 | P1 | Deferred | Bound and tune progress-loop work | MPI latency and CPU-cost gates |
+| M1-M2 | P1 | In progress | Complete PMacc migration and delete legacy paths | PIConGPU entry gate |
 | V1 | P1 | In progress | Run sanitizer, multi-rank, GPU, and performance validation | Production acceptance |
 
 C1-C6 and S1-S6 are implemented. Structural allocation optimizations in P2 must
@@ -463,6 +465,10 @@ with those callers in M2; no compatibility shells were added.
 
 # Phase P: allocation and dispatch performance
 
+**Implementation status: deferred until M1-M2 complete.** Measuring and tuning both
+legacy and replacement dispatch paths would optimize transitional code that M2 is
+intended to delete.
+
 ## P1: Establish a reproducible allocation baseline
 
 Add a dedicated microbenchmark/test executable that records:
@@ -592,6 +598,14 @@ Add allocation-specific gates:
 # Phase M: complete migration and remove parallel infrastructure
 
 ## M1: PMacc migration
+
+**Implementation status: in progress.** The PIConGPU executable now runs under
+`MpiRuntime` and passes its owned `MpiContext` through `SimulationStarter` to PMacc
+device initialization. `SimulationHelper` owns one shared PMacc async context, and
+the initial E/B guard exchange uses the sender-first field API through that context.
+Domain adjustment now uses the Caravan all-gather operation, and restart/device-memory
+barriers use the communicator sender. This removes the stale pre-Caravan initialization
+path and starts call-site migration without adding another compatibility layer.
 
 1. Convert field, particle, reduction, gather, signal, and helper operations to the
    sender-first API.

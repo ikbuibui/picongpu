@@ -502,6 +502,16 @@ int main(int argc, char** argv)
                 for(int rank = 0; rank < topology.size; ++rank)
                     assert((*gatherOutput)[rank] == rank);
 
+            std::fill(gatherOutput->begin(), gatherOutput->end(), -1);
+            auto const allGatherResult = caravan::syncWait<caravan::GatherResult>(caravan::mpi::allGather(
+                mpi,
+                caravan::BufferLease{gatherInput, gatherInput.get(), sizeof(*gatherInput)},
+                caravan::BufferLease{gatherOutput, gatherOutput->data(), gatherOutput->size() * sizeof(int)},
+                cartesian.communicator));
+            assert(allGatherResult.bytes == gatherOutput->size() * sizeof(int));
+            for(int rank = 0; rank < topology.size; ++rank)
+                assert((*gatherOutput)[rank] == rank);
+
             auto overlappingGatherBuffer = std::make_shared<std::vector<int>>(topology.size + 1, topology.rank);
             try
             {
