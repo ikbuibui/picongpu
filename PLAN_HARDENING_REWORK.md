@@ -604,8 +604,13 @@ Add allocation-specific gates:
 device initialization. `SimulationHelper` owns one shared PMacc async context, and
 the initial E/B guard exchange uses the sender-first field API through that context.
 Domain adjustment now uses the Caravan all-gather operation, and restart/device-memory
-barriers use the communicator sender. This removes the stale pre-Caravan initialization
-path and starts call-site migration without adding another compatibility layer.
+barriers use the communicator sender. The PMacc heat-equation and Game of Life examples
+now own their alpaka queues, launch kernels only through lazy senders, use explicit async
+copies, and call the explicit gather boundary; their source no longer uses the legacy
+queue, task, transaction, or kernel-call APIs. Buffer construction still performs legacy
+initial fills internally and remains migration work below the examples. This removes the
+stale pre-Caravan initialization path and starts call-site migration without adding
+another compatibility layer.
 
 1. Convert field, particle, reduction, gather, signal, and helper operations to the
    sender-first API.

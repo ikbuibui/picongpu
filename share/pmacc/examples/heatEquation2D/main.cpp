@@ -139,9 +139,10 @@ auto run(caravan::MpiContext& mpi) -> int
     pmacc::AreaMapping<pmacc::type::CORE, MappingDesc> coreMapper(*mapping);
     pmacc::AreaMapping<pmacc::type::BORDER, MappingDesc> borderMapper(*mapping);
 
+    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
+    pmacc::ComputeDeviceQueue communicationQueue(device);
+    pmacc::ComputeDeviceQueue computeQueue(device);
     pmacc::async::Context asyncContext;
-    auto& communicationQueue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
-    auto& computeQueue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
     using SuperCell = typename MappingDesc::SuperCellSize;
     auto residualBuffer = std::make_unique<pmacc::HostDeviceBuffer<float, DIM1>>(pmacc::DataSpace<DIM1>::create(1));
 
@@ -195,25 +196,22 @@ auto run(caravan::MpiContext& mpi) -> int
                             DX,
                             DT,
                             coreMapper);
-        auto boundary = boundaryKernel.sender(
-            computeQueue,
-            pmacc::async::retain(buff1->getDeviceBuffer().getDataBox(), buff1->getDeviceBuffer().getOwnedAlpakaView()),
-            NUM_DEVICES_PER_DIM,
-            gc.getPosition(),
-            subGrid.getLocalDomain().offset,
-            gridSize,
-            borderMapper);
-        auto coreAndBoundary = caravan::alpaka::then(std::move(core), std::move(boundary));
-
         auto deviceStep = caravan::letValue(
-            asyncContext.onControl(
-                caravan::whenAll(std::move(coreAndBoundary), caravan::asSender(std::move(communication)))),
+            asyncContext.onControl(caravan::whenAll(std::move(core), caravan::asSender(std::move(communication)))),
             [&,
              readView = buff1->getDeviceBuffer().getOwnedAlpakaView(),
              writeView = buff2->getDeviceBuffer().getOwnedAlpakaView(),
              residualView = residualBuffer->getDeviceBuffer().getOwnedAlpakaView(),
              residualHostView = residualBuffer->getHostBuffer().getOwnedAlpakaView()]() mutable
             {
+                auto boundary = boundaryKernel.sender(
+                    computeQueue,
+                    pmacc::async::retain(buff1->getDeviceBuffer().getDataBox(), readView),
+                    NUM_DEVICES_PER_DIM,
+                    gc.getPosition(),
+                    subGrid.getLocalDomain().offset,
+                    gridSize,
+                    borderMapper);
                 auto border
                     = PMACC_LOCKSTEP_KERNEL(StencilFourPoint{})
                           .config(borderMapper.getGridDim(), SuperCell{})
@@ -233,7 +231,9 @@ auto run(caravan::MpiContext& mpi) -> int
                     pmacc::DataSpace<DIM1>::create(1).toAlpakaMemVec());
                 auto resetResidual = pmacc::async::fill(computeQueue, std::move(residualView), 0u);
                 return caravan::alpaka::then(
-                    caravan::alpaka::then(std::move(border), std::move(copyResidual)),
+                    caravan::alpaka::then(
+                        caravan::alpaka::then(std::move(boundary), std::move(border)),
+                        std::move(copyResidual)),
                     std::move(resetResidual));
             });
         auto step = caravan::letValue(
