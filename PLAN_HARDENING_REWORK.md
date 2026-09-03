@@ -46,7 +46,7 @@ The current implementation has two main kinds of work remaining:
    been demonstrated.
 
 The C1-C6 gate for expanding migration is satisfied. The PMacc API-stability and
-PIConGPU entry gates remain blocked by S5-S6, P1-P3, M1-M2, and V1.
+PIConGPU entry gates remain blocked by S6, P1-P3, M1-M2, and V1.
 
 ---
 
@@ -90,7 +90,7 @@ Every change in this plan must preserve the following invariants.
 | S2 | P1 | Implemented | Replace particle callback state machines | Particle migration exit |
 | S3 | P1 | Implemented | Simplify `AsyncScope` to counting-scope semantics | Eager allocation work |
 | S4 | P1 | Implemented | Reduce communicator and MPI type-erasure layers | Stable MPI hot path |
-| S5 | P1 | Partly implemented | Simplify collective ordering state | MPI maintainability |
+| S5 | P1 | Implemented | Simplify collective ordering state | MPI maintainability |
 | S6 | P1 | Open | Remove smaller accidental complexity | Stable internal implementation |
 | P1 | P1 | Open | Add allocation and dispatch measurement harness | Allocation decisions |
 | P2 | P1 | Open | Remove unconditional eager-path allocations | Performance gates |
@@ -98,9 +98,9 @@ Every change in this plan must preserve the following invariants.
 | M1-M2 | P1 | Open | Complete PMacc migration and delete legacy paths | PIConGPU entry gate |
 | V1 | P1 | In progress | Run sanitizer, multi-rank, GPU, and performance validation | Production acceptance |
 
-C1-C6 and S1-S2 are implemented. P1 measurements may proceed concurrently with
-S3-S6, but structural allocation optimizations in P2 must use those measurements
-and must not weaken the invariants above.
+C1-C6 and S1-S5 are implemented. P1 measurements may proceed concurrently with
+S6, but structural allocation optimizations in P2 must use those measurements and
+must not weaken the invariants above.
 
 ---
 
@@ -428,14 +428,21 @@ one abstraction layer.
 
 ## S5: Simplify collective ordering state
 
-- Verify whether raw collective submissions can ever reach the MPI worker out of
-  their reservation order when ticket creation and FIFO queue insertion are one
-  atomic transaction under the queue mutex.
-- Remove the raw pending map if it cannot observe an inversion.
-- Keep the managed ordering layer only where dependency readiness can invert
-  initiation.
-- Consolidate ticket allocation, queue commit, skip, and shutdown accounting into
-  one state machine with explicit invariants.
+**Implementation status: complete.** Ordinary and native submissions have no
+collective ticket or pending map. Queue insertion is the only ordering point: the
+queue mutex linearizes insertion, and the MPI worker consumes that FIFO, so raw
+operations initiate in queue-commit order. Callers of native expert APIs must make
+that order identical across ranks or compose through
+`CollectiveLane`; the former no-op communicator marker has been removed.
+
+Managed ordering remains only in `CollectiveLane`, where readiness can differ from
+logical order. Each communicator now has one contiguous deque state machine:
+reservations transition from `reserved` to `committed` or `skipped`, and only the
+front can retire. Every reservation contributes exactly once to shutdown
+accounting until retirement. Shutdown changes all still-reserved entries to
+`skipped`, and committed callbacks run only after releasing the queue mutex.
+Existing inversion, abandonment, failed/stopped predecessor, factory-failure, and
+point-to-point independence tests pass with one, two, and four MPI ranks.
 
 ## S6: Remove smaller accidental complexity
 
@@ -670,7 +677,7 @@ Track deleted concepts and call sites, not only added sender equivalents.
 - [x] S3 scope uses counting-scope rather than registry semantics.
 - [x] S4 communicator and MPI type erasure have been reduced or justified by
       measurements.
-- [ ] S5 collective ordering state has one documented model.
+- [x] S5 collective ordering state has one documented model.
 - [ ] S6 smaller redundant dependencies and unsafe edge cases are removed.
 - [ ] Eager adapters are isolated and named as migration/interop boundaries.
 

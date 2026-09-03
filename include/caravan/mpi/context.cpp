@@ -71,11 +71,7 @@ namespace caravan
                     std::make_exception_ptr(std::logic_error("Recursive native MPI submission is not allowed")));
                 return;
             }
-            auto const collective = submission.collective;
-            submit(
-                std::move(submission),
-                [this](detail::NativeSubmission output) { startNative(std::move(output)); },
-                collective);
+            submit(std::move(submission), [this](detail::NativeSubmission output) { startNative(std::move(output)); });
         }
 
         void invokeBlocking(detail::NativeBlockingSubmission submission)
@@ -86,11 +82,9 @@ namespace caravan
                     std::make_exception_ptr(std::logic_error("Recursive native MPI submission is not allowed")));
                 return;
             }
-            auto const collective = submission.collective;
             submit(
                 std::move(submission),
-                [this](detail::NativeBlockingSubmission output) { startBlocking(std::move(output)); },
-                collective);
+                [this](detail::NativeBlockingSubmission output) { startBlocking(std::move(output)); });
         }
 
         detail::ManagedCollectiveTicket reserveManagedCollective(CommunicatorId communicator)
@@ -99,11 +93,9 @@ namespace caravan
             if(!m_accepting)
                 throw std::runtime_error("MPI context is shutting down");
             auto& lane = m_managedCollectives[communicator.value];
-            auto const sequence = lane.submitted;
-            lane.entries.emplace(sequence, ManagedCollectiveEntry{});
-            ++lane.submitted;
+            auto const ticket = lane.reserve(communicator);
             ++m_outstanding;
-            return {communicator, sequence};
+            return ticket;
         }
 
         void releaseManagedCollective(detail::ManagedCollectiveTicket ticket, std::function<void()> start)
@@ -113,11 +105,7 @@ namespace caravan
                 auto lane = m_managedCollectives.find(ticket.communicator.value);
                 if(lane == m_managedCollectives.end())
                     throw std::logic_error("Unknown managed collective ticket");
-                auto entry = lane->second.entries.find(ticket.sequence);
-                if(entry == lane->second.entries.end() || entry->second.released)
-                    throw std::logic_error("Inactive managed collective ticket");
-                entry->second.start = std::move(start);
-                entry->second.released = true;
+                lane->second.commit(ticket.sequence, std::move(start));
             }
             m_queueReady.notify_one();
         }
@@ -129,10 +117,7 @@ namespace caravan
                 auto lane = m_managedCollectives.find(ticket.communicator.value);
                 if(lane == m_managedCollectives.end())
                     return;
-                auto entry = lane->second.entries.find(ticket.sequence);
-                if(entry == lane->second.entries.end() || entry->second.released)
-                    return;
-                entry->second.released = true;
+                lane->second.skip(ticket.sequence);
             }
             m_queueReady.notify_one();
         }
@@ -172,9 +157,7 @@ namespace caravan
                 m_accepting = false;
                 m_stopping = true;
                 for(auto& [communicator, lane] : m_managedCollectives)
-                    for(auto& [sequence, entry] : lane.entries)
-                        if(!entry.released)
-                            entry.released = true;
+                    lane.skipReserved();
             }
             m_queueReady.notify_one();
         }
@@ -226,21 +209,86 @@ namespace caravan
             std::size_t index;
         };
 
-        struct ManagedCollectiveEntry
-        {
-            std::function<void()> start;
-            bool released = false;
-        };
-
         struct ManagedCollectiveLane
         {
-            std::size_t submitted = 0u;
-            std::size_t next = 0u;
-            std::unordered_map<std::size_t, ManagedCollectiveEntry> entries;
+            enum class State : std::uint8_t
+            {
+                reserved,
+                committed,
+                skipped
+            };
+
+            struct Entry
+            {
+                std::function<void()> start;
+                State state = State::reserved;
+            };
+
+            /* The deque contains every non-retired ticket in contiguous sequence
+             * order. Only the front may retire, and only after commit or skip.
+             * Each entry contributes one to m_outstanding until popReady. These
+             * transitions and all accesses happen under m_queueMutex; callbacks
+             * run only after the lock is released.
+             */
+            detail::ManagedCollectiveTicket reserve(CommunicatorId communicator)
+            {
+                auto const sequence = firstSequence + entries.size();
+                entries.emplace_back();
+                return {communicator, sequence};
+            }
+
+            void commit(std::size_t sequence, std::function<void()> start)
+            {
+                auto* entry = find(sequence);
+                if(entry == nullptr || entry->state != State::reserved)
+                    throw std::logic_error("Inactive managed collective ticket");
+                entry->start = std::move(start);
+                entry->state = State::committed;
+            }
+
+            void skip(std::size_t sequence) noexcept
+            {
+                auto* entry = find(sequence);
+                if(entry != nullptr && entry->state == State::reserved)
+                    entry->state = State::skipped;
+            }
+
+            void skipReserved() noexcept
+            {
+                for(auto& entry : entries)
+                    if(entry.state == State::reserved)
+                        entry.state = State::skipped;
+            }
+
+            bool ready() const noexcept
+            {
+                return !entries.empty() && entries.front().state != State::reserved;
+            }
+
+            std::optional<std::function<void()>> popReady()
+            {
+                if(!ready())
+                    return std::nullopt;
+                std::optional<std::function<void()>> start{std::move(entries.front().start)};
+                entries.pop_front();
+                ++firstSequence;
+                return start;
+            }
+
+        private:
+            Entry* find(std::size_t sequence) noexcept
+            {
+                if(sequence < firstSequence || sequence - firstSequence >= entries.size())
+                    return nullptr;
+                return &entries[sequence - firstSequence];
+            }
+
+            std::size_t firstSequence = 0u;
+            std::deque<Entry> entries;
         };
 
         template<typename T_Output, typename T_Start>
-        void submit(T_Output output, T_Start&& start, std::optional<CommunicatorId>)
+        void submit(T_Output output, T_Start&& start)
         {
             auto fail = output.failed;
             std::function<void()> command;
@@ -292,11 +340,8 @@ namespace caravan
         bool hasReadyManagedCollective() const
         {
             for(auto const& [communicator, lane] : m_managedCollectives)
-            {
-                auto const entry = lane.entries.find(lane.next);
-                if(entry != lane.entries.end() && entry->second.released)
+                if(lane.ready())
                     return true;
-            }
             return false;
         }
 
@@ -305,27 +350,23 @@ namespace caravan
             assertOwner();
             for(;;)
             {
-                std::function<void()> start;
-                bool found = false;
+                std::optional<std::function<void()>> start;
                 {
                     std::lock_guard lock(m_queueMutex);
                     for(auto& [communicator, lane] : m_managedCollectives)
                     {
-                        auto entry = lane.entries.find(lane.next);
-                        if(entry == lane.entries.end() || !entry->second.released)
-                            continue;
-                        start = std::move(entry->second.start);
-                        lane.entries.erase(entry);
-                        ++lane.next;
-                        --m_outstanding;
-                        found = true;
-                        break;
+                        start = lane.popReady();
+                        if(start)
+                        {
+                            --m_outstanding;
+                            break;
+                        }
                     }
                 }
-                if(!found)
+                if(!start)
                     return;
-                if(start)
-                    start();
+                if(*start)
+                    (*start)();
             }
         }
 
