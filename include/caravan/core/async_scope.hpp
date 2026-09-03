@@ -10,7 +10,6 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
-#include <unordered_map>
 #include <utility>
 
 #include <caravan/core/eager.hpp>
@@ -26,44 +25,24 @@ namespace caravan
 
     namespace detail
     {
-        class SpawnOperation
-        {
-        public:
-            virtual ~SpawnOperation() = default;
-            virtual void start() noexcept = 0;
-        };
-
         class AsyncScopeState
         {
         public:
-            std::size_t reserve()
+            void reserve()
             {
                 std::lock_guard lock(m_mutex);
                 if(m_status != AsyncScopeStatus::open)
                     throw std::logic_error("Cannot spawn into a joined Caravan async scope");
-                auto const id = m_nextId++;
-                m_operations.emplace(id, nullptr);
-                return id;
+                ++m_operations;
             }
 
-            void attach(std::size_t id, std::shared_ptr<SpawnOperation> operation)
+            void complete() noexcept
             {
-                std::lock_guard lock(m_mutex);
-                m_operations.at(id) = std::move(operation);
-            }
-
-            void complete(std::size_t id) noexcept
-            {
-                std::shared_ptr<SpawnOperation> operation;
                 bool joined = false;
                 {
                     std::lock_guard lock(m_mutex);
-                    auto const found = m_operations.find(id);
-                    if(found == m_operations.end())
-                        return;
-                    operation = std::move(found->second);
-                    m_operations.erase(found);
-                    joined = m_status == AsyncScopeStatus::joining && m_operations.empty();
+                    --m_operations;
+                    joined = m_status == AsyncScopeStatus::joining && m_operations == 0u;
                     if(joined)
                         m_status = AsyncScopeStatus::joined;
                 }
@@ -78,7 +57,7 @@ namespace caravan
                     std::lock_guard lock(m_mutex);
                     if(m_status == AsyncScopeStatus::open)
                         m_status = AsyncScopeStatus::joining;
-                    joined = m_operations.empty();
+                    joined = m_operations == 0u;
                     if(joined)
                         m_status = AsyncScopeStatus::joined;
                 }
@@ -95,39 +74,51 @@ namespace caravan
 
         private:
             mutable std::mutex m_mutex;
-            std::unordered_map<std::size_t, std::shared_ptr<SpawnOperation>> m_operations;
-            std::size_t m_nextId = 0u;
+            std::size_t m_operations = 0u;
             AsyncScopeStatus m_status = AsyncScopeStatus::open;
             EventSource m_joined;
         };
 
+        struct SpawnOwner
+        {
+            void* operation;
+            void (*destroy)(void*) noexcept;
+        };
+
+        inline void finishSpawn(SpawnOwner owner, std::shared_ptr<AsyncScopeState> scope) noexcept
+        {
+            owner.destroy(owner.operation);
+            scope->complete();
+        }
+
+        template<typename T_Output>
         struct ScopeReceiver
         {
             template<typename... T>
             void set_value(T&&...) noexcept
             {
                 output.setReady();
-                scope->complete(id);
+                finishSpawn(owner, std::move(scope));
             }
 
             void set_error(std::exception_ptr error) noexcept
             {
                 output.setFailed(std::move(error));
-                scope->complete(id);
+                finishSpawn(owner, std::move(scope));
             }
 
             void set_stopped() noexcept
             {
                 output.setStopped();
-                scope->complete(id);
+                finishSpawn(owner, std::move(scope));
             }
 
             std::shared_ptr<AsyncScopeState> scope;
-            EventSource output;
-            std::size_t id;
+            T_Output output;
+            SpawnOwner owner;
         };
 
-        template<typename T>
+        template<typename T_Output>
         struct FutureScopeReceiver
         {
             template<typename U>
@@ -141,42 +132,54 @@ namespace caravan
                 {
                     output.setFailed(std::current_exception());
                 }
-                scope->complete(id);
+                finishSpawn(owner, std::move(scope));
             }
 
             void set_error(std::exception_ptr error) noexcept
             {
                 output.setFailed(std::move(error));
-                scope->complete(id);
+                finishSpawn(owner, std::move(scope));
             }
 
             void set_stopped() noexcept
             {
                 output.setStopped();
-                scope->complete(id);
+                finishSpawn(owner, std::move(scope));
             }
 
             std::shared_ptr<AsyncScopeState> scope;
-            Promise<T> output;
-            std::size_t id;
+            T_Output output;
+            SpawnOwner owner;
         };
 
-        template<typename T_Sender, typename T_Receiver>
-        class SpawnOperationModel final : public SpawnOperation
+        template<typename T_Sender, template<typename> typename T_Receiver, typename T_Output>
+        class SpawnOperation
         {
         public:
-            SpawnOperationModel(T_Sender sender, T_Receiver receiver)
-                : m_operation(std::move(sender).connect(std::move(receiver)))
+            using Receiver = T_Receiver<T_Output>;
+
+            SpawnOperation(T_Sender sender, std::shared_ptr<AsyncScopeState> scope, T_Output output)
+                : m_operation(std::move(sender).connect(Receiver{std::move(scope), std::move(output), owner()}))
             {
             }
 
-            void start() noexcept override
+            void start() noexcept
             {
                 m_operation.start();
             }
 
         private:
-            decltype(std::declval<T_Sender&&>().connect(std::declval<T_Receiver>())) m_operation;
+            static void destroy(void* operation) noexcept
+            {
+                delete static_cast<SpawnOperation*>(operation);
+            }
+
+            SpawnOwner owner() noexcept
+            {
+                return {this, destroy};
+            }
+
+            decltype(std::declval<T_Sender&&>().connect(std::declval<Receiver>())) m_operation;
         };
     } // namespace detail
 
@@ -210,18 +213,16 @@ namespace caravan
         {
             EventSource output;
             auto result = output.event();
-            auto const id = m_state->reserve();
+            m_state->reserve();
             try
             {
-                using Receiver = detail::ScopeReceiver;
-                using Operation = detail::SpawnOperationModel<T_Sender, Receiver>;
-                auto operation = std::make_shared<Operation>(std::move(sender), Receiver{m_state, output, id});
-                m_state->attach(id, operation);
+                using Operation = detail::SpawnOperation<T_Sender, detail::ScopeReceiver, EventSource>;
+                auto* operation = new Operation(std::move(sender), m_state, output);
                 operation->start();
             }
             catch(...)
             {
-                m_state->complete(id);
+                m_state->complete();
                 throw;
             }
             return result;
@@ -233,18 +234,16 @@ namespace caravan
         {
             Promise<T> output;
             auto result = output.future();
-            auto const id = m_state->reserve();
+            m_state->reserve();
             try
             {
-                using Receiver = detail::FutureScopeReceiver<T>;
-                using Operation = detail::SpawnOperationModel<T_Sender, Receiver>;
-                auto operation = std::make_shared<Operation>(std::move(sender), Receiver{m_state, output, id});
-                m_state->attach(id, operation);
+                using Operation = detail::SpawnOperation<T_Sender, detail::FutureScopeReceiver, Promise<T>>;
+                auto* operation = new Operation(std::move(sender), m_state, output);
                 operation->start();
             }
             catch(...)
             {
-                m_state->complete(id);
+                m_state->complete();
                 throw;
             }
             return result;

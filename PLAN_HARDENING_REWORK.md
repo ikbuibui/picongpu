@@ -46,7 +46,7 @@ The current implementation has two main kinds of work remaining:
    been demonstrated.
 
 The C1-C6 gate for expanding migration is satisfied. The PMacc API-stability and
-PIConGPU entry gates remain blocked by S3-S6, P1-P3, M1-M2, and V1.
+PIConGPU entry gates remain blocked by S4-S6, P1-P3, M1-M2, and V1.
 
 ---
 
@@ -88,7 +88,7 @@ Every change in this plan must preserve the following invariants.
 | C6 | P0 | Implemented | Give MPI submission strong exception safety | Reliable shutdown/error handling |
 | S1 | P1 | Implemented | Establish sender-first PMacc APIs and name eager adapters | Stable PMacc API |
 | S2 | P1 | Implemented | Replace particle callback state machines | Particle migration exit |
-| S3 | P1 | Open | Simplify `AsyncScope` to counting-scope semantics | Eager allocation work |
+| S3 | P1 | Implemented | Simplify `AsyncScope` to counting-scope semantics | Eager allocation work |
 | S4 | P1 | Open | Reduce communicator and MPI type-erasure layers | Stable MPI hot path |
 | S5 | P1 | Partly implemented | Simplify collective ordering state | MPI maintainability |
 | S6 | P1 | Open | Remove smaller accidental complexity | Stable internal implementation |
@@ -373,6 +373,13 @@ coroutine runtime solely for this loop. The implementation:
 
 ## S3: Replace the scope registry with counting-scope semantics
 
+**Implementation status: complete.** `AsyncScope` now tracks only its open/joining/joined
+state and live-operation count. Each spawned operation has one concrete allocation,
+retains the scope association in its receiver, and destroys itself at terminal
+receiver completion before decrementing the count. Generated IDs, the hash registry,
+and virtual operation ownership are removed. Construction failure rolls back the
+count, and focused tests cover synchronous self-destruction and failed connection.
+
 `AsyncScope` needs to prevent destruction while spawned operations are live; it
 does not otherwise use operation IDs.
 
@@ -645,7 +652,7 @@ Track deleted concepts and call sites, not only added sender equivalents.
 
 - [x] S1 normal PMacc operations are sender-first.
 - [x] S2 particle chunking no longer uses the callback state machine.
-- [ ] S3 scope uses counting-scope rather than registry semantics.
+- [x] S3 scope uses counting-scope rather than registry semantics.
 - [ ] S4 communicator and MPI type erasure have been reduced or justified by
       measurements.
 - [ ] S5 collective ordering state has one documented model.
