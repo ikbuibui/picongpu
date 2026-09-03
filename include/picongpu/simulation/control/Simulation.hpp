@@ -367,7 +367,8 @@ namespace picongpu
 
             // init and share random number generator
             pmacc::GridController<simDim>& gridCon = pmacc::Environment<simDim>::get().GridController();
-            rngFactory->init(gridCon.getScalarPosition() ^ seed);
+            auto& rngQueue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+            asyncContext.wait(asyncContext.spawn(rngFactory->init(rngQueue, gridCon.getScalarPosition() ^ seed)));
             dc.consume(std::move(rngFactory));
 
 #if (BOOST_LANG_CUDA || BOOST_COMP_HIP)
