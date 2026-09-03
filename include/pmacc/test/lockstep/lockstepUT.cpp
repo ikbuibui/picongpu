@@ -296,11 +296,7 @@ TEST_CASE("lockstep kernel", "[iota]")
     {
         auto initialize = async::fill(queue, hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u);
         auto kernel = function(hostDeviceBuffer.getDeviceBuffer(), queue);
-        auto copy = async::copy(
-            queue,
-            hostDeviceBuffer.getHostBuffer().getOwnedAlpakaView(),
-            hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(),
-            DataSpace<DIM1>{numElements}.toAlpakaMemVec());
+        auto copy = hostDeviceBuffer.deviceToHost(queue);
         context.wait(context.spawn(
             caravan::alpaka::then(caravan::alpaka::then(std::move(initialize), std::move(kernel)), std::move(copy))));
         validate(hostDeviceBuffer.getHostBuffer(), referenceBuffer);
