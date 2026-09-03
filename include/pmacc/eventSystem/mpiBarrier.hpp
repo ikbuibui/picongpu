@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "pmacc/async/Context.hpp"
 #include "pmacc/communication/CommunicatorMPI.hpp"
 #include "pmacc/eventSystem/Manager.hpp"
 

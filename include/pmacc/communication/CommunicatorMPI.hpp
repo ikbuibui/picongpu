@@ -22,8 +22,6 @@
 
 #pragma once
 
-#include "pmacc/async/Context.hpp"
-#include "pmacc/communication/ICommunicator.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/memory/dataTypes/Mask.hpp"
 #include "pmacc/types.hpp"
@@ -38,24 +36,22 @@ namespace pmacc
     /*! communication via MPI
      */
     template<unsigned DIM>
-    class CommunicatorMPI : public ICommunicator
+    class CommunicatorMPI
     {
     public:
         CommunicatorMPI() = default;
 
-        virtual ~CommunicatorMPI();
-
-        int getRank() override
+        int getRank()
         {
             return mpiRank;
         }
 
-        virtual int getSize()
+        int getSize()
         {
             return mpiSize;
         }
 
-        DataSpace<DIM3> getPeriodic() const override
+        DataSpace<DIM3> getPeriodic() const
         {
             return this->periodic;
         }
@@ -90,9 +86,7 @@ namespace pmacc
             return hostRank;
         }
 
-        // description in ICommunicator
-
-        Mask const& getCommunicationMask() const override
+        Mask const& getCommunicationMask() const
         {
             return communicationMask;
         }
@@ -111,25 +105,13 @@ namespace pmacc
             uint32_t ex,
             char const* sendData,
             size_t sendBytes,
-            uint32_t tag) override;
+            uint32_t tag);
 
         caravan::mpi::OperationSender<caravan::ReceiveResult> receive(
             uint32_t ex,
             char* receiveData,
             size_t receiveBytes,
-            uint32_t tag) override;
-
-        caravan::Future<caravan::SendResult> startSendAsync(
-            uint32_t ex,
-            char const* sendData,
-            size_t sendBytes,
-            uint32_t tag) override;
-
-        caravan::Future<caravan::ReceiveResult> startReceiveAsync(
-            uint32_t ex,
-            char* receiveData,
-            size_t receiveBytes,
-            uint32_t tag) override;
+            uint32_t tag);
 
         caravan::mpi::OperationSender<caravan::AllReduceResult> signalAllReduce(
             void const* input,
@@ -140,16 +122,9 @@ namespace pmacc
 
         caravan::mpi::OperationSender<void> barrier();
 
-        void progressAsync() override
-        {
-            asyncContext.runReady();
-        }
+        bool slide();
 
-        //! description in ICommunicator
-        bool slide() override;
-
-
-        bool setStateAfterSlides(size_t numSlides) override;
+        bool setStateAfterSlides(size_t numSlides);
 
         /*! converts an exchangeType (e.g. RIGHT) to an MPI-rank
          */
@@ -188,7 +163,6 @@ namespace pmacc
         int mpiRank;
         int mpiSize;
         static constexpr uint32_t gridExchangeTag = 5u;
-        async::Context asyncContext;
     };
 
 } // namespace pmacc
