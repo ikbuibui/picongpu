@@ -105,7 +105,7 @@ namespace pmacc
     {
         return caravan::mpi::send(
             *mpiContext,
-            caravan::BufferLease::borrowed(const_cast<char*>(sendData), sendBytes),
+            caravan::ConstBufferLease::borrowed(sendData, sendBytes),
             caravan::Peer{ExchangeTypeToRank(ex)},
             caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
             communicatorId);
@@ -136,7 +136,7 @@ namespace pmacc
     {
         return caravan::mpi::allReduce(
             *mpiContext,
-            caravan::BufferLease::borrowed(const_cast<void*>(input), bytes),
+            caravan::ConstBufferLease::borrowed(input, bytes),
             caravan::BufferLease::borrowed(output, bytes),
             type,
             operation,
