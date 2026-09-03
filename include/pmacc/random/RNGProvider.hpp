@@ -71,12 +71,13 @@ namespace pmacc
              */
             RNGProvider(Space const& size, std::string const& uniqueId = "");
 
-            /**
-             * Initializes the random number generators
-             * Must be called before usage
-             * @param seed Base seed to be used
+            /** Lazily initialize the random number generators on an explicit queue.
+             *
+             * @param queue queue used for initialization
+             * @param seed base seed to be used
              */
-            void init(uint32_t seed);
+            template<typename T_Queue>
+            auto init(T_Queue& queue, uint32_t seed);
 
             /**
              * Factory method

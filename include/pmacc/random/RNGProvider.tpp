@@ -22,6 +22,7 @@
 #pragma once
 
 #include "pmacc/Environment.hpp"
+#include "pmacc/async/Operations.hpp"
 #include "pmacc/lockstep/lockstep.hpp"
 #include "pmacc/random/RNGProvider.hpp"
 
@@ -69,16 +70,19 @@ namespace pmacc
         }
 
         template<uint32_t T_dim, class T_RNGMethod>
-        void RNGProvider<T_dim, T_RNGMethod>::init(uint32_t seed)
+        template<typename T_Queue>
+        auto RNGProvider<T_dim, T_RNGMethod>::init(T_Queue& queue, uint32_t seed)
         {
             constexpr uint32_t blockSize = 256;
-
-            uint32_t const gridSize = (m_size.productOfComponents() + blockSize - 1u) / blockSize; // Round up
-
-            auto bufferBox = buffer->getDeviceBuffer().getDataBox();
-
-            PMACC_LOCKSTEP_KERNEL(kernel::InitRNGProvider<blockSize, RNGMethod>{})
-                .template config<blockSize>(gridSize)(bufferBox, seed, m_size);
+            uint32_t const gridSize = (m_size.productOfComponents() + blockSize - 1u) / blockSize;
+            auto& deviceBuffer = buffer->getDeviceBuffer();
+            return PMACC_LOCKSTEP_KERNEL(kernel::InitRNGProvider<blockSize, RNGMethod>{})
+                .template config<blockSize>(gridSize)
+                .sender(
+                    queue,
+                    async::retain(deviceBuffer.getDataBox(), deviceBuffer.getOwnedAlpakaView()),
+                    seed,
+                    m_size);
         }
 
         template<uint32_t T_dim, class T_RNGMethod>
