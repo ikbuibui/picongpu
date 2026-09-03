@@ -87,8 +87,7 @@ namespace caravan
             T_Complete complete,
             typename mpi::operation_detail::ValueCallback<T>::type value,
             mpi::operation_detail::ErrorCallback error,
-            mpi::operation_detail::StoppedCallback stopped,
-            std::optional<CommunicatorId> collective = {})
+            mpi::operation_detail::StoppedCallback stopped)
         {
             detail::NativeAccess::submit(
                 context,
@@ -118,8 +117,7 @@ namespace caravan
                             value(detail::invokeNative(complete, statuses));
                     },
                     std::move(error),
-                    std::move(stopped),
-                    collective});
+                    std::move(stopped)});
         }
 
         template<typename T, typename T_Operation>
@@ -128,8 +126,7 @@ namespace caravan
             T_Operation operation,
             typename mpi::operation_detail::ValueCallback<T>::type value,
             mpi::operation_detail::ErrorCallback error,
-            mpi::operation_detail::StoppedCallback stopped,
-            std::optional<CommunicatorId> collective = {})
+            mpi::operation_detail::StoppedCallback stopped)
         {
             detail::NativeAccess::invokeBlocking(
                 context,
@@ -145,8 +142,7 @@ namespace caravan
                             value(detail::invokeNative(operation, native));
                     },
                     std::move(error),
-                    std::move(stopped),
-                    collective});
+                    std::move(stopped)});
         }
     } // namespace
 
@@ -564,7 +560,6 @@ namespace caravan
         StoppedCallback stopped)
     {
         auto elements = std::make_shared<std::size_t>(0u);
-        auto const communicator = operation.communicator;
         submitRequest<AllReduceResult>(
             context,
             [operation = std::move(operation), elements](NativeMpiContext& native)
@@ -581,8 +576,7 @@ namespace caravan
             [elements](std::span<MPI_Status const>) { return AllReduceResult{*elements}; },
             std::move(value),
             std::move(error),
-            std::move(stopped),
-            communicator);
+            std::move(stopped));
     }
 
     void mpi::operation_detail::submit(
@@ -593,7 +587,6 @@ namespace caravan
         StoppedCallback stopped)
     {
         auto elements = std::make_shared<std::size_t>(0u);
-        auto const communicator = operation.communicator;
         submitRequest<ReduceResult>(
             context,
             [operation = std::move(operation), elements](NativeMpiContext& native)
@@ -611,8 +604,7 @@ namespace caravan
             [elements](std::span<MPI_Status const>) { return ReduceResult{*elements}; },
             std::move(value),
             std::move(error),
-            std::move(stopped),
-            communicator);
+            std::move(stopped));
     }
 
     void mpi::operation_detail::submit(
@@ -623,7 +615,6 @@ namespace caravan
         StoppedCallback stopped)
     {
         auto resultBytes = std::make_shared<std::size_t>(0u);
-        auto const communicator = operation.communicator;
         submitRequest<GatherResult>(
             context,
             [operation = std::move(operation), resultBytes](NativeMpiContext& native)
@@ -639,8 +630,7 @@ namespace caravan
             [resultBytes](std::span<MPI_Status const>) { return GatherResult{*resultBytes}; },
             std::move(value),
             std::move(error),
-            std::move(stopped),
-            communicator);
+            std::move(stopped));
     }
 
     void mpi::operation_detail::submit(
@@ -651,7 +641,6 @@ namespace caravan
         StoppedCallback stopped)
     {
         auto resultBytes = std::make_shared<std::size_t>(0u);
-        auto const communicator = operation.communicator;
         submitRequest<GatherResult>(
             context,
             [operation = std::move(operation), resultBytes](NativeMpiContext& native)
@@ -669,8 +658,7 @@ namespace caravan
             [resultBytes](std::span<MPI_Status const>) { return GatherResult{*resultBytes}; },
             std::move(value),
             std::move(error),
-            std::move(stopped),
-            communicator);
+            std::move(stopped));
     }
 
     void mpi::operation_detail::submit(
@@ -686,8 +674,7 @@ namespace caravan
             [](std::span<MPI_Status const>) {},
             std::move(value),
             std::move(error),
-            std::move(stopped),
-            operation.communicator);
+            std::move(stopped));
     }
 
     void mpi::operation_detail::submit(
@@ -710,8 +697,7 @@ namespace caravan
             },
             std::move(value),
             std::move(error),
-            std::move(stopped),
-            worldCommunicator);
+            std::move(stopped));
     }
 
     void mpi::operation_detail::submit(
@@ -727,8 +713,7 @@ namespace caravan
             { return detail::duplicateCommunicator(native, operation.communicator); },
             std::move(value),
             std::move(error),
-            std::move(stopped),
-            operation.communicator);
+            std::move(stopped));
     }
 
     void mpi::operation_detail::submit(
@@ -744,8 +729,7 @@ namespace caravan
             { return detail::splitCommunicator(native, operation.color, operation.key, operation.communicator); },
             std::move(value),
             std::move(error),
-            std::move(stopped),
-            operation.communicator);
+            std::move(stopped));
     }
 
     void mpi::operation_detail::submit(
@@ -760,8 +744,7 @@ namespace caravan
             [operation](NativeMpiContext& native) { detail::destroyCommunicator(native, operation.communicator); },
             std::move(value),
             std::move(error),
-            std::move(stopped),
-            operation.communicator);
+            std::move(stopped));
     }
 
 } // namespace caravan
