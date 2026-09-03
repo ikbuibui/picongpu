@@ -4,6 +4,7 @@
  */
 #include <cstddef>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -14,12 +15,16 @@
 #endif
 
 using Context = caravan::MpiContext;
+using ConstBuffer = caravan::ConstBufferLease;
 using Buffer = caravan::BufferLease;
 
-static_assert(
-    caravan::Sender<
-        decltype(caravan::mpi::
-                     send(std::declval<Context&>(), std::declval<Buffer>(), caravan::Peer{}, caravan::MessageTag{}))>);
+static_assert(std::is_same_v<decltype(std::declval<ConstBuffer>().data()), void const*>);
+static_assert(std::is_same_v<decltype(std::declval<Buffer>().data()), void*>);
+static_assert(caravan::Sender<decltype(caravan::mpi::send(
+                  std::declval<Context&>(),
+                  std::declval<ConstBuffer>(),
+                  caravan::Peer{},
+                  caravan::MessageTag{}))>);
 static_assert(caravan::Sender<decltype(caravan::mpi::receive(
                   std::declval<Context&>(),
                   std::declval<Buffer>(),
@@ -27,25 +32,25 @@ static_assert(caravan::Sender<decltype(caravan::mpi::receive(
                   caravan::MessageTag{}))>);
 static_assert(caravan::Sender<decltype(caravan::mpi::allReduce(
                   std::declval<Context&>(),
-                  std::declval<Buffer>(),
+                  std::declval<ConstBuffer>(),
                   std::declval<Buffer>(),
                   caravan::ScalarType::int32,
                   caravan::ReduceOperation::sum))>);
 static_assert(caravan::Sender<decltype(caravan::mpi::reduce(
                   std::declval<Context&>(),
-                  std::declval<Buffer>(),
+                  std::declval<ConstBuffer>(),
                   std::declval<Buffer>(),
                   caravan::ScalarType::int32,
                   caravan::ReduceOperation::sum,
                   caravan::Peer{}))>);
 static_assert(caravan::Sender<decltype(caravan::mpi::gather(
                   std::declval<Context&>(),
-                  std::declval<Buffer>(),
+                  std::declval<ConstBuffer>(),
                   std::declval<Buffer>(),
                   caravan::Peer{}))>);
 static_assert(caravan::Sender<decltype(caravan::mpi::gatherV(
                   std::declval<Context&>(),
-                  std::declval<Buffer>(),
+                  std::declval<ConstBuffer>(),
                   std::declval<Buffer>(),
                   std::vector<std::size_t>{},
                   std::vector<std::size_t>{},

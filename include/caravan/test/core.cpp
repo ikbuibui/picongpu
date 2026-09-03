@@ -7,6 +7,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <exception>
+#include <functional>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -239,6 +240,28 @@ namespace
         auto second = source.event().then(executor, [&] { ++calls; });
         second.wait();
         assert(calls == 2u);
+    }
+
+    void testRunReadyFairness()
+    {
+        caravan::RunLoop loop;
+        auto scheduler = loop.scheduler();
+        unsigned runs = 0u;
+        std::function<void()> repost;
+        repost = [&]
+        {
+            ++runs;
+            if(runs < 3u)
+                scheduler.post(repost);
+        };
+        scheduler.post(repost);
+
+        loop.runReady();
+        assert(runs == 1u);
+        loop.runReady();
+        assert(runs == 2u);
+        loop.runReady();
+        assert(runs == 3u);
     }
 
     void testSchedulerHandleLifetime()
@@ -793,6 +816,7 @@ int main()
 {
     assert(caravan::readyEvent().isReady());
     testCompletionAndContinuations();
+    testRunReadyFairness();
     testSchedulerHandleLifetime();
     testNoRecursiveInlineChains();
     testWhenAllAndFailure();

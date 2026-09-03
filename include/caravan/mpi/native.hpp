@@ -224,7 +224,7 @@ namespace caravan
     {
         NativeRequestBatch startSend(
             NativeMpiContext& context,
-            BufferLease const& buffer,
+            ConstBufferLease const& buffer,
             Peer destination,
             MessageTag tag,
             CommunicatorId communicator);
@@ -240,7 +240,7 @@ namespace caravan
 
         NativeRequestBatch startAllReduce(
             NativeMpiContext& context,
-            BufferLease const& input,
+            ConstBufferLease const& input,
             BufferLease const& output,
             ScalarType type,
             ReduceOperation operation,
@@ -249,7 +249,7 @@ namespace caravan
 
         NativeRequestBatch startReduce(
             NativeMpiContext& context,
-            BufferLease const& input,
+            ConstBufferLease const& input,
             BufferLease const& output,
             ScalarType type,
             ReduceOperation operation,
@@ -259,7 +259,7 @@ namespace caravan
 
         NativeRequestBatch startGather(
             NativeMpiContext& context,
-            BufferLease const& input,
+            ConstBufferLease const& input,
             BufferLease const& output,
             Peer root,
             CommunicatorId communicator,
@@ -267,7 +267,7 @@ namespace caravan
 
         NativeRequestBatch startGatherV(
             NativeMpiContext& context,
-            BufferLease const& input,
+            ConstBufferLease const& input,
             BufferLease const& output,
             std::vector<std::size_t> const& receiveBytes,
             std::vector<std::size_t> const& displacements,

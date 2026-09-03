@@ -174,8 +174,7 @@ namespace pmacc
                                 throw std::runtime_error("PMacc native MPI reduction start failed");
                             return batch;
                         },
-                        [](std::span<MPI_Status const>) {},
-                        caravanCommunicator->communicator));
+                        [](std::span<MPI_Status const>) {}));
             }
 
             /* Reduce elements on cpu memory

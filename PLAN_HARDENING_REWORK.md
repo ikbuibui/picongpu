@@ -46,7 +46,7 @@ The current implementation has two main kinds of work remaining:
    been demonstrated.
 
 The C1-C6 gate for expanding migration is satisfied. The PMacc API-stability and
-PIConGPU entry gates remain blocked by S6, P1-P3, M1-M2, and V1.
+PIConGPU entry gates remain blocked by P1-P3, M1-M2, and V1.
 
 ---
 
@@ -91,16 +91,15 @@ Every change in this plan must preserve the following invariants.
 | S3 | P1 | Implemented | Simplify `AsyncScope` to counting-scope semantics | Eager allocation work |
 | S4 | P1 | Implemented | Reduce communicator and MPI type-erasure layers | Stable MPI hot path |
 | S5 | P1 | Implemented | Simplify collective ordering state | MPI maintainability |
-| S6 | P1 | Open | Remove smaller accidental complexity | Stable internal implementation |
+| S6 | P1 | Implemented | Remove smaller accidental complexity | Stable internal implementation |
 | P1 | P1 | Open | Add allocation and dispatch measurement harness | Allocation decisions |
 | P2 | P1 | Open | Remove unconditional eager-path allocations | Performance gates |
 | P3 | P1 | Open | Bound and tune progress-loop work | MPI latency and CPU-cost gates |
 | M1-M2 | P1 | Open | Complete PMacc migration and delete legacy paths | PIConGPU entry gate |
 | V1 | P1 | In progress | Run sanitizer, multi-rank, GPU, and performance validation | Production acceptance |
 
-C1-C6 and S1-S5 are implemented. P1 measurements may proceed concurrently with
-S6, but structural allocation optimizations in P2 must use those measurements and
-must not weaken the invariants above.
+C1-C6 and S1-S6 are implemented. Structural allocation optimizations in P2 must
+use P1 measurements and must not weaken the invariants above.
 
 ---
 
@@ -446,17 +445,19 @@ point-to-point independence tests pass with one, two, and four MPI ranks.
 
 ## S6: Remove smaller accidental complexity
 
-- Remove the duplicate `sendCompletion` dependency currently added by both field
-  packing and `GridBuffer::asyncSend`.
-- Bound `RunLoop::runReady` or document its drain-until-empty semantics so a
-  self-reposting continuation cannot starve its caller indefinitely.
-- Add a non-empty-stage constraint to alpaka `SubmitSender` construction.
-- Separate const send buffers from mutable receive buffers in the MPI buffer API;
-  do not require PMacc to `const_cast` send storage.
-- Either implement valid root in-place gather semantics with `MPI_IN_PLACE` or
-  reject overlapping gather input/output buffers.
-- Remove obsolete factories, state enums, observers, and task stringification with
-  their final callers rather than retaining compatibility shells.
+**Implementation status: complete.** Field packing is now the sole owner of the
+previous-send dependency that protects its exchange-buffer write; the generic
+`GridBuffer` eager send adapter no longer adds the same dependency again.
+`RunLoop::runReady` executes a bounded snapshot, deferring self-reposted work to the
+next call, and alpaka `SubmitSender` rejects empty stage packs at compile time.
+
+MPI read inputs now use `ConstBufferLease` while mutable receive/output storage uses
+`BufferLease`, removing PMacc send/reduction `const_cast`s. Gather and variable
+gather reject all overlapping input/output ranges rather than exposing incomplete
+root in-place semantics. The stale managed-communicator argument at the final
+native reduction request caller was removed. Legacy factories, task states,
+observers, and stringification that still have callers remain tracked for deletion
+with those callers in M2; no compatibility shells were added.
 
 ---
 
@@ -678,7 +679,7 @@ Track deleted concepts and call sites, not only added sender equivalents.
 - [x] S4 communicator and MPI type erasure have been reduced or justified by
       measurements.
 - [x] S5 collective ordering state has one documented model.
-- [ ] S6 smaller redundant dependencies and unsafe edge cases are removed.
+- [x] S6 smaller redundant dependencies and unsafe edge cases are removed.
 - [ ] Eager adapters are isolated and named as migration/interop boundaries.
 
 ## Before the PIConGPU entry gate

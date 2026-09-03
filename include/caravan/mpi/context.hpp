@@ -69,22 +69,32 @@ namespace caravan
      * A borrowed buffer must remain valid until the operation completes. Passing
      * an owner retains that allocation in the operation and native request state.
      */
-    class BufferLease
+    template<typename T_Data>
+    class BasicBufferLease
     {
     public:
-        BufferLease(std::shared_ptr<void> allocation, void* data, std::size_t bytes)
+        BasicBufferLease(std::shared_ptr<void> allocation, T_Data* data, std::size_t bytes)
             : m_allocation(std::move(allocation))
             , m_data(data)
             , m_bytes(bytes)
         {
         }
 
-        static BufferLease borrowed(void* data, std::size_t bytes)
+        template<typename T_Other>
+        requires std::is_convertible_v<T_Other*, T_Data*>
+        BasicBufferLease(BasicBufferLease<T_Other> const& other)
+            : m_allocation(other.lifetime())
+            , m_data(other.data())
+            , m_bytes(other.bytes())
         {
-            return BufferLease{{}, data, bytes};
         }
 
-        void* data() const noexcept
+        static BasicBufferLease borrowed(T_Data* data, std::size_t bytes)
+        {
+            return BasicBufferLease{{}, data, bytes};
+        }
+
+        T_Data* data() const noexcept
         {
             return m_data;
         }
@@ -106,9 +116,12 @@ namespace caravan
 
     private:
         std::shared_ptr<void> m_allocation;
-        void* m_data;
+        T_Data* m_data;
         std::size_t m_bytes;
     };
+
+    using ConstBufferLease = BasicBufferLease<void const>;
+    using BufferLease = BasicBufferLease<void>;
 
     enum class ScalarType : std::uint8_t
     {
