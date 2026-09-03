@@ -131,28 +131,25 @@ namespace picongpu
             int mpiPos(gc.getPosition()[dim]);
             int numMpiRanks = gc.getGlobalSize();
 
+            auto& mpi = pmacc::Environment<>::get().getMpiContext();
+            auto const communicator = gc.getCommunicator().getCommunicatorId();
+
             // gather mpi position in the direction we are checking
             std::vector<int> mpiPositions(numMpiRanks);
-            MPI_CHECK(MPI_Allgather(
-                &mpiPos,
-                1,
-                MPI_INT,
-                mpiPositions.data(),
-                1,
-                MPI_INT,
-                gc.getCommunicator().getMPIComm()));
+            caravan::syncWait<caravan::GatherResult>(caravan::mpi::allGather(
+                mpi,
+                caravan::ConstBufferLease::borrowed(&mpiPos, sizeof(mpiPos)),
+                caravan::BufferLease::borrowed(mpiPositions.data(), mpiPositions.size() * sizeof(mpiPositions[0])),
+                communicator));
 
             // gather local sizes in the direction we are checking
             std::vector<uint64_t> allLocalSizes(numMpiRanks);
             auto lSize = static_cast<uint64_t>(m_localDomainSize[dim]);
-            MPI_CHECK(MPI_Allgather(
-                &lSize,
-                1,
-                MPI_UINT64_T,
-                allLocalSizes.data(),
-                1,
-                MPI_UINT64_T,
-                gc.getCommunicator().getMPIComm()));
+            caravan::syncWait<caravan::GatherResult>(caravan::mpi::allGather(
+                mpi,
+                caravan::ConstBufferLease::borrowed(&lSize, sizeof(lSize)),
+                caravan::BufferLease::borrowed(allLocalSizes.data(), allLocalSizes.size() * sizeof(allLocalSizes[0])),
+                communicator));
 
             uint64_t offset = 0u;
             for(size_t i = 0u; i < mpiPositions.size(); ++i)

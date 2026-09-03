@@ -477,7 +477,7 @@ namespace pmacc::particles
         auto& buffer = particles.getParticlesBuffer();
         std::vector<caravan::Event> sends;
         std::vector<caravan::Event> receives;
-        constexpr auto numExchanges = traits::NumberOfExchanges<T_Particles::dim>::value;
+        constexpr auto numExchanges = pmacc::traits::NumberOfExchanges<T_Particles::dim>::value;
         sends.reserve(numExchanges);
         receives.reserve(numExchanges);
 
