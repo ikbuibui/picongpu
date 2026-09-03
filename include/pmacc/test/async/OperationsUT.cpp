@@ -12,6 +12,7 @@
 #include <pmacc/memory/buffers/DeviceBuffer.hpp>
 #include <pmacc/memory/buffers/GridBuffer.hpp>
 #include <pmacc/memory/buffers/HostBuffer.hpp>
+#include <pmacc/memory/buffers/HostDeviceBuffer.hpp>
 #include <pmacc/particles/memory/buffers/StackExchangeBuffer.hpp>
 
 #include <alpaka/alpaka.hpp>
@@ -117,4 +118,31 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
 
     CHECK(output.data()[0] == 42);
     CHECK(continued);
+}
+
+TEST_CASE("Host-device buffer queue overloads return lazy copies", "[async][memory]")
+{
+    auto& queue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    pmacc::HostDeviceBuffer<int, DIM1> buffer(pmacc::MemSpace<DIM1>{2u}, true);
+    buffer.getHostBuffer().data()[0] = 41;
+    buffer.getHostBuffer().data()[1] = 99;
+    buffer.getHostBuffer().setSizeHostSide(1u);
+
+    pmacc::async::Context context;
+    context.wait(context.spawn(buffer.hostToDevice(queue)));
+
+    buffer.getDeviceBuffer().setSizeHostSide(0u);
+    context.wait(context.spawn(
+        caravan::alpaka::size(
+            queue,
+            buffer.getDeviceBuffer().sizeHostSideBuffer(),
+            buffer.getDeviceBuffer().sizeOnDeviceBuffer())));
+    CHECK(buffer.getDeviceBuffer().size() == 1u);
+
+    buffer.getHostBuffer().data()[0] = 0;
+    buffer.getHostBuffer().data()[1] = 77;
+    context.wait(context.spawn(buffer.deviceToHost(queue)));
+    CHECK(buffer.getHostBuffer().size() == 1u);
+    CHECK(buffer.getHostBuffer().data()[0] == 41);
+    CHECK(buffer.getHostBuffer().data()[1] == 77);
 }
