@@ -77,6 +77,13 @@ namespace caravan::mpi
             CommunicatorId communicator;
         };
 
+        struct AllGather
+        {
+            ConstBufferLease input;
+            BufferLease output;
+            CommunicatorId communicator;
+        };
+
         struct GatherV
         {
             ConstBufferLease input;
@@ -147,7 +154,7 @@ namespace caravan::mpi
         template<>
         struct Descriptor<GatherResult>
         {
-            using type = std::variant<Gather, GatherV>;
+            using type = std::variant<Gather, AllGather, GatherV>;
         };
 
         template<>
@@ -182,6 +189,7 @@ namespace caravan::mpi
         CARAVAN_DECLARE_MPI_SUBMIT(AllReduceResult, AllReduce);
         CARAVAN_DECLARE_MPI_SUBMIT(ReduceResult, Reduce);
         CARAVAN_DECLARE_MPI_SUBMIT(GatherResult, Gather);
+        CARAVAN_DECLARE_MPI_SUBMIT(GatherResult, AllGather);
         CARAVAN_DECLARE_MPI_SUBMIT(GatherResult, GatherV);
         CARAVAN_DECLARE_MPI_SUBMIT(void, Barrier);
         CARAVAN_DECLARE_MPI_SUBMIT(TopologySnapshot, CreateCartesian);
@@ -319,6 +327,12 @@ namespace caravan::mpi
         ConstBufferLease input,
         BufferLease output,
         Peer root,
+        CommunicatorId communicator = worldCommunicator);
+
+    OperationSender<GatherResult> allGather(
+        MpiContext& context,
+        ConstBufferLease input,
+        BufferLease output,
         CommunicatorId communicator = worldCommunicator);
 
     OperationSender<GatherResult> gatherV(

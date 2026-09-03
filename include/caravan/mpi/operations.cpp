@@ -323,6 +323,40 @@ namespace caravan
         return batch;
     }
 
+    NativeRequestBatch detail::startAllGather(
+        NativeMpiContext& context,
+        ConstBufferLease const& input,
+        BufferLease const& output,
+        CommunicatorId communicator,
+        std::shared_ptr<std::size_t> const& resultBytes)
+    {
+        if(!validBuffer(input) || !validBuffer(output) || buffersOverlap(input, output))
+            throw std::invalid_argument("Invalid Caravan MPI all-gather");
+
+        auto const native = context.communicator(communicator);
+        int size = 0;
+        int error = MPI_Comm_size(native, &size);
+        if(error != MPI_SUCCESS)
+            throw mpiError("MPI all-gather communicator query", error);
+        if(size <= 0 || input.bytes() > output.bytes() / static_cast<std::size_t>(size))
+            throw std::invalid_argument("Caravan MPI all-gather output is too small");
+        *resultBytes = input.bytes() * static_cast<std::size_t>(size);
+
+        NativeRequestBatch batch({MPI_REQUEST_NULL}, {input.lifetime(), output.lifetime(), resultBytes});
+        error = MPI_Iallgather(
+            input.data(),
+            static_cast<int>(input.bytes()),
+            MPI_BYTE,
+            output.data(),
+            static_cast<int>(input.bytes()),
+            MPI_BYTE,
+            native,
+            &batch.requests[0]);
+        if(error != MPI_SUCCESS)
+            throw mpiError("MPI_Iallgather", error);
+        return batch;
+    }
+
     NativeRequestBatch detail::startGatherV(
         NativeMpiContext& context,
         ConstBufferLease const& input,
@@ -454,6 +488,15 @@ namespace caravan
         CommunicatorId communicator)
     {
         return {context, operation_detail::Gather{std::move(input), std::move(output), root, communicator}};
+    }
+
+    mpi::OperationSender<GatherResult> mpi::allGather(
+        MpiContext& context,
+        ConstBufferLease input,
+        BufferLease output,
+        CommunicatorId communicator)
+    {
+        return {context, operation_detail::AllGather{std::move(input), std::move(output), communicator}};
     }
 
     mpi::OperationSender<GatherResult> mpi::gatherV(
@@ -636,6 +679,31 @@ namespace caravan
                     operation.input,
                     operation.output,
                     operation.root,
+                    operation.communicator,
+                    resultBytes);
+            },
+            [resultBytes](std::span<MPI_Status const>) { return GatherResult{*resultBytes}; },
+            std::move(value),
+            std::move(error),
+            std::move(stopped));
+    }
+
+    void mpi::operation_detail::submit(
+        MpiContext& context,
+        AllGather operation,
+        ValueCallback<GatherResult>::type value,
+        ErrorCallback error,
+        StoppedCallback stopped)
+    {
+        auto resultBytes = std::make_shared<std::size_t>(0u);
+        submitRequest<GatherResult>(
+            context,
+            [operation = std::move(operation), resultBytes](NativeMpiContext& native)
+            {
+                return detail::startAllGather(
+                    native,
+                    operation.input,
+                    operation.output,
                     operation.communicator,
                     resultBytes);
             },
