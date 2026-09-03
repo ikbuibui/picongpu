@@ -83,7 +83,7 @@ namespace pmacc
             return async::OwnedView{*view, *hostBuffer};
         }
 
-        /** allocate data accessible from the host
+        /** Allocate uninitialized data accessible from the host.
          *
          * @param size extent for each dimension (in elements)
          */
@@ -104,7 +104,6 @@ namespace pmacc
                 alpaka::getDev(*hostBuffer),
                 size.toAlpakaMemVec(),
                 pitchInBytes.toAlpakaMemVec()));
-            reset(false);
         }
 
         /** create a shallow view into an existing buffer
@@ -125,7 +124,6 @@ namespace pmacc
                 alpaka::getDev(subView),
                 alpaka::getExtents(subView),
                 alpaka::getPitchesInBytes(subView)));
-            reset(true);
         }
 
         ~HostBuffer() override

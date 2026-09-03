@@ -607,10 +607,11 @@ Domain adjustment now uses the Caravan all-gather operation, and restart/device-
 barriers use the communicator sender. The PMacc heat-equation and Game of Life examples
 now own their alpaka queues, launch kernels only through lazy senders, use explicit async
 copies, and call the explicit gather boundary; their source no longer uses the legacy
-queue, task, transaction, or kernel-call APIs. Buffer construction still performs legacy
-initial fills internally and remains migration work below the examples. This removes the
-stale pre-Caravan initialization path and starts call-site migration without adding
-another compatibility layer.
+queue, task, transaction, or kernel-call APIs. Buffer allocation now leaves storage
+uninitialized, and the examples compose required fills into their initial sender graph
+instead of waiting for hidden legacy construction tasks. This removes the stale
+pre-Caravan initialization path and starts call-site migration without adding another
+compatibility layer.
 
 1. Convert field, particle, reduction, gather, signal, and helper operations to the
    sender-first API.
