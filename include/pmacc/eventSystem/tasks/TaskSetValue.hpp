@@ -26,7 +26,6 @@
 #include "pmacc/eventSystem/tasks/DeviceTask.hpp"
 #include "pmacc/lockstep.hpp"
 #include "pmacc/lockstep/BlockCfg.hpp"
-#include "pmacc/mappings/simulation/EnvironmentController.hpp"
 #include "pmacc/memory/boxes/DataBox.hpp"
 #include "pmacc/memory/buffers/DeviceBuffer.hpp"
 

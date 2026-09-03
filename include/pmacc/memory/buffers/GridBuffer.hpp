@@ -436,7 +436,7 @@ namespace pmacc
          */
         Mask getSendMask() const
         {
-            return (Environment<DIM>::get().EnvironmentController().getCommunicationMask() & sendMask);
+            return (Environment<DIM>::get().GridController().getCommunicationMask() & sendMask);
         }
 
         /**
@@ -446,7 +446,7 @@ namespace pmacc
          */
         Mask getReceiveMask() const
         {
-            return (Environment<DIM>::get().EnvironmentController().getCommunicationMask() & receiveMask);
+            return (Environment<DIM>::get().GridController().getCommunicationMask() & receiveMask);
         }
 
         /**

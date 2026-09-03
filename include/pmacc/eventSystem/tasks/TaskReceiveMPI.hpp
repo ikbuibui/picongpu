@@ -23,7 +23,7 @@
 #pragma once
 
 #include "pmacc/Environment.hpp"
-#include "pmacc/communication/ICommunicator.hpp"
+#include "pmacc/async/Context.hpp"
 #include "pmacc/eventSystem/events/EventDataReceive.hpp"
 #include "pmacc/eventSystem/tasks/MPITask.hpp"
 
@@ -45,12 +45,12 @@ namespace pmacc
         void init() override
         {
             auto cPtr = exchange->getCPtrCapacity();
-            auto& communicator = Environment<DIM>::get().EnvironmentController().getCommunicator();
-            future = communicator.startReceiveAsync(
+            auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
+            future = context.spawnFuture<caravan::ReceiveResult>(communicator.receive(
                 exchange->getExchangeType(),
                 cPtr.asCharPtr(),
                 cPtr.sizeInBytes(),
-                exchange->getCommunicationTag());
+                exchange->getCommunicationTag()));
         }
 
         bool executeIntern() override
@@ -58,7 +58,7 @@ namespace pmacc
             if(this->isFinished())
                 return true;
 
-            Environment<DIM>::get().EnvironmentController().getCommunicator().progressAsync();
+            context.runReady();
             if(future.state() == caravan::CompletionState::pending)
                 return false;
             receivedBytes = static_cast<int>(future.result().bytes);
@@ -84,6 +84,7 @@ namespace pmacc
 
     private:
         Exchange<TYPE, DIM>* exchange;
+        async::Context context;
         caravan::Future<caravan::ReceiveResult> future;
         int receivedBytes{0};
     };

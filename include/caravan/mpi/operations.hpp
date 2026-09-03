@@ -9,6 +9,7 @@
 #include <optional>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <caravan/core/sender.hpp>
@@ -29,23 +30,189 @@ namespace caravan::mpi
         {
             using type = std::function<void()>;
         };
+
+        using ErrorCallback = std::function<void(std::exception_ptr)>;
+        using StoppedCallback = std::function<void()>;
+
+        struct Send
+        {
+            BufferLease buffer;
+            Peer peer;
+            MessageTag tag;
+            CommunicatorId communicator;
+        };
+
+        struct Receive
+        {
+            BufferLease buffer;
+            Peer peer;
+            MessageTag tag;
+            CommunicatorId communicator;
+        };
+
+        struct AllReduce
+        {
+            BufferLease input;
+            BufferLease output;
+            ScalarType type;
+            ReduceOperation operation;
+            CommunicatorId communicator;
+        };
+
+        struct Reduce
+        {
+            BufferLease input;
+            BufferLease output;
+            ScalarType type;
+            ReduceOperation operation;
+            Peer root;
+            CommunicatorId communicator;
+        };
+
+        struct Gather
+        {
+            BufferLease input;
+            BufferLease output;
+            Peer root;
+            CommunicatorId communicator;
+        };
+
+        struct GatherV
+        {
+            BufferLease input;
+            BufferLease output;
+            std::vector<std::size_t> receiveBytes;
+            std::vector<std::size_t> displacements;
+            Peer root;
+            CommunicatorId communicator;
+        };
+
+        struct Barrier
+        {
+            CommunicatorId communicator;
+        };
+
+        struct CreateCartesian
+        {
+            std::vector<int> dimensions;
+            std::vector<bool> periodic;
+            int worldSize;
+            int hostLocalRank;
+        };
+
+        struct DuplicateCommunicator
+        {
+            CommunicatorId communicator;
+        };
+
+        struct SplitCommunicator
+        {
+            std::optional<int> color;
+            int key;
+            CommunicatorId communicator;
+        };
+
+        struct DestroyCommunicator
+        {
+            CommunicatorId communicator;
+        };
+
+        template<typename T>
+        struct Descriptor;
+
+        template<>
+        struct Descriptor<SendResult>
+        {
+            using type = std::variant<Send>;
+        };
+
+        template<>
+        struct Descriptor<ReceiveResult>
+        {
+            using type = std::variant<Receive>;
+        };
+
+        template<>
+        struct Descriptor<AllReduceResult>
+        {
+            using type = std::variant<AllReduce>;
+        };
+
+        template<>
+        struct Descriptor<ReduceResult>
+        {
+            using type = std::variant<Reduce>;
+        };
+
+        template<>
+        struct Descriptor<GatherResult>
+        {
+            using type = std::variant<Gather, GatherV>;
+        };
+
+        template<>
+        struct Descriptor<void>
+        {
+            using type = std::variant<Barrier, DestroyCommunicator>;
+        };
+
+        template<>
+        struct Descriptor<TopologySnapshot>
+        {
+            using type = std::variant<CreateCartesian>;
+        };
+
+        template<>
+        struct Descriptor<CommunicatorId>
+        {
+            using type = std::variant<DuplicateCommunicator>;
+        };
+
+        template<>
+        struct Descriptor<std::optional<CommunicatorInfo>>
+        {
+            using type = std::variant<SplitCommunicator>;
+        };
+
+#define CARAVAN_DECLARE_MPI_SUBMIT(Result, Operation)                                                                 \
+    void submit(MpiContext&, Operation, ValueCallback<Result>::type, ErrorCallback, StoppedCallback)
+
+        CARAVAN_DECLARE_MPI_SUBMIT(SendResult, Send);
+        CARAVAN_DECLARE_MPI_SUBMIT(ReceiveResult, Receive);
+        CARAVAN_DECLARE_MPI_SUBMIT(AllReduceResult, AllReduce);
+        CARAVAN_DECLARE_MPI_SUBMIT(ReduceResult, Reduce);
+        CARAVAN_DECLARE_MPI_SUBMIT(GatherResult, Gather);
+        CARAVAN_DECLARE_MPI_SUBMIT(GatherResult, GatherV);
+        CARAVAN_DECLARE_MPI_SUBMIT(void, Barrier);
+        CARAVAN_DECLARE_MPI_SUBMIT(TopologySnapshot, CreateCartesian);
+        CARAVAN_DECLARE_MPI_SUBMIT(CommunicatorId, DuplicateCommunicator);
+        CARAVAN_DECLARE_MPI_SUBMIT(std::optional<CommunicatorInfo>, SplitCommunicator);
+        CARAVAN_DECLARE_MPI_SUBMIT(void, DestroyCommunicator);
+
+#undef CARAVAN_DECLARE_MPI_SUBMIT
     } // namespace operation_detail
 
+    /** Allocation-free description of one ordinary MPI operation.
+     *
+     * Native MPI details and queue callback erasure remain behind the MPI backend
+     * boundary; constructing and connecting this sender only moves concrete state.
+     */
     template<typename T>
     class OperationSender
     {
         static_assert(std::is_void_v<T> || (!std::is_reference_v<T> && !std::is_const_v<T>) );
 
+        using Descriptor = typename operation_detail::Descriptor<T>::type;
         using ValueCallback = typename operation_detail::ValueCallback<T>::type;
-        using ErrorCallback = std::function<void(std::exception_ptr)>;
-        using StoppedCallback = std::function<void()>;
 
     public:
         using completion_signatures
             = caravan::detail::DefaultCompletionSignatures<caravan::detail::ResultValueSignature<T>>;
-        using Start = std::function<void(ValueCallback, ErrorCallback, StoppedCallback)>;
 
-        explicit OperationSender(Start start) : m_start(std::move(start))
+        template<typename T_Descriptor>
+        OperationSender(MpiContext& context, T_Descriptor descriptor)
+            : m_context(&context)
+            , m_descriptor(std::move(descriptor))
         {
         }
 
@@ -53,7 +220,10 @@ namespace caravan::mpi
         class Operation
         {
         public:
-            Operation(Start start, T_Receiver receiver) : m_start(std::move(start)), m_receiver(std::move(receiver))
+            Operation(MpiContext& context, Descriptor descriptor, T_Receiver receiver)
+                : m_context(&context)
+                , m_descriptor(std::move(descriptor))
+                , m_receiver(std::move(receiver))
             {
             }
 
@@ -69,17 +239,22 @@ namespace caravan::mpi
 
                 try
                 {
-                    auto start = std::move(m_start);
+                    ValueCallback value;
                     if constexpr(std::is_void_v<T>)
-                        start(
-                            [this] { m_receiver.set_value(); },
-                            [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
-                            [this] { m_receiver.set_stopped(); });
+                        value = [this] { m_receiver.set_value(); };
                     else
-                        start(
-                            [this](T value) { m_receiver.set_value(std::move(value)); },
-                            [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
-                            [this] { m_receiver.set_stopped(); });
+                        value = [this](T result) { m_receiver.set_value(std::move(result)); };
+                    std::visit(
+                        [this, value = std::move(value)](auto descriptor) mutable
+                        {
+                            operation_detail::submit(
+                                *m_context,
+                                std::move(descriptor),
+                                std::move(value),
+                                [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
+                                [this] { m_receiver.set_stopped(); });
+                        },
+                        std::move(m_descriptor));
                 }
                 catch(...)
                 {
@@ -88,7 +263,8 @@ namespace caravan::mpi
             }
 
         private:
-            Start m_start;
+            MpiContext* m_context;
+            Descriptor m_descriptor;
             T_Receiver m_receiver;
             bool m_started = false;
         };
@@ -96,11 +272,15 @@ namespace caravan::mpi
         template<typename T_Receiver>
         auto connect(T_Receiver&& receiver) &&
         {
-            return Operation<std::decay_t<T_Receiver>>{std::move(m_start), std::forward<T_Receiver>(receiver)};
+            return Operation<std::decay_t<T_Receiver>>{
+                *m_context,
+                std::move(m_descriptor),
+                std::forward<T_Receiver>(receiver)};
         }
 
     private:
-        Start m_start;
+        MpiContext* m_context;
+        Descriptor m_descriptor;
     };
 
     OperationSender<SendResult> send(

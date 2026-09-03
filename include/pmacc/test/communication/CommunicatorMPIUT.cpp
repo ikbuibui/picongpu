@@ -12,7 +12,6 @@
 
 #include <array>
 #include <stdexcept>
-#include <thread>
 
 #include <caravan/mpi.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -22,15 +21,6 @@ TEST_CASE("CommunicatorMPI consumes Caravan topology snapshots")
     auto& mpi = pmacc::Environment<>::get().getMpiContext();
     auto const topology = mpi.topology();
     auto& communicator = pmacc::Environment<TEST_DIM>::get().GridController().getCommunicator();
-    auto progressUntil = [&communicator](auto const& completion)
-    {
-        while(completion.state() == caravan::CompletionState::pending)
-        {
-            communicator.progressAsync();
-            std::this_thread::yield();
-        }
-    };
-
     if(communicator.getRank() != topology.rank || communicator.getSize() != topology.size
        || communicator.getHostRank() != static_cast<uint32_t>(topology.hostLocalRank))
         throw std::runtime_error("Unexpected topology snapshot");
@@ -98,12 +88,12 @@ TEST_CASE("CommunicatorMPI consumes Caravan topology snapshots")
 
     int sent = topology.rank;
     int received = -1;
-    auto receive = communicator.startReceiveAsync(pmacc::LEFT, reinterpret_cast<char*>(&received), sizeof(int), 7u);
-    auto send = communicator.startSendAsync(pmacc::RIGHT, reinterpret_cast<char*>(&sent), sizeof(int), 7u);
+    auto receive = context.spawnFuture<caravan::ReceiveResult>(
+        communicator.receive(pmacc::LEFT, reinterpret_cast<char*>(&received), sizeof(int), 7u));
+    auto send = context.spawnFuture<caravan::SendResult>(
+        communicator.send(pmacc::RIGHT, reinterpret_cast<char*>(&sent), sizeof(int), 7u));
     std::array transfers{receive.event(), send.event()};
-    auto transferred = caravan::whenAll(transfers);
-    progressUntil(transferred);
-    transferred.wait();
+    context.wait(caravan::whenAll(transfers));
     if(received != (topology.rank + topology.size - 1) % topology.size || receive.result().bytes != sizeof(int)
        || send.result().bytes != sizeof(int))
         throw std::runtime_error("Caravan point-to-point adapter failed");
