@@ -29,7 +29,6 @@
 #include <pmacc/Environment.hpp>
 #include <pmacc/async.hpp>
 #include <pmacc/dimensions/DataSpace.hpp>
-#include <pmacc/eventSystem/queues/QueueController.hpp>
 #include <pmacc/mappings/kernel/MappingDescription.hpp>
 #include <pmacc/mappings/simulation/SubGrid.hpp>
 #include <pmacc/memory/buffers/GridBuffer.hpp>
@@ -37,6 +36,7 @@
 #include <pmacc/mpi/GatherSlice.hpp>
 #include <pmacc/traits/NumberOfExchanges.hpp>
 
+#include <optional>
 #include <string>
 
 #include <caravan/mpi.hpp>
@@ -47,8 +47,8 @@ namespace gol
     {
     private:
         /* math::CT::Int<16,16> is arbitrarily chosen SuperCellSize! */
-        typedef MappingDescription<DIM2, math::CT::Int<16, 16>> MappingDesc;
-        typedef Evolution<MappingDesc> Evolutiontype;
+        using MappingDesc = MappingDescription<DIM2, math::CT::Int<16, 16>>;
+        using Evolutiontype = Evolution<MappingDesc>;
 
         Space gridSize;
         /* holds rule mask derived from 23/3 input, @see Evolution.hpp */
@@ -60,7 +60,9 @@ namespace gol
         std::unique_ptr<Buffer> buff2; /* like evolve(buff2 &, const buff1) would work internally */
         uint32_t steps;
 
-        bool isMaster;
+        bool isMaster{false};
+        std::optional<ComputeDeviceQueue> communicationQueue;
+        std::optional<ComputeDeviceQueue> computeQueue;
         pmacc::async::Context asyncContext;
 
     public:
@@ -74,7 +76,6 @@ namespace gol
             : gridSize(gridSize)
             , evo(rule)
             , steps(steps)
-            , isMaster(false)
         {
             /* -First this initializes the GridController with number of 'devices'*
              *  and 'periodic'ity. The init-routine will then create and manage   *
@@ -83,10 +84,12 @@ namespace gol
              *  Host MPI processes where hostRank == deviceNumber, if the device  *
              *  is not marked to be used exclusively by another process. This     *
              *  affects: cudaMalloc,cudaKernelLaunch,                             *
-             * -Then the CUDA Stream Controller is activated and one stream is    *
-             *  added. It's basically a List of cudaStreams. Used to parallelize  *
-             *  Memory transfers and calculations.                                */
+             * -Then this simulation creates the queues it owns for communication *
+             *  and computation.                                                   */
             Environment<DIM2>::get().initDevices(mpi, devices, periodic);
+            auto const device = manager::Device<ComputeDevice>::get().current();
+            communicationQueue.emplace(device);
+            computeQueue.emplace(device);
 
             /* Now we have allocated every node to a grid position in the GC. We  *
              * use that grid position to allocate every node to a position in the *
@@ -102,13 +105,15 @@ namespace gol
             Environment<DIM2>::get().initGrids(gridSize, localGridSize, gc.getPosition() * localGridSize);
         }
 
-        virtual ~Simulation()
-        {
-        }
+        virtual ~Simulation() = default;
 
         void finalize()
         {
             gather.reset();
+            buff1.reset();
+            buff2.reset();
+            communicationQueue.reset();
+            computeQueue.reset();
         }
 
         void init()
@@ -190,7 +195,15 @@ namespace gol
             /* Calls kernel to initialize random generator. Game of Life is then  *
              * initialized using uniform random numbers. With 10% (second arg)    *
              * white points. World will be written to buffer in first argument    */
-            evo.initEvolution(buff1->getDeviceBuffer().getDataBox(), 0.1);
+            // Buffer construction still performs legacy initial fills. Complete them before sender-owned work.
+            ::alpaka::wait(manager::Device<ComputeDevice>::get().current());
+            auto initialization = evo.initEvolution(
+                *computeQueue,
+                pmacc::async::retain(
+                    buff1->getDeviceBuffer().getDataBox(),
+                    buff1->getDeviceBuffer().getOwnedAlpakaView()),
+                0.1);
+            asyncContext.wait(asyncContext.spawn(std::move(initialization)));
         }
 
         void start()
@@ -205,11 +218,9 @@ namespace gol
     private:
         void oneStep(uint32_t currentStep, std::unique_ptr<Buffer>& read, std::unique_ptr<Buffer>& write)
         {
-            auto& communicationQueue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
-            auto& computeQueue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
-            auto communication = read->spawnCommunication(asyncContext, communicationQueue);
+            auto communication = read->spawnCommunication(asyncContext, *communicationQueue);
             auto core = evo.runAsync<CORE>(
-                computeQueue,
+                *computeQueue,
                 pmacc::async::retain(
                     read->getDeviceBuffer().getDataBox(),
                     read->getDeviceBuffer().getOwnedAlpakaView()),
@@ -224,7 +235,7 @@ namespace gol
                  writeView = write->getDeviceBuffer().getOwnedAlpakaView()]() mutable
                 {
                     return evo.runAsync<BORDER>(
-                        computeQueue,
+                        *computeQueue,
                         pmacc::async::retain(read->getDeviceBuffer().getDataBox(), readView),
                         pmacc::async::retain(write->getDeviceBuffer().getDataBox(), writeView));
                 });
@@ -243,9 +254,14 @@ namespace gol
                     bufferLayout.guardSizeND());
                 // create a contiguous buffer required for gathering the data
                 auto dataWithoutGuard = std::make_unique<HostBuffer<uint8_t, DIM2>>(localDataExtents);
-                dataWithoutGuard->copyFrom(*view.get());
-                auto picture = gather->gatherSlice(
-                    *dataWithoutGuard.get(),
+                auto copy = pmacc::async::copy(
+                    *computeQueue,
+                    dataWithoutGuard->getOwnedAlpakaView(),
+                    view->getOwnedAlpakaView(),
+                    localDataExtents.toAlpakaMemVec());
+                asyncContext.wait(asyncContext.spawn(std::move(copy)));
+                auto picture = gather->gatherSliceExplicit(
+                    *dataWithoutGuard,
                     subGrid.getGlobalDomain().size,
                     subGrid.getLocalDomain().offset);
                 PngCreator png;
