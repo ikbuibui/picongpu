@@ -157,6 +157,8 @@ namespace pmacc
         //! enable MPI gpu direct
         bool useMpiDirect{false};
 
+        /** Owns and drives PMacc sender operations for the simulation lifetime. */
+        async::Context asyncContext;
 
     private:
         /** Checks if we received a signal.
@@ -188,7 +190,6 @@ namespace pmacc
 
         TimeInterval tSimulation;
         TimeInterval tInit;
-        async::Context signalContext;
         caravan::Event signalCompletion;
     };
 
