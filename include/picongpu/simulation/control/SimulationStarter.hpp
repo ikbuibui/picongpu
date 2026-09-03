@@ -44,14 +44,14 @@ namespace picongpu
     {
     private:
         using BoostOptionsList = std::list<boost::program_options::options_description>;
-        Simulation simulationClass{};
+        Simulation simulationClass;
         InitialiserController initClass{};
         PluginController pluginClass{};
 
         MappingDesc* mappingDesc{nullptr};
 
     public:
-        SimulationStarter()
+        explicit SimulationStarter(caravan::MpiContext& mpiContext) : simulationClass(mpiContext)
         {
             simulationClass.setInitController(initClass);
         }

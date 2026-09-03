@@ -23,9 +23,10 @@
 
 #include <pmacc/Environment.hpp>
 #include <pmacc/assert.hpp>
+#include <pmacc/async/Context.hpp>
+#include <pmacc/async/Operations.hpp>
 #include <pmacc/dataManagement/ISimulationData.hpp>
 #include <pmacc/dimensions/DataSpace.hpp>
-#include <pmacc/eventSystem/tasks/ITask.hpp>
 #include <pmacc/lockstep.hpp>
 #include <pmacc/lockstep/lockstep.hpp>
 #include <pmacc/memory/buffers/HostDeviceBuffer.hpp>
@@ -39,6 +40,8 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+
+#include <caravan/mpi.hpp>
 
 namespace pmacc
 {
@@ -158,31 +161,24 @@ namespace pmacc
                 }
             }
 
-            template<class T_DeviceBuffer, class T_Random>
-            void generateRandomNumbers(
+            template<class T_Queue, class T_DeviceBuffer, class T_Random>
+            auto generateRandomNumbers(
+                T_Queue& queue,
                 Space2D const& rngSize,
                 uint32_t numSamples,
                 T_DeviceBuffer& buffer,
                 T_Random const& rand)
             {
-                pmacc::TimeInterval timer;
-                timer.toggleStart();
-
                 constexpr uint32_t blockSize = 256;
-
-                uint32_t gridSize = (rngSize.productOfComponents() + blockSize - 1u) / blockSize;
-
-                eventSystem::getTransactionEvent().waitForFinished();
-                timer.toggleStart();
-
-                PMACC_LOCKSTEP_KERNEL(RandomFiller<blockSize>{})
-                    .template config<blockSize>(gridSize)(buffer.getDataBox(), buffer.capacityND(), rand, numSamples);
-
-                eventSystem::getTransactionEvent().waitForFinished();
-                timer.toggleEnd();
-
-                float milliseconds = timer.getInterval();
-                std::cout << "Done in " << milliseconds << "ms" << std::endl;
+                uint32_t const gridSize = (rngSize.productOfComponents() + blockSize - 1u) / blockSize;
+                return PMACC_LOCKSTEP_KERNEL(RandomFiller<blockSize>{})
+                    .template config<blockSize>(gridSize)
+                    .sender(
+                        queue,
+                        async::retain(buffer.getDataBox(), buffer.getOwnedAlpakaView()),
+                        buffer.capacityND(),
+                        rand,
+                        numSamples);
             }
 
             template<class T_Method>
@@ -200,15 +196,31 @@ namespace pmacc
                 Space2D const rngSize(256, 256);
 
                 pmacc::HostDeviceBuffer<uint32_t, 2> detector(size);
-                auto rngProvider = new RNGProvider(rngSize);
+                auto rngProvider = std::make_shared<RNGProvider>(rngSize);
 
-                pmacc::Environment<>::get().DataConnector().share(
-                    std::shared_ptr<pmacc::ISimulationData>(rngProvider));
-                rngProvider->init(0x4213'3742);
+                pmacc::Environment<>::get().DataConnector().share(rngProvider);
+                auto const device = manager::Device<ComputeDevice>::get().current();
+                ComputeDeviceQueue queue(device);
+                async::Context context;
+                auto initialize = caravan::alpaka::then(
+                    rngProvider->init(queue, 0x4213'3742),
+                    async::fill(queue, detector.getDeviceBuffer().getOwnedAlpakaView(), 0u));
+                auto generate = generateRandomNumbers(
+                    queue,
+                    rngSize,
+                    numSamples,
+                    detector.getDeviceBuffer(),
+                    GetRanidx<RNGProvider>());
+                auto copy = detector.deviceToHost(queue);
 
-                generateRandomNumbers(rngSize, numSamples, detector.getDeviceBuffer(), GetRanidx<RNGProvider>());
-
-                detector.deviceToHost();
+                pmacc::TimeInterval timer;
+                timer.toggleStart();
+                context.wait(context.spawn(
+                    caravan::alpaka::then(
+                        caravan::alpaka::then(std::move(initialize), std::move(generate)),
+                        std::move(copy))));
+                timer.toggleEnd();
+                std::cout << "Done in " << timer.getInterval() << "ms" << std::endl;
                 auto box = detector.getHostBuffer().getDataBox();
                 // Write data to file
                 std::ofstream dataFile((rngName + "_data.txt").c_str());
@@ -269,6 +281,7 @@ namespace pmacc
                 std::cout << "     mean: " << mean << std::endl;
                 std::cout << "   dev(x): " << sqrt(var) << std::endl;
                 std::cout << " std. dev: " << stdDev << std::endl;
+                pmacc::Environment<>::get().DataConnector().deregister(rngProvider->getUniqueId());
             }
 
         } // namespace random
@@ -277,15 +290,18 @@ namespace pmacc
 
 int main(int argc, char** argv)
 {
-    using namespace pmacc;
-    using namespace test::random;
+    return caravan::MpiRuntime::run(
+        argc,
+        argv,
+        [&](caravan::MpiContext& mpi)
+        {
+            using namespace pmacc;
+            using namespace test::random;
 
-    Environment<2>::get().initDevices(Space2D::create(1), Space2D::create(0));
-
-    uint32_t const numSamples = (argc > 1) ? atoi(argv[1]) : 100;
-
-    runTest<random::methods::AlpakaRand<pmacc::Acc<DIM1>>>(numSamples);
-
-    /* finalize the pmacc context */
-    Environment<>::get().finalize();
+            Environment<2>::get().initDevices(mpi, Space2D::create(1), Space2D::create(0));
+            uint32_t const numSamples = (argc > 1) ? atoi(argv[1]) : 100;
+            runTest<random::methods::AlpakaRand<pmacc::Acc<DIM1>>>(numSamples);
+            Environment<>::get().finalize();
+            return 0;
+        });
 }

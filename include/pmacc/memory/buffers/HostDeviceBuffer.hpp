@@ -101,15 +101,18 @@ namespace pmacc
          */
         void reset(bool preserveData = true);
 
-        /**
-         * Asynchronously copies data from internal host to internal device buffer.
-         *
-         */
+        /** Return a lazy copy from the internal host buffer to the device buffer. */
+        template<typename T_Queue>
+        HINLINE auto hostToDevice(T_Queue& queue);
+
+        /** Legacy eager copy from the internal host buffer to the device buffer. */
         HINLINE void hostToDevice();
 
-        /**
-         * Asynchronously copies data from internal device to internal host buffer.
-         */
+        /** Return a lazy copy from the internal device buffer to the host buffer. */
+        template<typename T_Queue>
+        HINLINE auto deviceToHost(T_Queue& queue);
+
+        /** Legacy eager copy from the internal device buffer to the host buffer. */
         HINLINE void deviceToHost();
 
     private:

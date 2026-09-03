@@ -141,6 +141,25 @@ if(NOT WIN32)
 endif()
 
 ################################################################################
+# Tests
+################################################################################
+
+option(PMACC_BUILD_EXAMPLE_TESTS "Build PMacc example integration tests" ON)
+if(PMACC_BUILD_EXAMPLE_TESTS)
+    enable_testing()
+    add_test(
+        NAME heatEquation-4-ranks
+        COMMAND
+            ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4 ${MPIEXEC_PREFLAGS} $<TARGET_FILE:heatEq>
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        heatEquation-4-ranks
+        PROPERTIES PASS_REGULAR_EXPRESSION "Residual at time 999 = 4\\.583[0-9][0-9]" PROCESSORS 4 TIMEOUT 60
+    )
+endif()
+
+################################################################################
 # Install heatEq
 ################################################################################
 

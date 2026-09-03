@@ -23,6 +23,7 @@
 
 #include "pmacc/Environment.hpp"
 #include "pmacc/communication/AsyncCommunication.hpp"
+#include "pmacc/particles/Communication.hpp"
 #include "pmacc/particles/ParticlesBase.hpp"
 #include "pmacc/types.hpp"
 
@@ -44,6 +45,16 @@ namespace pmacc
         template<typename T_Data>
         struct AsyncCommunicationImpl<T_Data, Bool2Type<IsParticleSpecies<T_Data>::value>>
         {
+            template<typename T_Particles, typename T_Queue>
+            caravan::Event operator()(
+                async::Context& context,
+                T_Queue& queue,
+                T_Particles& data,
+                caravan::Event previous = {}) const
+            {
+                return particles::spawnCommunication(context, queue, data, std::move(previous));
+            }
+
             template<class T_Particles>
             EventTask operator()(T_Particles& par, EventTask event) const
             {

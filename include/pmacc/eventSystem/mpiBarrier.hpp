@@ -22,20 +22,30 @@
 
 #pragma once
 
-#include <mpi.h>
+#include "pmacc/async/Context.hpp"
+#include "pmacc/communication/CommunicatorMPI.hpp"
+#include "pmacc/eventSystem/Manager.hpp"
+
+#include <functional>
+#include <utility>
 
 namespace pmacc::eventSystem
 {
-    /** MPI Barrier
-     *
-     * The function is executing an MPI barrier while guaranteeing that the event system is not blocked.
-     * You should call this function before you use MPI collective operations in your code to avoid deadlocks.
-     * After the function returned you know that all participating MPI ranks reached this code line.
-     *
-     * @attention This function should be called from all MPI ranks within the communicator
-     * This method is **NOT** waiting until all events in the event queue are processed.
-     *
-     * @param communicator communicator used for the barrier operation
-     */
-    void mpiBlocking(MPI_Comm communicator);
+    /** Wait at a barrier while keeping PMacc-side completions moving. */
+    template<unsigned DIM, typename T_Progress = std::function<void()>>
+    void mpiBlocking(CommunicatorMPI<DIM>& communicator, T_Progress progress = [] {})
+    {
+        async::Context context;
+        auto barrier = context.spawn(communicator.barrier());
+        Manager::getInstance().waitFor(
+            [&]()
+            {
+                std::invoke(progress);
+                context.runReady();
+                if(barrier.state() == caravan::CompletionState::pending)
+                    return false;
+                barrier.wait();
+                return true;
+            });
+    }
 } // namespace pmacc::eventSystem

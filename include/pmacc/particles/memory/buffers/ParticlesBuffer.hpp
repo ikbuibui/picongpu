@@ -39,6 +39,7 @@
 #include "pmacc/particles/memory/frames/Frame.hpp"
 #include "pmacc/traits/GetUniqueTypeId.hpp"
 
+#include <array>
 #include <memory>
 
 namespace pmacc
@@ -249,6 +250,52 @@ namespace pmacc
          * GridBuffer
          *
          */
+        caravan::Event sendCompletion(uint32_t exchange) const
+        {
+            std::array completions{
+                framesExchanges->sendCompletion(exchange),
+                exchangeMemoryIndexer->sendCompletion(exchange)};
+            return caravan::whenAll(completions);
+        }
+
+        caravan::Event receiveCompletion(uint32_t exchange) const
+        {
+            std::array completions{
+                framesExchanges->receiveCompletion(exchange),
+                exchangeMemoryIndexer->receiveCompletion(exchange)};
+            return caravan::whenAll(completions);
+        }
+
+        void setSendCompletion(uint32_t exchange, caravan::Event completion)
+        {
+            framesExchanges->setSendCompletion(exchange, completion);
+            exchangeMemoryIndexer->setSendCompletion(exchange, std::move(completion));
+        }
+
+        void setReceiveCompletion(uint32_t exchange, caravan::Event completion)
+        {
+            framesExchanges->setReceiveCompletion(exchange, completion);
+            exchangeMemoryIndexer->setReceiveCompletion(exchange, std::move(completion));
+        }
+
+        template<typename T_Queue>
+        auto sendParticles(T_Queue& queue, uint32_t exchange)
+        {
+            return caravan::whenAll(
+                framesExchanges->send(queue, exchange),
+                exchangeMemoryIndexer->send(queue, exchange));
+        }
+
+        template<typename T_Queue>
+        auto receiveParticles(T_Queue& queue, uint32_t exchange)
+        {
+            return caravan::then(
+                caravan::whenAll(
+                    framesExchanges->receive(queue, exchange),
+                    exchangeMemoryIndexer->receive(queue, exchange)),
+                [](auto&&...) {});
+        }
+
         EventTask asyncCommunication(EventTask serialEvent)
         {
             return framesExchanges->asyncCommunication(serialEvent)

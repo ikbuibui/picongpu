@@ -25,12 +25,13 @@
 
 #include <pmacc/Environment.hpp>
 #include <pmacc/algorithms/TypeCast.hpp>
+#include <pmacc/async/Context.hpp>
+#include <pmacc/async/Operations.hpp>
 #include <pmacc/lockstep.hpp>
 #include <pmacc/math/Vector.hpp>
 #include <pmacc/math/isApprox.hpp>
 #include <pmacc/math/vector/VectorOps.hpp>
 #include <pmacc/memory/buffers/HostDeviceBuffer.hpp>
-#include <pmacc/test/PMaccFixture.hpp>
 #include <pmacc/verify.hpp>
 
 #include <cstdint>
@@ -47,9 +48,6 @@
  *  This file is testing vector functionality
  */
 
-using MyPMaccFixture = pmacc::test::PMaccFixture<TEST_DIM>;
-static MyPMaccFixture fixture;
-
 TEST_CASE("vector constructor generator", "[vector]")
 {
     using namespace pmacc;
@@ -58,9 +56,7 @@ TEST_CASE("vector constructor generator", "[vector]")
     using VecType = Vector<uint32_t, TEST_DIM>;
 
     auto hostDeviceBuffer = HostDeviceBuffer<VecType, DIM1>(DataSpace<DIM1>{numElements});
-    using DeviceBuf = DeviceBuffer<uint32_t, DIM1>;
 
-    hostDeviceBuffer.getDeviceBuffer().setValue(VecType::create(42));
     auto const testKernel = [] ALPAKA_FN_ACC(auto const& acc, VecType* data)
     {
         // constexpr lambda generator
@@ -69,8 +65,16 @@ TEST_CASE("vector constructor generator", "[vector]")
         // non constexpr lambda generator
         data[1] = Vector<uint32_t, TEST_DIM>([](uint32_t const i) { return i * 2u; });
     };
-    PMACC_KERNEL(testKernel)(1, 1)(hostDeviceBuffer.getDeviceBuffer().data());
-    hostDeviceBuffer.deviceToHost();
+    auto const device = manager::Device<ComputeDevice>::get().current();
+    ComputeDeviceQueue queue(device);
+    async::Context context;
+    auto kernel = PMACC_KERNEL(testKernel)(1, 1).sender(
+        queue,
+        async::retain(
+            hostDeviceBuffer.getDeviceBuffer().data(),
+            hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView()));
+    auto copy = hostDeviceBuffer.deviceToHost(queue);
+    context.wait(context.spawn(caravan::alpaka::then(std::move(kernel), std::move(copy))));
 
     REQUIRE(hostDeviceBuffer.getHostBuffer().data()[0] == Vector<uint32_t, 3u>(0u, 1u, 2u).shrink<TEST_DIM>());
     REQUIRE(hostDeviceBuffer.getHostBuffer().data()[1] == Vector<uint32_t, 3u>(0u, 2u, 4u).shrink<TEST_DIM>());
@@ -501,14 +505,24 @@ TEST_CASE("vector ops", "[vector]")
 
     auto hostDeviceBuffer = HostDeviceBuffer<bool, DIM1>(DataSpace<DIM1>{numElements});
     auto numTestsBuffer = HostDeviceBuffer<size_t, DIM1>(DataSpace<DIM1>{1});
-    numTestsBuffer.getDeviceBuffer().setValue(0u);
+    auto const device = manager::Device<ComputeDevice>::get().current();
+    ComputeDeviceQueue queue(device);
+    async::Context context;
 
-    hostDeviceBuffer.getDeviceBuffer().setValue(false);
-
-    PMACC_KERNEL(VectorOpsKernel{})
-    (1, 1)(hostDeviceBuffer.getDeviceBuffer().data(), numTestsBuffer.getDeviceBuffer().data());
-    hostDeviceBuffer.deviceToHost();
-    numTestsBuffer.deviceToHost();
+    auto initialize = caravan::alpaka::then(
+        async::fill(queue, hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u),
+        async::fill(queue, numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u));
+    auto kernel = PMACC_KERNEL(VectorOpsKernel{})(1, 1).sender(
+        queue,
+        async::retain(
+            hostDeviceBuffer.getDeviceBuffer().data(),
+            hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView()),
+        async::retain(numTestsBuffer.getDeviceBuffer().data(), numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView()));
+    auto copyResults = caravan::alpaka::then(hostDeviceBuffer.deviceToHost(queue), numTestsBuffer.deviceToHost(queue));
+    context.wait(context.spawn(
+        caravan::alpaka::then(
+            caravan::alpaka::then(std::move(initialize), std::move(kernel)),
+            std::move(copyResults))));
 
     REQUIRE(numTestsBuffer.getHostBuffer().data()[0] == numElements);
 
@@ -531,19 +545,31 @@ TEST_CASE("vector generic", "[vector]")
 
     auto hostDeviceBuffer = HostDeviceBuffer<bool, DIM1>(DataSpace<DIM1>{numElements});
     auto numTestsBuffer = HostDeviceBuffer<size_t, DIM1>(DataSpace<DIM1>{1});
-    numTestsBuffer.getDeviceBuffer().setValue(0u);
-    using DeviceBuf = DeviceBuffer<uint32_t, DIM1>;
+    auto const device = manager::Device<ComputeDevice>::get().current();
+    ComputeDeviceQueue queue(device);
+    async::Context context;
 
-    hostDeviceBuffer.getDeviceBuffer().setValue(false);
-
-    PMACC_KERNEL(CompileTimeKernel1D{})(1, 1)();
-    PMACC_KERNEL(CompileTimeKernel2D{})(1, 1)();
-    PMACC_KERNEL(CompileTimeKernelCompare2D{})(1, 1)();
-
-    PMACC_KERNEL(RunTimeKernel{})
-    (1, 1)(hostDeviceBuffer.getDeviceBuffer().data(), numTestsBuffer.getDeviceBuffer().data());
-    hostDeviceBuffer.deviceToHost();
-    numTestsBuffer.deviceToHost();
+    auto initialize = caravan::alpaka::then(
+        async::fill(queue, hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u),
+        async::fill(queue, numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u));
+    auto compileTime = caravan::alpaka::then(
+        caravan::alpaka::then(
+            PMACC_KERNEL(CompileTimeKernel1D{})(1, 1).sender(queue),
+            PMACC_KERNEL(CompileTimeKernel2D{})(1, 1).sender(queue)),
+        PMACC_KERNEL(CompileTimeKernelCompare2D{})(1, 1).sender(queue));
+    auto runTime = PMACC_KERNEL(RunTimeKernel{})(1, 1).sender(
+        queue,
+        async::retain(
+            hostDeviceBuffer.getDeviceBuffer().data(),
+            hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView()),
+        async::retain(numTestsBuffer.getDeviceBuffer().data(), numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView()));
+    auto copyResults = caravan::alpaka::then(hostDeviceBuffer.deviceToHost(queue), numTestsBuffer.deviceToHost(queue));
+    context.wait(context.spawn(
+        caravan::alpaka::then(
+            caravan::alpaka::then(
+                caravan::alpaka::then(std::move(initialize), std::move(compileTime)),
+                std::move(runTime)),
+            std::move(copyResults))));
     // check that all tests got executed and that the array is not too small.
     REQUIRE(numTestsBuffer.getHostBuffer().data()[0] == numElements);
 

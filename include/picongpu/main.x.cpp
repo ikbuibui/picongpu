@@ -32,19 +32,22 @@
 #include <string>
 #include <typeinfo>
 
+#include <caravan/mpi.hpp>
+
 /** Run a PIConGPU simulation
  *
  * @param argc count of arguments in argv (same as for main() )
  * @param argv arguments of program start (same as for main() )
+ * @param mpiContext Caravan-owned MPI execution context
  */
-int runSimulation(int argc, char** argv)
+int runSimulation(int argc, char** argv, caravan::MpiContext& mpiContext)
 {
     using namespace picongpu;
 
     int errorCode = EXIT_FAILURE;
     // control the simulation lifetime
     {
-        auto sim = ::picongpu::SimulationStarter{};
+        auto sim = ::picongpu::SimulationStarter{mpiContext};
         auto const parserStatus = sim.parseConfigs(argc, argv);
 
         switch(parserStatus)
@@ -78,7 +81,10 @@ int main(int argc, char** argv)
 {
     try
     {
-        return runSimulation(argc, argv);
+        return caravan::MpiRuntime::run(
+            argc,
+            argv,
+            [&](caravan::MpiContext& mpiContext) { return runSimulation(argc, argv, mpiContext); });
     }
     // A last-ditch effort to report exceptions to a user
     catch(std::exception const& ex)

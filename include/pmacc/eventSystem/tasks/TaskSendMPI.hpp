@@ -23,10 +23,8 @@
 #pragma once
 
 #include "pmacc/Environment.hpp"
-#include "pmacc/communication/ICommunicator.hpp"
+#include "pmacc/async/Context.hpp"
 #include "pmacc/eventSystem/tasks/MPITask.hpp"
-
-#include <mpi.h>
 
 namespace pmacc
 {
@@ -44,12 +42,12 @@ namespace pmacc
         void init() override
         {
             auto cPtr = exchange->getCPtrCurrentSize();
-
-            this->request = Environment<DIM>::get().EnvironmentController().getCommunicator().startSend(
+            auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
+            future = context.spawnFuture<caravan::SendResult>(communicator.send(
                 exchange->getExchangeType(),
                 cPtr.asCharPtr(),
                 cPtr.sizeInBytes(),
-                exchange->getCommunicationTag());
+                exchange->getCommunicationTag()));
         }
 
         bool executeIntern() override
@@ -57,20 +55,12 @@ namespace pmacc
             if(this->isFinished())
                 return true;
 
-            if(this->request == nullptr)
-                throw std::runtime_error("request was nullptr (call executeIntern after freed");
-
-            int flag = 0;
-            MPI_CHECK(MPI_Test(this->request, &flag, &(this->status)));
-
-            if(flag) // finished
-            {
-                delete this->request;
-                this->request = nullptr;
-                this->setFinished();
-                return true;
-            }
-            return false;
+            context.runReady();
+            if(future.state() == caravan::CompletionState::pending)
+                return false;
+            static_cast<void>(future.result());
+            setFinished();
+            return true;
         }
 
         ~TaskSendMPI() override
@@ -89,8 +79,8 @@ namespace pmacc
 
     private:
         Exchange<TYPE, DIM>* exchange;
-        MPI_Request* request;
-        MPI_Status status;
+        async::Context context;
+        caravan::Future<caravan::SendResult> future;
     };
 
 } // namespace pmacc

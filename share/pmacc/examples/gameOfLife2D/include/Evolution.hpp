@@ -184,26 +184,26 @@ namespace gol
             mapping = std::make_unique<T_MappingDesc>(layout, guardSize);
         }
 
-        template<typename DBox>
-        void initEvolution(DBox const& writeBox, float const fraction)
+        template<typename T_Queue, typename T_Write>
+        auto initEvolution(T_Queue& queue, T_Write write, float const fraction)
         {
             AreaMapping<CORE + BORDER, T_MappingDesc> mapper(*mapping);
 
             GridController<DIM2>& gc = Environment<DIM2>::get().GridController();
             uint32_t seed = gc.getGlobalSize() + gc.getGlobalRank();
 
-            PMACC_LOCKSTEP_KERNEL(kernel::RandomInit{})
-                .config(
-                    mapper.getGridDim(),
-                    typename T_MappingDesc::SuperCellSize{})(writeBox, seed, fraction, mapper);
+            return PMACC_LOCKSTEP_KERNEL(kernel::RandomInit{})
+                .config(mapper.getGridDim(), typename T_MappingDesc::SuperCellSize{})
+                .sender(queue, std::move(write), seed, fraction, mapper);
         }
 
-        template<uint32_t Area, typename DBox>
-        void run(DBox const& readBox, DBox const& writeBox)
+        template<uint32_t Area, typename T_Queue, typename T_Read, typename T_Write>
+        auto runAsync(T_Queue& queue, T_Read read, T_Write write)
         {
             AreaMapping<Area, T_MappingDesc> mapper(*mapping);
-            PMACC_LOCKSTEP_KERNEL(kernel::Evolution{})
-                .config(mapper.getGridDim(), typename T_MappingDesc::SuperCellSize{})(readBox, writeBox, rule, mapper);
+            return PMACC_LOCKSTEP_KERNEL(kernel::Evolution{})
+                .config(mapper.getGridDim(), typename T_MappingDesc::SuperCellSize{})
+                .sender(queue, std::move(read), std::move(write), rule, mapper);
         }
     };
 

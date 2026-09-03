@@ -21,7 +21,10 @@
 
 #pragma once
 
+#include "pmacc/async/Context.hpp"
 #include "pmacc/eventSystem/events/EventTask.hpp"
+
+#include <utility>
 
 namespace pmacc
 {
@@ -70,6 +73,17 @@ namespace pmacc
         EventTask asyncCommunication(T_Data& data, EventTask parent)
         {
             return AsyncCommunication<T_Data>()(data, parent);
+        }
+
+        /** Eager runtime-sized adapter for migrated PMacc communication. */
+        template<typename T_Data, typename T_Queue>
+        caravan::Event spawnCommunication(
+            async::Context& context,
+            T_Queue& queue,
+            T_Data& data,
+            caravan::Event previous = {})
+        {
+            return AsyncCommunication<T_Data>()(context, queue, data, std::move(previous));
         }
 
     } // namespace communication

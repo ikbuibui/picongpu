@@ -24,7 +24,6 @@
 
 #include "pmacc/Environment.def"
 #include "pmacc/assert.hpp"
-#include "pmacc/communication/manager_common.hpp"
 #include "pmacc/dataManagement/DataConnector.hpp"
 #include "pmacc/device/MemoryInfo.hpp"
 #include "pmacc/eventSystem/eventSystem.hpp"
@@ -36,8 +35,6 @@
 #include "pmacc/particles/tasks/ParticleFactory.hpp"
 #include "pmacc/pluginSystem/PluginConnector.hpp"
 #include "pmacc/simulationControl/SimulationDescription.hpp"
-
-#include <mpi.h>
 
 namespace pmacc
 {
@@ -62,12 +59,6 @@ namespace pmacc
              * @return instance of QueueController
              */
             HINLINE pmacc::QueueController& QueueController();
-
-            /** get the singleton EnvironmentController
-             *
-             * @return instance of EnvironmentController
-             */
-            HINLINE pmacc::EnvironmentController& EnvironmentController();
 
             /** get the singleton Factory
              *
@@ -98,6 +89,9 @@ namespace pmacc
              * @return instance of PluginConnector
              */
             HINLINE pmacc::PluginConnector& PluginConnector();
+
+            /** get the attached Caravan MPI context */
+            HINLINE caravan::MpiContext& getMpiContext();
 
             /** get the singleton MemoryInfo
              *
@@ -145,16 +139,8 @@ namespace pmacc
             return instance;
         }
 
-        /** create and initialize the environment of PMacc
-         *
-         * Usage of MPI or device(accelerator) function calls before this method
-         * are not allowed.
-         *
-         * @param devices number of devices per simulation dimension
-         * @param periodic periodicity each simulation dimension
-         *                 (0 == not periodic, 1 == periodic)
-         */
-        HINLINE void initDevices(DataSpace<T_dim> devices, DataSpace<T_dim> periodic);
+        /** initialize PMacc under the dedicated Caravan MPI runtime */
+        HINLINE void initDevices(caravan::MpiContext& mpiContext, DataSpace<T_dim> devices, DataSpace<T_dim> periodic);
 
         /** initialize the computing domain information of PMacc
          *

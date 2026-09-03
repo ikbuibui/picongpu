@@ -26,11 +26,9 @@
 #include "pmacc/alpakaHelper/Device.hpp"
 #include "pmacc/alpakaHelper/acc.hpp"
 #include "pmacc/attribute/FunctionSpecifier.hpp"
-#include "pmacc/communication/manager_common.hpp"
 #include "pmacc/types.hpp"
 
 #include <stdexcept>
-
 
 #if !defined(ALPAKA_API_PREFIX)
 /* ALPAKA_API_PREFIX was removed in alpaka 1.0.0 but is required to get access cuda/hip functions directly.
@@ -54,14 +52,6 @@ namespace pmacc
                 EnvironmentContext::getInstance().isDeviceSelected(),
                 "Environment< DIM >::initDevices() must be called before this method!");
             return QueueController::getInstance();
-        }
-
-        pmacc::EnvironmentController& Environment::EnvironmentController()
-        {
-            PMACC_ASSERT_MSG(
-                EnvironmentContext::getInstance().isMpiInitialized(),
-                "Environment< DIM >::initDevices() must be called before this method!");
-            return EnvironmentController::getInstance();
         }
 
         pmacc::Factory& Environment::Factory()
@@ -94,6 +84,11 @@ namespace pmacc
         pmacc::PluginConnector& Environment::PluginConnector()
         {
             return PluginConnector::getInstance();
+        }
+
+        caravan::MpiContext& Environment::getMpiContext()
+        {
+            return *EnvironmentContext::getInstance().m_mpiContext;
         }
 
         device::MemoryInfo& Environment::MemoryInfo()
@@ -142,22 +137,16 @@ namespace pmacc
     }
 
     template<uint32_t T_dim>
-    void Environment<T_dim>::initDevices(DataSpace<T_dim> devices, DataSpace<T_dim> periodic)
+    void Environment<T_dim>::initDevices(
+        caravan::MpiContext& mpiContext,
+        DataSpace<T_dim> devices,
+        DataSpace<T_dim> periodic)
     {
-        // initialize the MPI context
-        detail::EnvironmentContext::getInstance().init();
-
-        // create singleton instances
-        GridController().init(devices, periodic);
-
-        EnvironmentController();
-
+        detail::EnvironmentContext::getInstance().init(mpiContext);
+        GridController().init(mpiContext, devices, periodic);
         detail::EnvironmentContext::getInstance().setDevice(static_cast<int>(GridController().getHostRank()));
-
         QueueController().activate();
-
         MemoryInfo();
-
         SimulationDescription();
     }
 
@@ -183,50 +172,10 @@ namespace pmacc
 
     namespace detail
     {
-        void EnvironmentContext::init()
+        void EnvironmentContext::init(caravan::MpiContext& mpiContext)
         {
+            m_mpiContext = &mpiContext;
             m_isMpiInitialized = true;
-
-            char const* env_value = std::getenv("PIC_USE_THREADED_MPI");
-            if(env_value)
-            {
-                int required_level{};
-                if(strcmp(env_value, "MPI_THREAD_SINGLE") == 0)
-                {
-                    required_level = MPI_THREAD_SINGLE;
-                }
-                else if(strcmp(env_value, "MPI_THREAD_FUNNELED") == 0)
-                {
-                    required_level = MPI_THREAD_FUNNELED;
-                }
-                else if(strcmp(env_value, "MPI_THREAD_SERIALIZED") == 0)
-                {
-                    required_level = MPI_THREAD_SERIALIZED;
-                }
-                else if(strcmp(env_value, "MPI_THREAD_MULTIPLE") == 0)
-                {
-                    required_level = MPI_THREAD_MULTIPLE;
-                }
-                else
-                {
-                    throw std::runtime_error(
-                        "Environment variable PIC_USE_THREADED_MPI must be one of MPI_THREAD_SINGLE, "
-                        "MPI_THREAD_FUNNELED, MPI_THREAD_SERIALIZED or MPI_THREAD_MULTIPLE.");
-                }
-                // MPI_Init with NULL is allowed since MPI 2.0
-                int provided;
-                MPI_CHECK(MPI_Init_thread(nullptr, nullptr, required_level, &provided));
-                if(provided != required_level)
-                {
-                    std::cerr << "[MPI_Init_thread] Provided level '" << provided << "' differs from required level '"
-                              << required_level << "'. Will go on.\n";
-                }
-            }
-            else
-            {
-                // MPI_Init with NULL is allowed since MPI 2.0
-                MPI_CHECK(MPI_Init(nullptr, nullptr));
-            }
         }
 
         void EnvironmentContext::finalize()
@@ -237,11 +186,8 @@ namespace pmacc
                 // Required by scorep for flushing the buffers
                 alpaka::wait(manager::Device<ComputeDevice>::get().current());
                 m_isMpiInitialized = false;
-                /* Free the MPI context.
-                 * The gpu context is freed by the `QueueController`, because
-                 * MPI and CUDA are independent.
-                 */
-                MPI_CHECK(MPI_Finalize());
+                /* The gpu context is freed by the QueueController. Caravan owns MPI finalization. */
+                m_mpiContext = nullptr;
             }
         }
 
