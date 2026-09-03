@@ -609,9 +609,11 @@ now own their alpaka queues, launch kernels only through lazy senders, use expli
 copies, and call the explicit gather boundary; their source no longer uses the legacy
 queue, task, transaction, or kernel-call APIs. Buffer allocation now leaves storage
 uninitialized, and the examples compose required fills into their initial sender graph
-instead of waiting for hidden legacy construction tasks. This removes the stale
-pre-Caravan initialization path and starts call-site migration without adding another
-compatibility layer.
+instead of waiting for hidden legacy construction tasks. The PMacc vector and lockstep
+tests likewise own queues and compose fills, kernels, and copies as lazy sender graphs;
+they no longer invoke transaction-backed kernel or buffer operations. This removes the
+stale pre-Caravan initialization path and continues call-site migration without adding
+another compatibility layer.
 
 1. Convert field, particle, reduction, gather, signal, and helper operations to the
    sender-first API.
