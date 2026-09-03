@@ -36,7 +36,7 @@ namespace caravan::mpi
 
         struct Send
         {
-            BufferLease buffer;
+            ConstBufferLease buffer;
             Peer peer;
             MessageTag tag;
             CommunicatorId communicator;
@@ -52,7 +52,7 @@ namespace caravan::mpi
 
         struct AllReduce
         {
-            BufferLease input;
+            ConstBufferLease input;
             BufferLease output;
             ScalarType type;
             ReduceOperation operation;
@@ -61,7 +61,7 @@ namespace caravan::mpi
 
         struct Reduce
         {
-            BufferLease input;
+            ConstBufferLease input;
             BufferLease output;
             ScalarType type;
             ReduceOperation operation;
@@ -71,7 +71,7 @@ namespace caravan::mpi
 
         struct Gather
         {
-            BufferLease input;
+            ConstBufferLease input;
             BufferLease output;
             Peer root;
             CommunicatorId communicator;
@@ -79,7 +79,7 @@ namespace caravan::mpi
 
         struct GatherV
         {
-            BufferLease input;
+            ConstBufferLease input;
             BufferLease output;
             std::vector<std::size_t> receiveBytes;
             std::vector<std::size_t> displacements;
@@ -285,7 +285,7 @@ namespace caravan::mpi
 
     OperationSender<SendResult> send(
         MpiContext& context,
-        BufferLease buffer,
+        ConstBufferLease buffer,
         Peer destination,
         MessageTag tag,
         CommunicatorId communicator = worldCommunicator);
@@ -299,7 +299,7 @@ namespace caravan::mpi
 
     OperationSender<AllReduceResult> allReduce(
         MpiContext& context,
-        BufferLease input,
+        ConstBufferLease input,
         BufferLease output,
         ScalarType type,
         ReduceOperation operation,
@@ -307,7 +307,7 @@ namespace caravan::mpi
 
     OperationSender<ReduceResult> reduce(
         MpiContext& context,
-        BufferLease input,
+        ConstBufferLease input,
         BufferLease output,
         ScalarType type,
         ReduceOperation operation,
@@ -316,14 +316,14 @@ namespace caravan::mpi
 
     OperationSender<GatherResult> gather(
         MpiContext& context,
-        BufferLease input,
+        ConstBufferLease input,
         BufferLease output,
         Peer root,
         CommunicatorId communicator = worldCommunicator);
 
     OperationSender<GatherResult> gatherV(
         MpiContext& context,
-        BufferLease input,
+        ConstBufferLease input,
         BufferLease output,
         std::vector<std::size_t> receiveBytes,
         std::vector<std::size_t> displacements,

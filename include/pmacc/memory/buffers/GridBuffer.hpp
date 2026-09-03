@@ -519,10 +519,7 @@ namespace pmacc
                 auto const sendEx = Mask::getMirroredExchangeType(i);
                 if(hasSendExchange(sendEx))
                 {
-                    auto completion = context.spawn(
-                        caravan::letValue(
-                            caravan::asSender(sendCompletions[sendEx]),
-                            [this, &queue, sendEx] { return send(queue, sendEx); }));
+                    auto completion = context.spawn(send(queue, sendEx));
                     sendCompletions[sendEx] = completion;
                     branches.push_back(std::move(completion));
                 }
