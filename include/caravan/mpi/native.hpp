@@ -265,6 +265,13 @@ namespace caravan
             CommunicatorId communicator,
             std::shared_ptr<std::size_t> const& resultBytes);
 
+        NativeRequestBatch startAllGather(
+            NativeMpiContext& context,
+            ConstBufferLease const& input,
+            BufferLease const& output,
+            CommunicatorId communicator,
+            std::shared_ptr<std::size_t> const& resultBytes);
+
         NativeRequestBatch startGatherV(
             NativeMpiContext& context,
             ConstBufferLease const& input,

@@ -54,7 +54,7 @@ namespace pmacc
     template<unsigned DIM, typename CheckpointingClass>
     SimulationHelper<DIM, CheckpointingClass>::~SimulationHelper()
     {
-        signalContext.wait(signalCompletion);
+        asyncContext.wait(signalCompletion);
         checkpointing.finishTimeBasedCheckpointing();
         tSimulation.toggleEnd();
         if(output)
@@ -263,7 +263,7 @@ namespace pmacc
     template<unsigned DIM, typename CheckpointingClass>
     void SimulationHelper<DIM, CheckpointingClass>::checkSignals(uint32_t const currentStep)
     {
-        signalContext.runReady();
+        asyncContext.runReady();
         if(signalCompletion.state() == caravan::CompletionState::pending)
             return;
         signalCompletion.wait();
@@ -297,7 +297,7 @@ namespace pmacc
                 caravan::ScalarType::uint32,
                 caravan::ReduceOperation::sum));
         auto handle = caravan::then(
-            signalContext.onControl(std::move(reductions)),
+            asyncContext.onControl(std::move(reductions)),
             [this, state](caravan::AllReduceResult, caravan::AllReduceResult)
             {
                 auto const ranks = Environment<DIM>::get().GridController().getCommunicator().getSize();
@@ -317,7 +317,7 @@ namespace pmacc
                 }
                 signal::release(shouldCheckpoint, shouldStop);
             });
-        signalCompletion = signalContext.spawn(std::move(handle));
+        signalCompletion = asyncContext.spawn(std::move(handle));
     }
 
     template<unsigned DIM, typename CheckpointingClass>
