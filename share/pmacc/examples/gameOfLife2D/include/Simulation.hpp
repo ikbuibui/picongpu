@@ -195,14 +195,16 @@ namespace gol
             /* Calls kernel to initialize random generator. Game of Life is then  *
              * initialized using uniform random numbers. With 10% (second arg)    *
              * white points. World will be written to buffer in first argument    */
-            // Buffer construction still performs legacy initial fills. Complete them before sender-owned work.
-            ::alpaka::wait(manager::Device<ComputeDevice>::get().current());
-            auto initialization = evo.initEvolution(
-                *computeQueue,
-                pmacc::async::retain(
-                    buff1->getDeviceBuffer().getDataBox(),
-                    buff1->getDeviceBuffer().getOwnedAlpakaView()),
-                0.1);
+            auto initialization = caravan::alpaka::then(
+                caravan::alpaka::then(
+                    pmacc::async::fill(*computeQueue, buff1->getDeviceBuffer().getOwnedAlpakaView(), 0u),
+                    pmacc::async::fill(*computeQueue, buff2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
+                evo.initEvolution(
+                    *computeQueue,
+                    pmacc::async::retain(
+                        buff1->getDeviceBuffer().getDataBox(),
+                        buff1->getDeviceBuffer().getOwnedAlpakaView()),
+                    0.1));
             asyncContext.wait(asyncContext.spawn(std::move(initialization)));
         }
 
