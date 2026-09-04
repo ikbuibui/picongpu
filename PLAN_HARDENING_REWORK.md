@@ -626,8 +626,11 @@ sender, its dependency-free PMacc and PIConGPU callers use that API, and focused
 exercise it through the PMacc async context. The final PIConGPU gather callers use the explicit
 gather boundary, so the legacy implicit gather adapter is removed. Device reduction now also exposes
 a queue-taking lazy sender and uses the same native enqueue path as ordinary kernel senders; its
-blocking operator remains only as the M2 compatibility boundary. This removes stale pre-Caravan
-initialization paths and continues call-site migration without adding another compatibility layer.
+blocking operator remains only as the M2 compatibility boundary. Device-side buffer-size storage is
+now also left uninitialized at allocation, removing a hidden legacy initialization task that raced with
+sender operations on caller-owned queues; queue-taking copies and stack resets initialize it explicitly.
+This removes stale pre-Caravan initialization paths and continues call-site migration without adding
+another compatibility layer.
 
 Migrate vertically by subsystem rather than completing all PMacc changes while
 leaving PIConGPU broken. For each field, particle, reduction/gather, buffer/kernel
