@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "pmacc/async/Operations.hpp"
 #include "pmacc/kernel/atomic.hpp"
 #include "pmacc/lockstep.hpp"
 #include "pmacc/mappings/kernel/AreaMapping.hpp"
@@ -32,6 +33,8 @@
 #include "pmacc/particles/particleFilter/PositionFilter.hpp"
 #include "pmacc/traits/GetNumWorkers.hpp"
 #include "pmacc/types.hpp"
+
+#include <utility>
 
 namespace pmacc
 {
@@ -133,15 +136,22 @@ namespace pmacc
 
             auto const mapper = makeAreaMapper<AREA>(cellDescription);
 
-            PMACC_LOCKSTEP_KERNEL(KernelCountParticles{})
-                .config(mapper.getGridDim(), buffer)(
-                    buffer.getDeviceParticlesBox(),
-                    counter.getDeviceBuffer().data(),
-                    filter,
-                    mapper,
-                    parFilter);
-
-            counter.deviceToHost();
+            auto& queue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+            auto initialize = async::fill(queue, counter.getDeviceBuffer().getOwnedAlpakaView(), 0u);
+            auto count = PMACC_LOCKSTEP_KERNEL(KernelCountParticles{})
+                             .config(mapper.getGridDim(), buffer)
+                             .sender(
+                                 queue,
+                                 buffer.getDeviceParticlesBox(),
+                                 counter.getDeviceBuffer().data(),
+                                 filter,
+                                 mapper,
+                                 parFilter);
+            auto copy = counter.deviceToHost(queue);
+            caravan::syncWait(
+                caravan::alpaka::then(
+                    caravan::alpaka::then(std::move(initialize), std::move(count)),
+                    std::move(copy)));
             return *(counter.getHostBuffer().getDataBox());
         }
 

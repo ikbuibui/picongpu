@@ -193,16 +193,17 @@ namespace picongpu
             globalFieldEnergy[0] = EneVectorType::create(0.0);
             globalFieldEnergy[1] = EneVectorType::create(0.0);
 
+            auto& queue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
             EneVectorType localReducedFieldEnergy[2];
-            localReducedFieldEnergy[0] = reduceField(fieldB);
-            localReducedFieldEnergy[1] = reduceField(fieldE);
+            localReducedFieldEnergy[0] = reduceField(queue, fieldB);
+            localReducedFieldEnergy[1] = reduceField(queue, fieldE);
 
-            mpiReduce(
+            caravan::syncWait(mpiReduce.reduce(
                 pmacc::math::operation::Add(),
                 globalFieldEnergy,
                 localReducedFieldEnergy,
                 2,
-                mpi::reduceMethods::Reduce());
+                mpi::reduceMethods::Reduce()));
 
             float_64 energyFieldBReduced = 0.0;
             float_64 energyFieldEReduced = 0.0;
@@ -236,8 +237,8 @@ namespace picongpu
         }
 
     private:
-        template<typename T_Field>
-        EneVectorType reduceField(std::shared_ptr<T_Field> field)
+        template<typename T_Queue, typename T_Field>
+        EneVectorType reduceField(T_Queue& queue, std::shared_ptr<T_Field> field)
         {
             /*define stacked DataBox's for reduce algorithm*/
             using TransformedBox
@@ -253,10 +254,8 @@ namespace picongpu
             Box64bit field64bit(fieldTransform);
             D1Box d1Access(field64bit, fieldSize);
 
-            EneVectorType fieldEnergyReduced
-                = (*localReduce)(pmacc::math::operation::Add(), d1Access, fieldSize.productOfComponents());
-
-            return fieldEnergyReduced;
+            return caravan::syncWait<EneVectorType>(
+                localReduce->reduce(queue, pmacc::math::operation::Add(), d1Access, fieldSize.productOfComponents()));
         }
     };
 
