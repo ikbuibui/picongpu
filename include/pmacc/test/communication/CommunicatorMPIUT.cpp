@@ -50,12 +50,13 @@ TEST_CASE("CommunicatorMPI consumes Caravan topology snapshots")
         pmacc::mpi::MPIReduce reduce;
         std::uint32_t local = static_cast<std::uint32_t>(topology.rank + 1);
         std::uint32_t global = 0u;
-        reduce(pmacc::math::operation::Add{}, &global, &local, 1u);
+        context.wait(context.spawn(reduce.reduce(pmacc::math::operation::Add{}, &global, &local, 1u)));
         if(global != static_cast<std::uint32_t>(topology.size * (topology.size + 1) / 2))
             throw std::runtime_error("Caravan-backed PMacc all-reduce failed");
 
         global = 0u;
-        reduce(pmacc::math::operation::Add{}, &global, &local, 1u, pmacc::mpi::reduceMethods::Reduce{});
+        context.wait(context.spawn(
+            reduce.reduce(pmacc::math::operation::Add{}, &global, &local, 1u, pmacc::mpi::reduceMethods::Reduce{})));
         if(reduce.hasResult(pmacc::mpi::reduceMethods::Reduce{})
            && global != static_cast<std::uint32_t>(topology.size * (topology.size + 1) / 2))
             throw std::runtime_error("Caravan-backed PMacc root reduction failed");
