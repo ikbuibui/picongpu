@@ -4,6 +4,7 @@
  */
 #include <pmacc/alpakaHelper/acc.hpp>
 #include <pmacc/async.hpp>
+#include <pmacc/device/Reduce.hpp>
 #include <pmacc/fields/Communication.hpp>
 #include <pmacc/mappings/kernel/MappingDescription.hpp>
 #include <pmacc/math/Vector.hpp>
@@ -117,6 +118,26 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
 
     CHECK(output.data()[0] == 42);
     CHECK(continued);
+}
+
+TEST_CASE("Device reduction returns a lazy sender", "[async][reduce]")
+{
+    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
+    pmacc::ComputeDeviceQueue queue(device);
+    pmacc::HostDeviceBuffer<int, DIM1> input(pmacc::MemSpace<DIM1>{4u});
+    input.getHostBuffer().data()[0] = 1;
+    input.getHostBuffer().data()[1] = 2;
+    input.getHostBuffer().data()[2] = 3;
+    input.getHostBuffer().data()[3] = 4;
+    caravan::syncWait(input.hostToDevice(queue));
+
+    pmacc::device::Reduce reduce(1024u);
+    auto reduction = reduce.reduce(queue, pmacc::math::operation::Add{}, input.getDeviceBuffer().getDataBox(), 4u);
+    static_assert(caravan::Sender<decltype(reduction)>);
+    auto result = caravan::syncWait<int>(std::move(reduction));
+
+    CHECK(result == 10);
+    CHECK(reduce(pmacc::math::operation::Add{}, input.getDeviceBuffer().getDataBox(), 4u) == 10);
 }
 
 TEST_CASE("Host-device buffer queue overloads return lazy copies", "[async][memory]")
