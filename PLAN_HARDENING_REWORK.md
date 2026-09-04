@@ -624,6 +624,57 @@ operation tests no longer acquire their queues through an event-system header. N
 uses `EventTask`, transaction, or direct event-system APIs now. This removes stale pre-Caravan
 initialization paths and continues call-site migration without adding another compatibility layer.
 
+Migrate vertically by subsystem rather than completing all PMacc changes while
+leaving PIConGPU broken. For each field, particle, reduction/gather, buffer/kernel
+helper, and simulation-control slice: finalize the PMacc sender API, migrate its
+PIConGPU callers and tests, then remove that slice's compatibility adapter. Keep
+each committed step buildable; a temporary local break is acceptable only within
+one tightly scoped migration. This preserves PIConGPU as the integration test for
+the PMacc API and avoids discovering API mismatches after a repository-wide
+PMacc-only migration.
+
+### Remaining M1 inventory
+
+The current audit baseline is commit `ea7902c129`. Update these counts as migration
+lands; completion is determined by the zero-legacy-reference gate below rather than
+by preserving the baseline counts.
+
+- [ ] **Simulation orchestration:** replace the global transaction and `EventTask`
+      graph in `picongpu/simulation/control/Simulation.hpp`, particle push, current
+      interpolation, initialization, `SimulationHelper`, and checkpoint barriers
+      with the shared async context and explicit spawn/wait boundaries.
+- [ ] **Field communication:** migrate `EMFieldBase`, `FieldJ`, `FieldTmp`, PML,
+      FDTD, particle-to-grid, and charge-conservation callers from
+      `asyncCommunication(EventTask)` and field task factories to field senders.
+- [ ] **Particle communication:** migrate particle push from the legacy generic
+      `asyncCommunication` overload, then remove the old overload and the remaining
+      transaction paths in `ParticlesBase`, particle buffers, stack exchange, and
+      mallocMC helpers.
+- [ ] **Reduction and gather:** make `MPIReduce` sender-first instead of waiting on
+      the global transaction and calling `syncWait`; migrate its PIConGPU callers.
+      Migrate the remaining legacy `GatherSlice::gatherSlice` callers in
+      `Visualisation.hpp` and `Shadowgraphy.x.cpp`.
+- [ ] **Kernel and buffer helpers:** convert every remaining eager kernel launch to
+      `.sender(queue, ...)` and replace no-queue copies/fills with queue-taking
+      senders, including PIConGPU dimensional tests. Any call through
+      `KernelLauncher::operator()` still requires `TaskKernel` and blocks M2.
+- [ ] **Compatibility boundary:** either migrate or identify for M2 deletion every
+      remaining direct dependency on `EventTask`, `eventSystem`, `ITask`, eager
+      buffer overloads, and field/particle factories. Keep only deliberately named
+      migration/interop adapters until their final caller is gone.
+- [ ] **Validation:** keep each vertical slice buildable and run its focused CPU,
+      multi-rank, and available GPU tests; complete the full backend checks listed
+      below before marking M1 complete.
+
+At this baseline, 39 PIConGPU files directly reference `EventTask`, `eventSystem`,
+or `ITask`; 20 PMacc production files outside the event-system and field/particle
+task implementation directories do so; 21 PIConGPU files reference `MPIReduce`;
+and two PIConGPU callers use the legacy gather entry point. There are 129 PMacc
+kernel-macro sites across 78 files to audit, including already migrated sender
+calls. M1 is complete when no legacy reference remains outside the directories and
+named adapters that M2 will delete, no eager kernel/task launch remains, and no
+normal primitive accepts a legacy predecessor.
+
 1. Convert field, particle, reduction, gather, signal, and helper operations to the
    sender-first API.
 2. Keep one final eager spawn boundary per independent dynamic graph.
