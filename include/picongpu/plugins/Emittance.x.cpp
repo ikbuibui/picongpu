@@ -30,6 +30,7 @@
 #include "picongpu/plugins/multi/multi.hpp"
 #include "picongpu/simulation/control/MovingWindow.hpp"
 
+#include <pmacc/async/Operations.hpp>
 #include <pmacc/dataManagement/DataConnector.hpp>
 #include <pmacc/kernel/atomic.hpp>
 #include <pmacc/lockstep.hpp>
@@ -49,10 +50,13 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <caravan/mpi.hpp>
 
 namespace picongpu
 {
@@ -83,7 +87,6 @@ namespace picongpu
             T_DBox gSumMomPos,
             T_DBox gCount_e,
             DataSpace<simDim> globalOffset,
-            int const subGridY,
             T_Mapping mapper,
             T_Filter filter) const
         {
@@ -318,18 +321,10 @@ namespace picongpu
             pmacc::math::Size_t<simDim> gpuDim = gc.getGpuNodes();
             pmacc::math::Int<simDim> gpuPos = gc.getPosition();
 
-            /* my plane means: the r_element I am calculating should be 1GPU in width */
-            pmacc::math::Size_t<simDim> sizeTransversalPlane(gpuDim);
-            sizeTransversalPlane[r_element] = 1;
-
-            // avoid deadlock for following, blocking MPI operations
-            eventSystem::getTransactionEvent().waitForFinished();
-
-
-            for(int planePos = 0; planePos <= (int) gpuDim[r_element]; ++planePos)
+            for(int planePos = 0; planePos < static_cast<int>(gpuDim[r_element]); ++planePos)
             {
                 auto mpiReduce = std::make_unique<mpi::MPIReduce>();
-                bool isInGroup = (gpuPos[r_element] == planePos);
+                bool const isInGroup = gpuPos[r_element] == planePos;
 
                 mpiReduce->participate(isInGroup);
                 if(isInGroup)
@@ -339,43 +334,14 @@ namespace picongpu
                 }
             }
 
-            /* Create MPI communicator for openPMD IO with ranks of each plane reduce root */
-            {
-                /* Array with root ranks of the planeReduce operations */
-                std::vector<int> planeReduceRootRanks(gc.getGlobalSize(), -1);
-                /* Am I one of the planeReduce root ranks? my global rank : -1 */
-                int myRootRank = gc.getGlobalRank() * isPlaneReduceRoot - (!isPlaneReduceRoot);
-
-                // avoid deadlock between not finished pmacc tasks and mpi blocking collectives
-                eventSystem::getTransactionEvent().waitForFinished();
-                MPI_Group world_group, new_group;
-                MPI_CHECK(MPI_Allgather(
-                    &myRootRank,
-                    1,
-                    MPI_INT,
-                    planeReduceRootRanks.data(),
-                    1,
-                    MPI_INT,
-                    gc.getCommunicator().getMPIComm()));
-
-                /* remove all non-roots (-1 values) */
-                std::sort(planeReduceRootRanks.begin(), planeReduceRootRanks.end());
-                std::vector<int> ranks(
-                    std::lower_bound(planeReduceRootRanks.begin(), planeReduceRootRanks.end(), 0),
-                    planeReduceRootRanks.end());
-
-                MPI_CHECK(MPI_Comm_group(gc.getCommunicator().getMPIComm(), &world_group));
-                MPI_CHECK(MPI_Group_incl(world_group, ranks.size(), ranks.data(), &new_group));
-                MPI_CHECK(MPI_Comm_create(gc.getCommunicator().getMPIComm(), new_group, &commGather));
-                MPI_CHECK(MPI_Group_free(&new_group));
-                MPI_CHECK(MPI_Group_free(&world_group));
-            }
-
-            // decide which MPI-rank writes output
-            int gatherRank = -1;
-            if(commGather != MPI_COMM_NULL)
-                MPI_CHECK(MPI_Comm_rank(commGather, &gatherRank));
-            writeToFile = (gatherRank == 0);
+            mpiContext = &Environment<>::get().getMpiContext();
+            auto const world = mpiContext->topology();
+            gatherCommunicator
+                = caravan::syncWait<std::optional<caravan::CommunicatorInfo>>(caravan::mpi::splitCommunicator(
+                    *mpiContext,
+                    isPlaneReduceRoot ? std::optional<int>{0} : std::nullopt,
+                    world.rank));
+            writeToFile = gatherCommunicator && gatherCommunicator->rank == 0;
 
             SubGrid<simDim> const& subGrid = Environment<simDim>::get().SubGrid();
             gSumMom2
@@ -417,6 +383,22 @@ namespace picongpu
                     std::cerr << "Error on flushing file [" << filename << "]. " << std::endl;
                 outFile.close();
             }
+            if(gatherCommunicator)
+            {
+                try
+                {
+                    caravan::syncWait(
+                        caravan::mpi::destroyCommunicator(*mpiContext, gatherCommunicator->communicator));
+                }
+                catch(std::exception const& error)
+                {
+                    std::cerr << "Failed to destroy emittance gather communicator: " << error.what() << '\n';
+                }
+                catch(...)
+                {
+                    std::cerr << "Failed to destroy emittance gather communicator\n";
+                }
+            }
         }
 
         /** this code is executed if the current time step is supposed to compute
@@ -454,94 +436,75 @@ namespace picongpu
             // use data connector to get particle data
             auto particles = dc.get<ParticlesType>(ParticlesType::FrameType::getName());
 
-            gSumMom2->getDeviceBuffer().setValue(0.0);
-            gSumPos2->getDeviceBuffer().setValue(0.0);
-            gSumMomPos->getDeviceBuffer().setValue(0.0);
-            gCount_e->getDeviceBuffer().setValue(0.0);
-
             auto const mapper = makeAreaMapper<AREA>(*m_cellDescription);
-
-            auto kernel = PMACC_LOCKSTEP_KERNEL(KernelCalcEmittance{}).config(mapper.getGridDim(), *particles);
+            auto& queue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
 
             // Some variables required so that it is possible for the kernel
             // to calculate the absolute position of the particles
-            DataSpace<simDim> localSize(m_cellDescription->getGridLayout().sizeWithoutGuardND());
             SubGrid<simDim> const& subGrid = Environment<simDim>::get().SubGrid();
             int const globalDomainSizeY = subGrid.getGlobalDomain().size.y();
             auto movingWindow = MovingWindow::getInstance().getWindow(currentStep);
             DataSpace<simDim> globalOffset(subGrid.getLocalDomain().offset);
 
-            auto binaryKernel = std::bind(
-                kernel,
-                particles->getDeviceParticlesBox(),
-                gSumMom2->getDeviceBuffer().getDataBox(),
-                gSumPos2->getDeviceBuffer().getDataBox(),
-                gSumMomPos->getDeviceBuffer().getDataBox(),
-                gCount_e->getDeviceBuffer().getDataBox(),
-                globalOffset,
-                globalDomainSizeY,
-                mapper,
-                std::placeholders::_1);
+            auto binaryKernel = [&](auto filter)
+            {
+                auto initialize = caravan::alpaka::then(
+                    caravan::alpaka::then(
+                        async::fill(queue, gSumMom2->getDeviceBuffer().getOwnedAlpakaView(), 0u),
+                        async::fill(queue, gSumPos2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
+                    caravan::alpaka::then(
+                        async::fill(queue, gSumMomPos->getDeviceBuffer().getOwnedAlpakaView(), 0u),
+                        async::fill(queue, gCount_e->getDeviceBuffer().getOwnedAlpakaView(), 0u)));
+                auto kernel = PMACC_LOCKSTEP_KERNEL(KernelCalcEmittance{})
+                                  .config(mapper.getGridDim(), *particles)
+                                  .sender(
+                                      queue,
+                                      particles->getDeviceParticlesBox(),
+                                      gSumMom2->getDeviceBuffer().getDataBox(),
+                                      gSumPos2->getDeviceBuffer().getDataBox(),
+                                      gSumMomPos->getDeviceBuffer().getDataBox(),
+                                      gCount_e->getDeviceBuffer().getDataBox(),
+                                      globalOffset,
+                                      mapper,
+                                      filter);
+                caravan::syncWait(caravan::alpaka::then(std::move(initialize), std::move(kernel)));
+            };
 
             auto idProvider = dc.get<IdProvider>("globalId");
-
             meta::ForEach<typename Help::EligibleFilters, plugins::misc::ExecuteIfNameIsEqual<boost::mpl::_1>>{}(
                 m_help->filter.get(m_id),
                 currentStep,
                 idProvider->getDeviceGenerator(),
                 binaryKernel);
 
-            // get gSum, ... from GPU
-            gSumMom2->deviceToHost();
-            gSumPos2->deviceToHost();
-            gSumMomPos->deviceToHost();
-            gCount_e->deviceToHost();
+            auto copies = caravan::alpaka::then(
+                caravan::alpaka::then(gSumMom2->deviceToHost(queue), gSumPos2->deviceToHost(queue)),
+                caravan::alpaka::then(gSumMomPos->deviceToHost(queue), gCount_e->deviceToHost(queue)));
+            caravan::syncWait(std::move(copies));
 
-            auto localDomSizeY = subGrid.getGlobalDomain().size.y();
-
+            auto const localDomSizeY = subGrid.getLocalDomain().size.y();
             pmacc::HostBuffer<float_64, DIM1> reducedSumMom2(localDomSizeY);
             pmacc::HostBuffer<float_64, DIM1> reducedSumPos2(localDomSizeY);
             pmacc::HostBuffer<float_64, DIM1> reducedSumMomPos(localDomSizeY);
             pmacc::HostBuffer<float_64, DIM1> reducedCount_e(localDomSizeY);
-            reducedSumMom2.setValue(0.0);
-            reducedSumPos2.setValue(0.0);
-            reducedSumMomPos.setValue(0.0);
-            reducedCount_e.setValue(0.0);
 
-            // add gSum values from all GPUs using MPI
-            (*planeReduce)(
-                pmacc::math::operation::Add(),
-                reducedSumMom2.data(),
-                gSumMom2->getHostBuffer().data(),
-                reducedSumMom2.size(),
-                mpi::reduceMethods::Reduce());
-
-            (*planeReduce)(
-                pmacc::math::operation::Add(),
-                reducedSumPos2.data(),
-                gSumPos2->getHostBuffer().data(),
-                reducedSumPos2.size(),
-                mpi::reduceMethods::Reduce());
-
-            (*planeReduce)(
-                pmacc::math::operation::Add(),
-                reducedSumMomPos.data(),
-                gSumMomPos->getHostBuffer().data(),
-                reducedSumMomPos.size(),
-                mpi::reduceMethods::Reduce());
-
-            (*planeReduce)(
-                pmacc::math::operation::Add(),
-                reducedCount_e.data(),
-                gCount_e->getHostBuffer().data(),
-                reducedCount_e.size(),
-                mpi::reduceMethods::Reduce());
-
+            auto const reducePlane = [&](auto& destination, auto& source)
+            {
+                caravan::syncWait(planeReduce->reduce(
+                    pmacc::math::operation::Add(),
+                    destination.data(),
+                    source.getHostBuffer().data(),
+                    destination.size(),
+                    mpi::reduceMethods::Reduce()));
+            };
+            reducePlane(reducedSumMom2, *gSumMom2);
+            reducePlane(reducedSumPos2, *gSumPos2);
+            reducePlane(reducedSumMomPos, *gSumMomPos);
+            reducePlane(reducedCount_e, *gCount_e);
 
             /** all non-reduce-root processes are done now */
             if(!isPlaneReduceRoot)
                 return;
-
 
             // gather to file writer
             pmacc::HostBuffer<float_64, DIM1> globalSumMom2(globalDomainSizeY);
@@ -549,69 +512,57 @@ namespace picongpu
             pmacc::HostBuffer<float_64, DIM1> globalSumMomPos(globalDomainSizeY);
             pmacc::HostBuffer<float_64, DIM1> globalCount_e(globalDomainSizeY);
 
-            // gather y offsets, so we can store our gathered data in the right order
-            int gatherSize = -1;
-            MPI_CHECK(MPI_Comm_size(commGather, &gatherSize));
-            std::vector<int> y_offsets(gatherSize);
-            std::vector<int> y_sizes(gatherSize);
-            long int const y_off = subGrid.getLocalDomain().offset.y();
-            int const y_siz = subGrid.getLocalDomain().size.y();
+            // Gather y offsets and sizes so every root can validate the variable-gather layout.
+            auto const communicator = gatherCommunicator->communicator;
+            auto const gatherSize = gatherCommunicator->size;
+            std::vector<int> yOffsets(gatherSize);
+            std::vector<int> ySizes(gatherSize);
+            int const yOffset = subGrid.getLocalDomain().offset.y();
+            int const ySize = subGrid.getLocalDomain().size.y();
+            static_cast<void>(caravan::syncWait<caravan::GatherResult>(caravan::mpi::allGather(
+                *mpiContext,
+                caravan::ConstBufferLease::borrowed(&yOffset, sizeof(yOffset)),
+                caravan::BufferLease::borrowed(yOffsets.data(), yOffsets.size() * sizeof(int)),
+                communicator)));
+            static_cast<void>(caravan::syncWait<caravan::GatherResult>(caravan::mpi::allGather(
+                *mpiContext,
+                caravan::ConstBufferLease::borrowed(&ySize, sizeof(ySize)),
+                caravan::BufferLease::borrowed(ySizes.data(), ySizes.size() * sizeof(int)),
+                communicator)));
 
-            MPI_CHECK(MPI_Gather(&y_off, 1, MPI_INT, y_offsets.data(), 1, MPI_INT, 0, commGather));
-            MPI_CHECK(MPI_Gather(&y_siz, 1, MPI_INT, y_sizes.data(), 1, MPI_INT, 0, commGather));
-
-            int mpiGlobalSizeY = std::accumulate(y_sizes.begin(), y_sizes.end(), 0);
-
+            int const mpiGlobalSizeY = std::accumulate(ySizes.begin(), ySizes.end(), 0);
             if(writeToFile)
             {
                 PMACC_VERIFY_MSG(
                     mpiGlobalSizeY == globalDomainSizeY,
                     std::string(
-                        "Number of elements calculated with MPI_Gather and global domain size in Y-direction must "
+                        "Number of elements calculated with MPI gather and global domain size in Y-direction must "
                         "be equal. ")
                         + std::to_string(mpiGlobalSizeY) + " != " + std::to_string(globalDomainSizeY));
             }
 
-            MPI_CHECK(MPI_Gatherv(
-                reducedSumMom2.data(),
-                localDomSizeY,
-                MPI_DOUBLE,
-                globalSumMom2.data(),
-                y_sizes.data(),
-                y_offsets.data(),
-                MPI_DOUBLE,
-                0,
-                commGather));
-            MPI_CHECK(MPI_Gatherv(
-                reducedSumPos2.data(),
-                localDomSizeY,
-                MPI_DOUBLE,
-                globalSumPos2.data(),
-                y_sizes.data(),
-                y_offsets.data(),
-                MPI_DOUBLE,
-                0,
-                commGather));
-            MPI_CHECK(MPI_Gatherv(
-                reducedSumMomPos.data(),
-                localDomSizeY,
-                MPI_DOUBLE,
-                globalSumMomPos.data(),
-                y_sizes.data(),
-                y_offsets.data(),
-                MPI_DOUBLE,
-                0,
-                commGather));
-            MPI_CHECK(MPI_Gatherv(
-                reducedCount_e.data(),
-                localDomSizeY,
-                MPI_DOUBLE,
-                globalCount_e.data(),
-                y_sizes.data(),
-                y_offsets.data(),
-                MPI_DOUBLE,
-                0,
-                commGather));
+            std::vector<std::size_t> receiveBytes(gatherSize);
+            std::vector<std::size_t> displacements(gatherSize);
+            for(int i = 0; i < gatherSize; ++i)
+            {
+                receiveBytes[i] = static_cast<std::size_t>(ySizes[i]) * sizeof(float_64);
+                displacements[i] = static_cast<std::size_t>(yOffsets[i]) * sizeof(float_64);
+            }
+            auto const gather = [&](auto& source, auto& destination)
+            {
+                static_cast<void>(caravan::syncWait<caravan::GatherResult>(caravan::mpi::gatherV(
+                    *mpiContext,
+                    caravan::ConstBufferLease::borrowed(source.data(), source.size() * sizeof(float_64)),
+                    caravan::BufferLease::borrowed(destination.data(), destination.size() * sizeof(float_64)),
+                    receiveBytes,
+                    displacements,
+                    caravan::Peer{0},
+                    communicator)));
+            };
+            gather(reducedSumMom2, globalSumMom2);
+            gather(reducedSumPos2, globalSumPos2);
+            gather(reducedSumMomPos, globalSumMomPos);
+            gather(reducedCount_e, globalCount_e);
 
             /* print timestep, emittance to file: */
             if(writeToFile)
@@ -734,9 +685,9 @@ namespace picongpu
         std::unique_ptr<pmacc::mpi::MPIReduce> planeReduce;
         bool isPlaneReduceRoot = false;
 
-        /** MPI communicator that contains the root ranks of the \p planeReduce
-         */
-        MPI_Comm commGather = MPI_COMM_NULL;
+        /** MPI communicator that contains the root ranks of the \p planeReduce. */
+        std::optional<caravan::CommunicatorInfo> gatherCommunicator;
+        caravan::MpiContext* mpiContext = nullptr;
 
         std::shared_ptr<Help> m_help;
         size_t m_id;
