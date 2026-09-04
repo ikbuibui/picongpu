@@ -29,6 +29,7 @@
 #include "picongpu/plugins/misc/misc.hpp"
 #include "picongpu/plugins/multi/multi.hpp"
 
+#include <pmacc/async/Operations.hpp>
 #include <pmacc/dataManagement/DataConnector.hpp>
 #include <pmacc/lockstep.hpp>
 #include <pmacc/lockstep/lockstep.hpp>
@@ -47,6 +48,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace picongpu
 {
@@ -342,40 +344,43 @@ namespace picongpu
             // use data connector to get particle data
             auto particles = dc.get<ParticlesType>(ParticlesType::FrameType::getName());
 
-            // initialize global energies with zero
-            gEnergy->getDeviceBuffer().setValue(0.0);
-
             auto const mapper = makeAreaMapper<AREA>(*m_cellDescription);
-
-            auto kernel = PMACC_LOCKSTEP_KERNEL(KernelEnergyParticles{}).config(mapper.getGridDim(), *particles);
-            auto binaryKernel = std::bind(
-                kernel,
-                particles->getDeviceParticlesBox(),
-                gEnergy->getDeviceBuffer().getDataBox(),
-                mapper,
-                std::placeholders::_1);
+            auto& queue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+            auto binaryKernel = [&](auto filter)
+            {
+                auto initialize = async::fill(queue, gEnergy->getDeviceBuffer().getOwnedAlpakaView(), 0u);
+                auto kernel = PMACC_LOCKSTEP_KERNEL(KernelEnergyParticles{})
+                                  .config(mapper.getGridDim(), *particles)
+                                  .sender(
+                                      queue,
+                                      particles->getDeviceParticlesBox(),
+                                      gEnergy->getDeviceBuffer().getDataBox(),
+                                      mapper,
+                                      filter);
+                auto copy = gEnergy->deviceToHost(queue);
+                caravan::syncWait(
+                    caravan::alpaka::then(
+                        caravan::alpaka::then(std::move(initialize), std::move(kernel)),
+                        std::move(copy)));
+            };
 
             auto idProvider = dc.get<IdProvider>("globalId");
-
             meta::ForEach<typename Help::EligibleFilters, plugins::misc::ExecuteIfNameIsEqual<boost::mpl::_1>>{}(
                 m_help->filter.get(m_id),
                 currentStep,
                 idProvider->getDeviceGenerator(),
                 binaryKernel);
 
-            // get energy from GPU
-            gEnergy->deviceToHost();
-
             // create storage for the global reduced result
             float_64 reducedEnergy[2];
 
             // add energies from all GPUs using MPI
-            reduce(
+            caravan::syncWait(reduce.reduce(
                 pmacc::math::operation::Add(),
                 reducedEnergy,
                 gEnergy->getHostBuffer().data(),
                 2,
-                mpi::reduceMethods::Reduce());
+                mpi::reduceMethods::Reduce()));
 
             /* print timestep, kinetic energy and total energy to file: */
             if(writeToFile)

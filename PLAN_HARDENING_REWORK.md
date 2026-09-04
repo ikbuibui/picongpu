@@ -630,7 +630,12 @@ blocking operator remains only as the M2 compatibility boundary. Device-side buf
 now also left uninitialized at allocation, removing a hidden legacy initialization task that raced with
 sender operations on caller-owned queues; queue-taking copies and stack resets initialize it explicitly.
 This removes stale pre-Caravan initialization paths and continues call-site migration without adding
-another compatibility layer.
+another compatibility layer. Debye-length estimation now explicitly initializes its result and composes
+the host-device copy, kernel, and device-host copy on a caller-owned queue without the legacy event system.
+The particle-count helper does the same for its zero-fill, count kernel, and result copy, preserving its
+synchronous scalar-return boundary without transaction-backed operations. The emittance plugin now uses
+lazy fills, kernel submission, copies, plane reductions, communicator splitting, and variable gathers; its
+raw MPI communicator and global-transaction dependencies are removed.
 
 Migrate vertically by subsystem rather than completing all PMacc changes while
 leaving PIConGPU broken. For each field, particle, reduction/gather, buffer/kernel
