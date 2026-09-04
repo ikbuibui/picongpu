@@ -616,9 +616,13 @@ initialization now returns a lazy sender for an explicit queue; PIConGPU initial
 through the shared async context, and the standalone RNG test composes initialization,
 fill, generation, and copy without the legacy event system. `HostDeviceBuffer` now
 encapsulates lazy host-device copies and size propagation in queue-taking sender overloads;
-the no-argument eager overloads remain only for unmigrated callers. This removes the stale
-pre-Caravan initialization path and continues call-site migration without adding another
-compatibility layer.
+the no-argument eager overloads remain only for unmigrated callers. The ID provider now initializes
+its device counter through an explicit lazy sender, its host-ID path composes a retained kernel and
+copy on a caller-owned queue, and the PMacc particle test no longer uses transaction-backed kernels,
+copies, or waits. The PMacc host-buffer copy test now uses explicit lazy copies as well, and the async
+operation tests no longer acquire their queues through an event-system header. No PMacc test source
+uses `EventTask`, transaction, or direct event-system APIs now. This removes stale pre-Caravan
+initialization paths and continues call-site migration without adding another compatibility layer.
 
 1. Convert field, particle, reduction, gather, signal, and helper operations to the
    sender-first API.

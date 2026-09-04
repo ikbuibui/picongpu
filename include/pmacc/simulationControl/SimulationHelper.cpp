@@ -130,6 +130,8 @@ namespace pmacc
         DataConnector& dc = Environment<>::get().DataConnector();
         auto idProvider = std::make_shared<IdProvider>("globalId", rank, maxRanks);
         dc.share(idProvider);
+        auto& idProviderQueue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+        asyncContext.wait(asyncContext.spawn(idProvider->initialize(idProviderQueue)));
 
         init();
 

@@ -23,6 +23,8 @@
 
 /* #includes in "test/memoryUT.cu" */
 
+#include "pmacc/async/Context.hpp"
+#include "pmacc/async/Operations.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/memory/buffers/HostBuffer.hpp"
 
@@ -49,34 +51,43 @@ namespace pmacc
                         using ::pmacc::test::memory::getElementsPerDim;
 
                         std::vector<size_t> nElementsPerDim = getElementsPerDim<T_Dim>();
+                        auto const device = manager::Device<ComputeDevice>::get().current();
+                        ComputeDeviceQueue queue(device);
+                        async::Context context;
 
                         for(unsigned i = 0; i < nElementsPerDim.size(); ++i)
                         {
                             auto const dataSpace = ::pmacc::DataSpace<T_Dim::value>::create(nElementsPerDim[i]);
-                            auto* hostBuffer = new ::pmacc::HostBuffer<Data, T_Dim::value>(dataSpace);
-                            auto* deviceBuffer = new ::pmacc::DeviceBuffer<Data, T_Dim::value>(dataSpace);
+                            ::pmacc::HostBuffer<Data, T_Dim::value> hostBuffer(dataSpace);
+                            ::pmacc::DeviceBuffer<Data, T_Dim::value> deviceBuffer(dataSpace);
 
-                            hostBuffer->reset();
+                            hostBuffer.reset();
 
-                            auto fillBox = hostBuffer->getDataBox();
+                            auto fillBox = hostBuffer.getDataBox();
                             for(size_t i = 0; i < static_cast<size_t>(dataSpace.productOfComponents()); ++i)
                             {
                                 fillBox.getPointer()[i] = static_cast<Data>(i);
                             }
 
-                            deviceBuffer->copyFrom(*hostBuffer);
-                            hostBuffer->reset();
-                            hostBuffer->copyFrom(*deviceBuffer);
-                            eventSystem::getTransactionEvent().waitForFinished();
+                            context.wait(context.spawn(
+                                async::copy(
+                                    queue,
+                                    deviceBuffer.getOwnedAlpakaView(),
+                                    hostBuffer.getOwnedAlpakaView(),
+                                    dataSpace.toAlpakaMemVec())));
+                            hostBuffer.reset();
+                            context.wait(context.spawn(
+                                async::copy(
+                                    queue,
+                                    hostBuffer.getOwnedAlpakaView(),
+                                    deviceBuffer.getOwnedAlpakaView(),
+                                    dataSpace.toAlpakaMemVec())));
 
-                            auto compareBox = hostBuffer->getDataBox();
+                            auto compareBox = hostBuffer.getDataBox();
                             for(size_t i = 0; i < static_cast<size_t>(dataSpace.productOfComponents()); ++i)
                             {
                                 REQUIRE(compareBox.getPointer()[i] == static_cast<Data>(i));
                             }
-
-                            delete hostBuffer;
-                            delete deviceBuffer;
                         }
                     }
 
