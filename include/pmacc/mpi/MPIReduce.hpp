@@ -133,7 +133,7 @@ namespace pmacc
              *
              */
             template<class Functor, typename Type, class ReduceMethod>
-            HINLINE void operator()(Functor func, Type* dest, Type* src, size_t const n, ReduceMethod const method)
+            HINLINE auto reduce(Functor, Type* dest, Type const* src, size_t const n, ReduceMethod const)
             {
                 if(!isMPICommInitialized)
                     participate(true);
@@ -141,60 +141,59 @@ namespace pmacc
 
                 if(!caravanCommunicator)
                     throw std::logic_error("Inactive rank cannot submit an MPI reduction");
-                eventSystem::getTransactionEvent().waitForFinished();
-                caravan::syncWait(
-                    caravan::mpi::request<void>(
-                        *mpiContext,
-                        [=, communicator = caravanCommunicator->communicator](caravan::NativeMpiContext& context)
-                        {
-                            auto const descriptor = ::pmacc::mpi::getMPI_StructAsArray<ValueType>();
-                            auto const elements = n * descriptor.sizeMultiplier;
-                            caravan::NativeRequestBatch batch({MPI_REQUEST_NULL});
-                            int error;
-                            if constexpr(std::is_same_v<std::remove_cvref_t<ReduceMethod>, reduceMethods::AllReduce>)
-                                error = MPI_Iallreduce(
-                                    src,
-                                    dest,
-                                    static_cast<int>(elements),
-                                    descriptor.dataType,
-                                    ::pmacc::mpi::getMPI_Op<Functor>(),
-                                    context.communicator(communicator),
-                                    &batch.requests[0]);
-                            else
-                                error = MPI_Ireduce(
-                                    src,
-                                    dest,
-                                    static_cast<int>(elements),
-                                    descriptor.dataType,
-                                    ::pmacc::mpi::getMPI_Op<Functor>(),
-                                    0,
-                                    context.communicator(communicator),
-                                    &batch.requests[0]);
-                            if(error != MPI_SUCCESS)
-                                throw std::runtime_error("PMacc native MPI reduction start failed");
-                            return batch;
-                        },
-                        [](std::span<MPI_Status const>) {}));
+                return caravan::mpi::request<void>(
+                    *mpiContext,
+                    [=, communicator = caravanCommunicator->communicator](caravan::NativeMpiContext& context)
+                    {
+                        auto const descriptor = ::pmacc::mpi::getMPI_StructAsArray<ValueType>();
+                        auto const elements = n * descriptor.sizeMultiplier;
+                        caravan::NativeRequestBatch batch({MPI_REQUEST_NULL});
+                        int error;
+                        if constexpr(std::is_same_v<std::remove_cvref_t<ReduceMethod>, reduceMethods::AllReduce>)
+                            error = MPI_Iallreduce(
+                                src,
+                                dest,
+                                static_cast<int>(elements),
+                                descriptor.dataType,
+                                ::pmacc::mpi::getMPI_Op<Functor>(),
+                                context.communicator(communicator),
+                                &batch.requests[0]);
+                        else
+                            error = MPI_Ireduce(
+                                src,
+                                dest,
+                                static_cast<int>(elements),
+                                descriptor.dataType,
+                                ::pmacc::mpi::getMPI_Op<Functor>(),
+                                0,
+                                context.communicator(communicator),
+                                &batch.requests[0]);
+                        if(error != MPI_SUCCESS)
+                            throw std::runtime_error("PMacc native MPI reduction start failed");
+                        return batch;
+                    },
+                    [](std::span<MPI_Status const>) {});
             }
 
-            /* Reduce elements on cpu memory
-             * the default reduce method is allReduce which means that any host get the reduced value back
-             *
-             * @param func binary functor for reduce which takes two arguments, first argument is the source and get
-             * the new reduced value. Functor must specialize the function getMPI_Op.
-             * @param dest buffer for result data
-             * @param src a class or a pointer where the reduce algorithm can access the value by operator [] (one
-             * dimension access)
-             * @param n number of elements to reduce
-             *
-             * @return reduced value
-             */
+            /** Lazily describe an all-reduce on caller-owned host storage. */
+            template<class Functor, typename Type>
+            HINLINE auto reduce(Functor func, Type* dest, Type const* src, size_t const n)
+            {
+                return reduce(func, dest, src, n, ::pmacc::mpi::reduceMethods::AllReduce{});
+            }
+
+            /** Legacy blocking adapter; remove with its remaining task-system callers in M2. */
+            template<class Functor, typename Type, class ReduceMethod>
+            HINLINE void operator()(Functor func, Type* dest, Type* src, size_t const n, ReduceMethod method)
+            {
+                eventSystem::getTransactionEvent().waitForFinished();
+                caravan::syncWait(reduce(func, dest, src, n, method));
+            }
+
             template<class Functor, typename Type>
             HINLINE void operator()(Functor func, Type* dest, Type* src, size_t const n)
             {
-                if(!isMPICommInitialized)
-                    participate(true);
-                this->operator()(func, dest, src, n, ::pmacc::mpi::reduceMethods::AllReduce());
+                this->operator()(func, dest, src, n, ::pmacc::mpi::reduceMethods::AllReduce{});
             }
 
 

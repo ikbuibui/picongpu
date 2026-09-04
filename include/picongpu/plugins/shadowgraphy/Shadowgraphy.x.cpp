@@ -373,7 +373,7 @@ namespace picongpu
                     auto globalDomainSliceSize = subGrid.getGlobalDomain().size.shrink<DIM2>(0);
 
                     auto fieldSlice = createSlice<T_fieldType>(inputFieldBuffer, cellIdxZ);
-                    return gather->gatherSlice(*fieldSlice, globalDomainSliceSize, localDomainOffset);
+                    return gather->gatherSliceExplicit(*fieldSlice, globalDomainSliceSize, localDomainOffset);
                 }
 
                 template<typename shadowgraphy::Helper::FieldType T_fieldType, typename T_FieldBuffer>

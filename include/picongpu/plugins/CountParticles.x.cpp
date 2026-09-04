@@ -173,12 +173,18 @@ namespace picongpu
             uint64_cu reducedValueMax;
             if(picLog::log_level & picLog::CRITICAL::lvl)
             {
-                reduce(pmacc::math::operation::Max(), &reducedValueMax, &size, 1, mpi::reduceMethods::Reduce());
+                caravan::syncWait(reduce.reduce(
+                    pmacc::math::operation::Max(),
+                    &reducedValueMax,
+                    &size,
+                    1,
+                    mpi::reduceMethods::Reduce()));
             }
 
 
             uint64_cu reducedValue;
-            reduce(pmacc::math::operation::Add(), &reducedValue, &size, 1, mpi::reduceMethods::Reduce());
+            caravan::syncWait(
+                reduce.reduce(pmacc::math::operation::Add(), &reducedValue, &size, 1, mpi::reduceMethods::Reduce()));
 
             if(writeToFile)
             {

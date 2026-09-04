@@ -129,12 +129,12 @@ namespace picongpu
                     mpi::MPIReduce reduce{};
                     auto localCells = static_cast<uint64_t>(elements);
                     uint64_t reducedCellAmount;
-                    reduce(
+                    caravan::syncWait(reduce.reduce(
                         pmacc::math::operation::Add(),
                         &reducedCellAmount,
                         &localCells,
                         1,
-                        mpi::reduceMethods::Reduce());
+                        mpi::reduceMethods::Reduce()));
 
                     if(reduce.hasResult(mpi::reduceMethods::Reduce()))
                     {
