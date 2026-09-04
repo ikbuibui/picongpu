@@ -2,10 +2,8 @@
  * This file is part of PIConGPU.
  * SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
  */
-#include <pmacc/Environment.hpp>
 #include <pmacc/alpakaHelper/acc.hpp>
 #include <pmacc/async.hpp>
-#include <pmacc/eventSystem/queues/QueueController.hpp>
 #include <pmacc/fields/Communication.hpp>
 #include <pmacc/mappings/kernel/MappingDescription.hpp>
 #include <pmacc/math/Vector.hpp>
@@ -75,7 +73,8 @@ namespace
 
 TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async][memory]")
 {
-    auto& queue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    auto const deviceManager = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
+    pmacc::ComputeDeviceQueue queue(deviceManager);
     auto const one = pmacc::MemSpace<DIM1>::create(1);
     auto const extent = one.toAlpakaMemVec();
     auto const workExtent = ::alpaka::Vec<pmacc::AlpakaDim<DIM1>, pmacc::IdxType>::ones();
@@ -122,7 +121,8 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
 
 TEST_CASE("Host-device buffer queue overloads return lazy copies", "[async][memory]")
 {
-    auto& queue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
+    pmacc::ComputeDeviceQueue queue(device);
     pmacc::HostDeviceBuffer<int, DIM1> buffer(pmacc::MemSpace<DIM1>{2u}, true);
     buffer.getHostBuffer().data()[0] = 41;
     buffer.getHostBuffer().data()[1] = 99;

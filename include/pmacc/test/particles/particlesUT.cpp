@@ -223,7 +223,8 @@ namespace
 
 TEST_CASE("Particle chunk senders are lazy", "[particles][async]")
 {
-    auto& queue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
+    pmacc::ComputeDeviceQueue queue(device);
     pmacc::async::Context context;
     MockParticles particles;
     auto sender = pmacc::particles::sendChunks(queue, particles, 1u);
@@ -236,7 +237,8 @@ TEST_CASE("Particle chunk senders are lazy", "[particles][async]")
 
 TEST_CASE("Particle chunk senders propagate stopped completion", "[particles][async]")
 {
-    auto& queue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
+    pmacc::ComputeDeviceQueue queue(device);
     pmacc::async::Context context;
     MockParticles particles;
     particles.buffer.failure = FailurePoint::packingStopped;
@@ -247,7 +249,8 @@ TEST_CASE("Particle chunk senders propagate stopped completion", "[particles][as
 
 TEST_CASE("Particle communication handles exact and partial chunks", "[particles][async]")
 {
-    auto& queue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
+    pmacc::ComputeDeviceQueue queue(device);
     pmacc::async::Context context;
     MockParticles particles;
     context.wait(pmacc::particles::spawnCommunication(context, queue, particles));
@@ -259,7 +262,8 @@ TEST_CASE("Particle communication handles exact and partial chunks", "[particles
 
 TEST_CASE("Particle communication handles empty chunks", "[particles][async]")
 {
-    auto& queue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
+    pmacc::ComputeDeviceQueue queue(device);
     pmacc::async::Context context;
     MockParticles particles;
     particles.buffer.sendChunks = {0u, 0u};
@@ -273,7 +277,8 @@ TEST_CASE("Particle communication handles empty chunks", "[particles][async]")
 
 TEST_CASE("Particle communication forwards callback failures", "[particles][async]")
 {
-    auto& queue = pmacc::Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
+    pmacc::ComputeDeviceQueue queue(device);
     for(auto const failure :
         {FailurePoint::packingCompletion,
          FailurePoint::sizeExtraction,
