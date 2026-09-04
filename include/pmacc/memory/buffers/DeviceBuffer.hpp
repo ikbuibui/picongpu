@@ -104,7 +104,8 @@ namespace pmacc
         /** Allocate uninitialized data accessible from the device.
          *
          * @param size extent for each dimension (in elements)
-         * @param sizeOnDevice memory with the current size of the grid is stored on device
+         * @param sizeOnDevice allocate device-side size storage; its value must be initialized through an explicit
+         *                      queue operation before device use
          *
          * @attention offset + size must be less or equal to the size of the source buffer
          */
@@ -126,10 +127,7 @@ namespace pmacc
                 pitchInBytes.toAlpakaMemVec()));
 
             if(sizeOnDevice)
-            {
                 createSizeOnDeviceBuffers();
-                this->setSize(size.productOfComponents());
-            }
             this->isMemoryContiguous = true;
         }
 
@@ -138,7 +136,8 @@ namespace pmacc
          * @param source buffer to create the view on
          * @param size extent for each dimension (in elements)
          * @param offset offset within the source (in elements)
-         * @param sizeOnDevice memory with the current size of the grid is stored on device
+         * @param sizeOnDevice allocate device-side size storage; its value must be initialized through an explicit
+         *                      queue operation before device use
          *
          * @attention offset + size must be less or equal to the size of the source buffer
          */
@@ -157,10 +156,7 @@ namespace pmacc
                 alpaka::getExtents(subView),
                 alpaka::getPitchesInBytes(subView)));
             if(sizeOnDevice)
-            {
                 createSizeOnDeviceBuffers();
-                this->setSize(size.productOfComponents());
-            }
             this->isMemoryContiguous = T_dim == DIM1;
         }
 
