@@ -621,7 +621,10 @@ its device counter through an explicit lazy sender, its host-ID path composes a 
 copy on a caller-owned queue, and the PMacc particle test no longer uses transaction-backed kernels,
 copies, or waits. The PMacc host-buffer copy test now uses explicit lazy copies as well, and the async
 operation tests no longer acquire their queues through an event-system header. No PMacc test source
-uses `EventTask`, transaction, or direct event-system APIs now. This removes stale pre-Caravan
+uses `EventTask`, transaction, or direct event-system APIs now. `MPIReduce` now exposes a lazy
+sender, its dependency-free PMacc and PIConGPU callers use that API, and focused multi-rank tests
+exercise it through the PMacc async context. The final PIConGPU gather callers use the explicit
+gather boundary, so the legacy implicit gather adapter is removed. This removes stale pre-Caravan
 initialization paths and continues call-site migration without adding another compatibility layer.
 
 Migrate vertically by subsystem rather than completing all PMacc changes while

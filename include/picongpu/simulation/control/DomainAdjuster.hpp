@@ -281,20 +281,20 @@ namespace picongpu
                 pmacc::mpi::MPIReduce mpiReduce;
 
                 int globalMax;
-                mpiReduce(
+                caravan::syncWait(mpiReduce.reduce(
                     pmacc::math::operation::Max(),
                     &globalMax,
                     &m_localDomainSize[dim],
                     1,
-                    pmacc::mpi::reduceMethods::AllReduce());
+                    pmacc::mpi::reduceMethods::AllReduce()));
 
                 int globalMin;
-                mpiReduce(
+                caravan::syncWait(mpiReduce.reduce(
                     pmacc::math::operation::Min(),
                     &globalMin,
                     &m_localDomainSize[dim],
                     1,
-                    pmacc::mpi::reduceMethods::AllReduce());
+                    pmacc::mpi::reduceMethods::AllReduce()));
 
                 // local size must be equal for all devices in y direction
                 if(m_isMaster && globalMax != globalMin)
@@ -331,12 +331,12 @@ namespace picongpu
             {
                 auto localDomainSize = static_cast<uint64_t>(m_localDomainSize[dim]);
                 pmacc::mpi::MPIReduce mpiReduce;
-                mpiReduce(
+                caravan::syncWait(mpiReduce.reduce(
                     pmacc::math::operation::Add(),
                     &validGlobalGridSize,
                     &localDomainSize,
                     1,
-                    pmacc::mpi::reduceMethods::AllReduce());
+                    pmacc::mpi::reduceMethods::AllReduce()));
                 /* since we are not doing independent reduces per slice we need
                  * to adjust the reduce result by dividing the sizes of all other dimensions
                  * we are not check within the method call
