@@ -624,7 +624,9 @@ operation tests no longer acquire their queues through an event-system header. N
 uses `EventTask`, transaction, or direct event-system APIs now. `MPIReduce` now exposes a lazy
 sender, its dependency-free PMacc and PIConGPU callers use that API, and focused multi-rank tests
 exercise it through the PMacc async context. The final PIConGPU gather callers use the explicit
-gather boundary, so the legacy implicit gather adapter is removed. This removes stale pre-Caravan
+gather boundary, so the legacy implicit gather adapter is removed. Device reduction now also exposes
+a queue-taking lazy sender and uses the same native enqueue path as ordinary kernel senders; its
+blocking operator remains only as the M2 compatibility boundary. This removes stale pre-Caravan
 initialization paths and continues call-site migration without adding another compatibility layer.
 
 Migrate vertically by subsystem rather than completing all PMacc changes while
