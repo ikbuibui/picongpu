@@ -79,16 +79,26 @@ namespace pmacc::exec::detail
         {
         }
 
-        /** Lazily describe this kernel on an explicitly borrowed queue. */
+        /** Enqueue this kernel from a submission state that retains all arguments through completion. */
         template<typename T_Queue, typename... T_Args>
-        HINLINE auto sender(T_Queue& queue, T_Args... args) const
+        HINLINE void enqueueNative(T_Queue& queue, T_Args&&... args) const
         {
             auto const gridExtent = m_gridExtent.toAlpakaKernelVec();
             auto const blockExtent = m_blockExtent.toAlpakaKernelVec();
             auto const elemExtent = math::Vector<IdxType, T_dim>::create(1).toAlpakaKernelVec();
             auto const workDiv
                 = ::alpaka::WorkDivMembers<::alpaka::DimInt<T_dim>, IdxType>(gridExtent, blockExtent, elemExtent);
-            return pmacc::async::kernel<Acc<T_dim>>(queue, workDiv, m_kernel, std::move(args)...);
+            ::alpaka::exec<Acc<T_dim>>(queue, workDiv, m_kernel, pmacc::async::detail::nativeArgument(args)...);
+        }
+
+        /** Lazily describe this kernel on an explicitly borrowed queue. */
+        template<typename T_Queue, typename... T_Args>
+        HINLINE auto sender(T_Queue& queue, T_Args... args) const
+        {
+            return caravan::alpaka::submit(
+                queue,
+                [launcher = *this, args = std::tuple<T_Args...>{std::move(args)...}](T_Queue& nativeQueue) mutable
+                { std::apply([&](auto&... values) { launcher.enqueueNative(nativeQueue, values...); }, args); });
         }
 
         /** Enqueue the kernel functor with the given arguments for execution.
