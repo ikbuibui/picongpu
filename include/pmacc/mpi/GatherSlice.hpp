@@ -66,9 +66,7 @@ namespace pmacc
 
             /** Check if MPI rank is the gather master rank.
              *
-             * The master will return the data when calling gatherSlice().
-             *
-             * @return True if this MPI rank is returning the gathered data during gatherSlice() operation, else false.
+             * @return True if this MPI rank receives the gathered data, else false.
              */
             bool isMaster() const
             {
@@ -77,7 +75,7 @@ namespace pmacc
 
             /** Check if this MPI rank gathers the data.
              *
-             * @return True if this MPI rank returns the gathered data during gatherSlice() operation, else false.
+             * @return True if this MPI rank receives the gathered data, else false.
              */
             bool hasResult() const
             {
@@ -112,30 +110,6 @@ namespace pmacc
                 gatherRank = caravanGatherComm ? caravanGatherComm->rank : -1;
                 numRanksInPlane = caravanGatherComm ? caravanGatherComm->size : 0;
                 return isMaster();
-            }
-
-            /** gather data
-             *
-             * Must be called by all participating MPI ranks.
-             * If a non-participating MPI rank is calling the method the returned buffer will be empty.
-             * @attention The master rank will allocate host memory for the received data.
-             *
-             * @tparam T_DataType Slice buffer data type.
-             * @param localInputSlice Buffer with local slice data. Buffer memory must be contiguous without line
-             * paddings. Buffer extents can be different for each MPI rank.
-             * @param globalSliceExtent extent in elements of the global slice
-             * @param localSliceOffset local offset in elements relative to the global slice origin
-             * @return shared pointer to host buffer with gathered slice data (only master has valid data)
-             */
-            template<typename T_DataType>
-            auto gatherSlice(
-                HostBuffer<T_DataType, DIM2>& localInputSlice,
-                DataSpace<DIM2> globalSliceExtent,
-                DataSpace<DIM2> localSliceOffset) const
-            {
-                // Preserve the legacy implicit dependency for unmigrated callers.
-                eventSystem::getTransactionEvent().waitForFinished();
-                return gatherSliceExplicit(localInputSlice, globalSliceExtent, localSliceOffset);
             }
 
             /** Gather after the caller has explicitly completed writes to localInputSlice. */
