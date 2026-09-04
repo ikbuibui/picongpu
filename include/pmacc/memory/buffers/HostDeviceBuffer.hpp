@@ -50,11 +50,8 @@ namespace pmacc
          * Constructor that creates the buffers with the given size
          *
          * @param size DataSpace representing buffer size
-         * @param sizeOnDevice if true, internal buffers must store their
-         *        size additionally on the device
-         *        (as we keep this information coherent with the host, it influences
-         *        performance on host-device copies, but some algorithms on the device
-         *        might need to know the size of the buffer)
+         * @param sizeOnDevice if true, allocate device-side size storage. Initialize it explicitly, for example by
+         *        starting hostToDevice(queue), before device use.
          */
         HostDeviceBuffer(DataSpace<T_dim> const& size, bool sizeOnDevice = false);
 
