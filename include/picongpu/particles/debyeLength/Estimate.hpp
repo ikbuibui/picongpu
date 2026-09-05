@@ -73,8 +73,8 @@ namespace picongpu
                                       hostDeviceBuffer.getDeviceBuffer().getDataBox());
                 auto copy = hostDeviceBuffer.deviceToHost(queue);
                 caravan::syncWait(
-                    caravan::alpaka::then(
-                        caravan::alpaka::then(std::move(initialize), std::move(kernel)),
+                    caravan::alpaka::sequence(
+                        caravan::alpaka::sequence(std::move(initialize), std::move(kernel)),
                         std::move(copy)));
                 return hostBox(0);
             }

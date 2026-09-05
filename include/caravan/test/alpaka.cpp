@@ -30,6 +30,7 @@ namespace
 
 int main()
 {
+    assert(!caravan::alpaka::isCompletionCallback());
     using Dim = alpaka::DimInt<1u>;
     using Idx = std::size_t;
 #if ALPAKA_ACC_GPU_CUDA_ENABLED
@@ -54,13 +55,13 @@ int main()
     bool submitted = false;
     auto retained = std::make_shared<int>(7);
     std::weak_ptr<int> retainedObserver = retained;
-    auto sender = caravan::alpaka::then(
-        caravan::alpaka::then(
-            caravan::alpaka::then(
+    auto sender = caravan::alpaka::sequence(
+        caravan::alpaka::sequence(
+            caravan::alpaka::sequence(
                 caravan::alpaka::fill(queue, deviceValue, 0u),
                 caravan::alpaka::copy(queue, deviceValue, hostValue, one)),
             caravan::alpaka::kernel<Acc>(queue, workDiv, Increment{}, alpaka::getPtrNative(deviceValue))),
-        caravan::alpaka::then(
+        caravan::alpaka::sequence(
             caravan::alpaka::copy(queue, hostValue, deviceValue, one),
             caravan::alpaka::submit(
                 queue,
@@ -80,7 +81,11 @@ int main()
     auto completion = scope.spawn(
         caravan::then(
             caravan::continuesOn(std::move(sender), loop.scheduler()),
-            [&] { continuationThread = std::this_thread::get_id(); }));
+            [&]
+            {
+                assert(!caravan::alpaka::isCompletionCallback());
+                continuationThread = std::this_thread::get_id();
+            }));
     assert(submitted);
 
     while(completion.state() == caravan::CompletionState::pending)
@@ -101,7 +106,7 @@ int main()
     crossOutput[0] = 0;
     scope
         .spawn(
-            caravan::alpaka::then(
+            caravan::alpaka::sequence(
                 caravan::alpaka::copy(queue, crossDevice, crossInput, one),
                 caravan::alpaka::copy(secondQueue, crossOutput, crossDevice, one)))
         .wait();
@@ -113,11 +118,20 @@ int main()
     sizeInput[0] = 123u;
     scope
         .spawn(
-            caravan::alpaka::then(
+            caravan::alpaka::sequence(
                 caravan::alpaka::copy(queue, deviceSize, sizeInput, one),
                 caravan::alpaka::size(queue, hostSize, deviceSize)))
         .wait();
     assert(hostSize[0] == 123u);
+
+    bool callbackContextObserved = false;
+    scope
+        .spawn(
+            caravan::then(
+                caravan::alpaka::submit(queue, [](Queue&) {}),
+                [&] { callbackContextObserved = caravan::alpaka::isCompletionCallback(); }))
+        .wait();
+    assert(callbackContextObserved);
 
     // Supported alpaka queues accept concurrent starts; Caravan adds no submission thread or serialization layer.
     std::atomic<unsigned> callbacks = 0u;
