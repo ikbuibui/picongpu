@@ -126,19 +126,9 @@ namespace caravan
         {
             assertOwner();
             ExecutorThreadGuard guard;
-            for(;;)
+            while(progress())
             {
-                drainQueue();
-                drainManagedCollectives();
-                progress();
-
                 std::unique_lock lock(m_queueMutex);
-                if(m_stopping && m_outstanding == 0u)
-                {
-                    lock.unlock();
-                    releaseCommunicators();
-                    return;
-                }
                 if(m_requests.empty() && m_queue.empty() && !hasReadyManagedCollective())
                     m_queueReady.wait(
                         lock,
@@ -148,6 +138,35 @@ namespace caravan
                                    || (m_stopping && m_outstanding == 0u);
                         });
             }
+        }
+
+        bool progress()
+        {
+            assertOwner();
+            {
+                std::lock_guard lock(m_queueMutex);
+                if(m_finished)
+                    return false;
+            }
+
+            drainQueue(submissionBatchSize);
+            drainManagedCollectives(submissionBatchSize);
+            progressRequests();
+
+            {
+                std::lock_guard lock(m_queueMutex);
+                if(!m_stopping || m_outstanding != 0u)
+                    return true;
+                m_finished = true;
+            }
+            releaseCommunicators();
+            return false;
+        }
+
+        bool shutdownComplete() const noexcept
+        {
+            std::lock_guard lock(m_queueMutex);
+            return m_finished;
         }
 
         void requestShutdown()
@@ -345,10 +364,10 @@ namespace caravan
             return false;
         }
 
-        void drainManagedCollectives()
+        void drainManagedCollectives(std::size_t remaining)
         {
             assertOwner();
-            for(;;)
+            while(remaining-- > 0u)
             {
                 std::optional<std::function<void()>> start;
                 {
@@ -375,10 +394,10 @@ namespace caravan
             assert(std::this_thread::get_id() == m_owner && "MPI operation executed outside the MPI owner thread");
         }
 
-        void drainQueue()
+        void drainQueue(std::size_t remaining)
         {
             assertOwner();
-            for(;;)
+            while(remaining-- > 0u)
             {
                 std::function<void()> command;
                 {
@@ -564,7 +583,7 @@ namespace caravan
                 finishOperation();
         }
 
-        void progress()
+        void progressRequests()
         {
             assertOwner();
             if(m_requests.empty())
@@ -626,14 +645,17 @@ namespace caravan
             m_queueReady.notify_one();
         }
 
+        static constexpr std::size_t submissionBatchSize = 64u;
+
         std::thread::id m_owner;
         TopologySnapshot m_topology{};
-        std::mutex m_queueMutex;
+        mutable std::mutex m_queueMutex;
         std::condition_variable m_queueReady;
         std::deque<std::function<void()>> m_queue;
         std::size_t m_outstanding = 0u;
         bool m_accepting = true;
         bool m_stopping = false;
+        bool m_finished = false;
         std::unordered_map<std::uint32_t, ManagedCollectiveLane> m_managedCollectives;
         std::vector<MPI_Comm> m_communicators{MPI_COMM_WORLD};
         std::vector<MPI_Request> m_requests;
@@ -658,9 +680,20 @@ namespace caravan
         m_implementation->run();
     }
 
+    bool MpiContext::progress()
+    {
+        ExecutorThreadGuard guard;
+        return m_implementation->progress();
+    }
+
     void MpiContext::requestShutdown()
     {
         m_implementation->requestShutdown();
+    }
+
+    bool MpiContext::shutdownComplete() const noexcept
+    {
+        return m_implementation->shutdownComplete();
     }
 
     void MpiContext::submitNative(detail::NativeSubmission submission)
@@ -714,6 +747,47 @@ namespace caravan
     void detail::NativeAccess::invokeBlocking(MpiContext& context, detail::NativeBlockingSubmission submission)
     {
         context.invokeBlocking(std::move(submission));
+    }
+
+    MpiExternalRuntime::MpiExternalRuntime()
+    {
+        int initialized = 0;
+        int finalized = 0;
+        if(MPI_Initialized(&initialized) != MPI_SUCCESS || MPI_Finalized(&finalized) != MPI_SUCCESS || !initialized
+           || finalized)
+            throw std::logic_error("MpiExternalRuntime requires an active caller-owned MPI lifecycle");
+        int const handlerError = MPI_Comm_set_errhandler(MPI_COMM_WORLD, MPI_ERRORS_RETURN);
+        if(handlerError != MPI_SUCCESS)
+            throw mpiError("MPI_Comm_set_errhandler", handlerError);
+        m_context.reset(new MpiContext{std::make_unique<MpiContext::Impl>()});
+    }
+
+    MpiExternalRuntime::~MpiExternalRuntime()
+    {
+        if(m_context && !m_context->shutdownComplete())
+            std::terminate();
+    }
+
+    MpiContext& MpiExternalRuntime::context() noexcept
+    {
+        return *m_context;
+    }
+
+    bool MpiExternalRuntime::progress()
+    {
+        return m_context->progress();
+    }
+
+    void MpiExternalRuntime::requestShutdown()
+    {
+        m_context->requestShutdown();
+    }
+
+    void MpiExternalRuntime::finish()
+    {
+        requestShutdown();
+        while(progress())
+            std::this_thread::yield();
     }
 
     int MpiRuntime::runImpl(int& argc, char**& argv, std::function<int(MpiContext&)> application)
