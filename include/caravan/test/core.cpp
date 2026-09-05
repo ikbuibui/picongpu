@@ -830,6 +830,23 @@ namespace
         {
         }
     }
+
+    void testDispatchRecoversFromThrow()
+    {
+        try
+        {
+            caravan::detail::dispatch(
+                std::make_unique<caravan::detail::DispatchTask>([] { throw std::runtime_error("dispatch failure"); }));
+            assert(false);
+        }
+        catch(std::runtime_error const&)
+        {
+        }
+
+        bool ran = false;
+        caravan::detail::dispatch(std::make_unique<caravan::detail::DispatchTask>([&] { ran = true; }));
+        assert(ran);
+    }
 } // namespace
 
 int main()
@@ -852,4 +869,5 @@ int main()
     testExactlyOnceCompletion();
     testRegistrationRace();
     testExecutorWaitGuard();
+    testDispatchRecoversFromThrow();
 }
