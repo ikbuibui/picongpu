@@ -7,6 +7,7 @@
 #include <exception>
 #include <functional>
 #include <optional>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -50,8 +51,23 @@ namespace caravan::mpi
 
             void release(std::function<void()> start)
             {
-                caravan::detail::CollectiveAccess::release(*m_context, m_ticket, std::move(start));
-                m_context = nullptr;
+                auto* context = std::exchange(m_context, nullptr);
+                auto const ticket = m_ticket;
+                try
+                {
+                    caravan::detail::CollectiveAccess::release(*context, ticket, std::move(start));
+                }
+                catch(...)
+                {
+                    caravan::detail::CollectiveAccess::abandon(*context, ticket);
+                    throw;
+                }
+            }
+
+            template<typename T_Sender>
+            bool accepts(T_Sender const& sender) const noexcept
+            {
+                return sender.managedCollectiveOn(*m_context, m_ticket.communicator);
             }
 
         private:
@@ -156,6 +172,9 @@ namespace caravan::mpi
                     m_values.emplace(std::forward<T>(values)...);
                     auto successor
                         = std::apply([this](auto&... stored) { return std::invoke(m_factory, stored...); }, *m_values);
+                    if(!m_token.accepts(successor))
+                        throw std::invalid_argument(
+                            "CollectiveLane successor does not match its context and communicator");
                     m_successor.emplace(std::move(successor), this);
                     release([this]() noexcept { m_successor->start(); });
                 }
@@ -219,13 +238,16 @@ namespace caravan::mpi
         };
     } // namespace collective_detail
 
-    /** Plan collective initiation order independently of predecessor readiness.
+    /** Plan local collective initiation order independently of predecessor readiness.
      *
-     * Every rank must submit the same sequence on this communicator. A reservation
-     * becomes committed when its predecessor completes or skipped when abandoned;
-     * committed and skipped entries retire from the front in reservation order.
-     * Failed/stopped predecessors commit terminal forwarding without initiating
-     * MPI. MpiContext must outlive all entries.
+     * Every rank must reserve and start the same sequence on this communicator, and
+     * each corresponding predecessor must complete with the same value/error/stopped
+     * decision. Abandonment must also match across ranks. Violating this distributed
+     * contract can mismatch collectives or hang MPI.
+     *
+     * A value successor must be an immediate Caravan MPI collective on this lane's
+     * context and communicator. Failed/stopped predecessors forward their terminal
+     * completion without initiating MPI. MpiContext must outlive all entries.
      */
     class CollectiveLane
     {
