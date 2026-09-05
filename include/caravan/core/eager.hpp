@@ -8,7 +8,6 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -54,28 +53,54 @@ namespace caravan
     {
         inline thread_local std::size_t executorDepth = 0u;
 
+        struct DispatchTask
+        {
+            explicit DispatchTask(std::function<void()> function) : function(std::move(function))
+            {
+            }
+
+            std::function<void()> function;
+            std::unique_ptr<DispatchTask> next;
+        };
+
         struct DispatchQueue
         {
             bool running = false;
-            std::deque<std::function<void()>> tasks;
+            std::unique_ptr<DispatchTask> head;
+            DispatchTask* tail = nullptr;
         };
 
         inline thread_local DispatchQueue dispatchQueue;
 
-        inline void dispatch(std::function<void()> task)
+        inline void dispatch(std::unique_ptr<DispatchTask> task)
         {
-            dispatchQueue.tasks.emplace_back(std::move(task));
+            auto* const tail = task.get();
+            if(dispatchQueue.tail)
+                dispatchQueue.tail->next = std::move(task);
+            else
+                dispatchQueue.head = std::move(task);
+            dispatchQueue.tail = tail;
             if(dispatchQueue.running)
                 return;
 
             dispatchQueue.running = true;
-            while(!dispatchQueue.tasks.empty())
+
+            struct ResetRunning
             {
-                auto next = std::move(dispatchQueue.tasks.front());
-                dispatchQueue.tasks.pop_front();
-                next();
+                ~ResetRunning()
+                {
+                    dispatchQueue.running = false;
+                }
+            } resetRunning;
+
+            while(dispatchQueue.head)
+            {
+                auto next = std::move(dispatchQueue.head);
+                dispatchQueue.head = std::move(next->next);
+                if(!dispatchQueue.head)
+                    dispatchQueue.tail = nullptr;
+                next->function();
             }
-            dispatchQueue.running = false;
         }
 
         class State
@@ -103,15 +128,16 @@ namespace caravan
 
             void subscribe(std::function<void()> continuation)
             {
+                auto task = std::make_unique<DispatchTask>(std::move(continuation));
                 {
                     std::lock_guard lock(m_mutex);
                     if(m_completion.load(std::memory_order_relaxed) == CompletionState::pending)
                     {
-                        m_continuations.emplace_back(std::move(continuation));
+                        m_continuations.emplace_back(std::move(task));
                         return;
                     }
                 }
-                dispatch(std::move(continuation));
+                dispatch(std::move(task));
             }
 
             bool complete(CompletionState completion, std::exception_ptr error = {})
@@ -123,7 +149,7 @@ namespace caravan
             template<typename T_Prepare>
             bool complete(CompletionState completion, std::exception_ptr error, T_Prepare&& prepare)
             {
-                std::vector<std::function<void()>> continuations;
+                std::vector<std::unique_ptr<DispatchTask>> continuations;
                 {
                     std::lock_guard lock(m_mutex);
                     if(m_completion.load(std::memory_order_relaxed) != CompletionState::pending)
@@ -144,7 +170,7 @@ namespace caravan
             mutable std::mutex m_mutex;
             mutable std::condition_variable m_completed;
             std::exception_ptr m_error;
-            std::vector<std::function<void()>> m_continuations;
+            std::vector<std::unique_ptr<DispatchTask>> m_continuations;
         };
 
         template<typename T>
@@ -236,7 +262,7 @@ namespace caravan
             if(m_state)
                 m_state->subscribe(std::move(continuation));
             else
-                detail::dispatch(std::move(continuation));
+                detail::dispatch(std::make_unique<detail::DispatchTask>(std::move(continuation)));
         }
 
         void reportFailure() const
@@ -628,7 +654,14 @@ namespace caravan
 
         void start() & noexcept
         {
-            m_event.subscribe([this] { complete(); });
+            try
+            {
+                m_event.subscribe([this] { complete(); });
+            }
+            catch(...)
+            {
+                m_receiver.set_error(std::current_exception());
+            }
         }
 
     private:
