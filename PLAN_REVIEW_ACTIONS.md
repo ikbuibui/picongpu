@@ -440,7 +440,7 @@ execution concepts. In particular, it currently has:
 - no stop-token propagation;
 - only `std::exception_ptr` error completions;
 - non-pipeable camelCase algorithms; and
-- explicit `caravan::alpaka::then(left, right)` fusion rather than standard domain
+- explicit `caravan::alpaka::sequence(left, right)` fusion rather than standard domain
   transformation/customization.
 
 Do not describe current sender types as source-compatible P2300 senders.

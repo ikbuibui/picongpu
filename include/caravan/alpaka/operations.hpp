@@ -149,10 +149,10 @@ namespace caravan::alpaka
      * final queue callback publishes host-visible completion, so intermediate accelerator dependencies never
      * host-wait.
      *
-     * Terminal receivers run on alpaka's callback thread. They must not block on the originating queue or destroy its
-     * last handle; use continuesOn before attaching unrestricted application continuations. If submission-error
-     * cleanup cannot establish quiescence by waiting every participating queue, Caravan terminates rather than release
-     * retained state that native work may still access.
+     * Successful terminal delivery runs on alpaka's callback thread. Receivers must not block on the originating queue
+     * or destroy its last handle; use continuesOn before attaching unrestricted application continuations. If
+     * submission-error cleanup cannot establish quiescence by waiting every participating queue, Caravan terminates
+     * rather than release retained state that native work may still access.
      */
     template<typename T_Queue, typename... T_Submits>
     class SubmitSender
