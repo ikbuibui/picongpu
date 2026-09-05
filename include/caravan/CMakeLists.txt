@@ -11,11 +11,14 @@ target_include_directories(
     INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..> $<INSTALL_INTERFACE:include>
 )
 
-find_package(MPI REQUIRED COMPONENTS CXX)
 find_package(Threads REQUIRED)
-add_library(caravan-mpi STATIC mpi/communicator.cpp mpi/context.cpp mpi/operations.cpp)
-add_library(caravan::mpi ALIAS caravan-mpi)
-target_link_libraries(caravan-mpi PUBLIC caravan::core MPI::MPI_CXX PRIVATE Threads::Threads)
+option(CARAVAN_BUILD_MPI "Build the Caravan MPI backend" ON)
+if(CARAVAN_BUILD_MPI)
+    find_package(MPI REQUIRED COMPONENTS CXX)
+    add_library(caravan-mpi STATIC mpi/communicator.cpp mpi/context.cpp mpi/operations.cpp)
+    add_library(caravan::mpi ALIAS caravan-mpi)
+    target_link_libraries(caravan-mpi PUBLIC caravan::core MPI::MPI_CXX PRIVATE Threads::Threads)
+endif()
 
 if(TARGET alpaka::alpaka)
     set(_caravan_alpaka_default ON)
@@ -46,20 +49,22 @@ if(CARAVAN_BUILD_TESTING)
         target_link_libraries(caravan-alpaka-test PRIVATE caravan::alpaka)
         add_test(NAME caravan-alpaka COMMAND caravan-alpaka-test)
 
-        alpaka_add_executable(caravan-alpaka-mpi-test test/alpaka_mpi.cpp)
-        target_link_libraries(caravan-alpaka-mpi-test PRIVATE caravan::alpaka caravan::mpi)
-        add_test(
-            NAME caravan-alpaka-mpi
-            COMMAND
-                ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 ${MPIEXEC_PREFLAGS}
-                $<TARGET_FILE:caravan-alpaka-mpi-test> ${MPIEXEC_POSTFLAGS}
-        )
-        set_tests_properties(caravan-alpaka-mpi PROPERTIES PROCESSORS 1 TIMEOUT 30)
+        if(TARGET caravan::mpi)
+            alpaka_add_executable(caravan-alpaka-mpi-test test/alpaka_mpi.cpp)
+            target_link_libraries(caravan-alpaka-mpi-test PRIVATE caravan::alpaka caravan::mpi)
+            add_test(
+                NAME caravan-alpaka-mpi
+                COMMAND
+                    ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 ${MPIEXEC_PREFLAGS}
+                    $<TARGET_FILE:caravan-alpaka-mpi-test> ${MPIEXEC_POSTFLAGS}
+            )
+            set_tests_properties(caravan-alpaka-mpi PROPERTIES PROCESSORS 1 TIMEOUT 30)
+        endif()
     endif()
 
     if(CARAVAN_BUILD_STDEXEC_SPIKE)
-        if(NOT TARGET caravan::alpaka)
-            message(FATAL_ERROR "CARAVAN_BUILD_STDEXEC_SPIKE requires CARAVAN_BUILD_ALPAKA")
+        if(NOT TARGET caravan::alpaka OR NOT TARGET caravan::mpi)
+            message(FATAL_ERROR "CARAVAN_BUILD_STDEXEC_SPIKE requires Caravan alpaka and MPI")
         endif()
         find_path(CARAVAN_STDEXEC_INCLUDE_DIR NAMES stdexec/execution.hpp REQUIRED)
         alpaka_add_executable(caravan-stdexec-spike test/stdexec.cpp)
@@ -74,19 +79,32 @@ if(CARAVAN_BUILD_TESTING)
         set_tests_properties(caravan-stdexec-spike PROPERTIES PROCESSORS 1 TIMEOUT 30)
     endif()
 
-    add_executable(caravan-mpi-header-test test/mpi_header.cpp)
-    target_link_libraries(caravan-mpi-header-test PRIVATE caravan::mpi)
-    add_test(NAME caravan-mpi-header COMMAND caravan-mpi-header-test)
+    if(TARGET caravan::mpi)
+        add_executable(caravan-mpi-header-test test/mpi_header.cpp)
+        target_link_libraries(caravan-mpi-header-test PRIVATE caravan::mpi)
+        add_test(NAME caravan-mpi-header COMMAND caravan-mpi-header-test)
 
-    add_executable(caravan-mpi-test test/mpi.cpp)
-    target_link_libraries(caravan-mpi-test PRIVATE caravan::mpi)
-    foreach(ranks IN ITEMS 1 2 4)
-        add_test(
-            NAME caravan-mpi-${ranks}-ranks
-            COMMAND
-                ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${ranks} ${MPIEXEC_PREFLAGS}
-                $<TARGET_FILE:caravan-mpi-test> ${MPIEXEC_POSTFLAGS}
-        )
-        set_tests_properties(caravan-mpi-${ranks}-ranks PROPERTIES PROCESSORS ${ranks} TIMEOUT 30)
-    endforeach()
+        add_executable(caravan-mpi-test test/mpi.cpp)
+        target_link_libraries(caravan-mpi-test PRIVATE caravan::mpi)
+        add_executable(caravan-mpi-external-test test/mpi_external.cpp)
+        target_link_libraries(caravan-mpi-external-test PRIVATE caravan::mpi)
+        foreach(ranks IN ITEMS 1 2 4)
+            add_test(
+                NAME caravan-mpi-${ranks}-ranks
+                COMMAND
+                    ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${ranks} ${MPIEXEC_PREFLAGS}
+                    $<TARGET_FILE:caravan-mpi-test> ${MPIEXEC_POSTFLAGS}
+            )
+            set_tests_properties(caravan-mpi-${ranks}-ranks PROPERTIES PROCESSORS ${ranks} TIMEOUT 30)
+        endforeach()
+        foreach(ranks IN ITEMS 1 2)
+            add_test(
+                NAME caravan-mpi-external-${ranks}-ranks
+                COMMAND
+                    ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${ranks} ${MPIEXEC_PREFLAGS}
+                    $<TARGET_FILE:caravan-mpi-external-test> ${MPIEXEC_POSTFLAGS}
+            )
+            set_tests_properties(caravan-mpi-external-${ranks}-ranks PROPERTIES PROCESSORS ${ranks} TIMEOUT 30)
+        endforeach()
+    endif()
 endif()
