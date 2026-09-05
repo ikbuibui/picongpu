@@ -195,8 +195,8 @@ namespace gol
             /* Calls kernel to initialize random generator. Game of Life is then  *
              * initialized using uniform random numbers. With 10% (second arg)    *
              * white points. World will be written to buffer in first argument    */
-            auto initialization = caravan::alpaka::then(
-                caravan::alpaka::then(
+            auto initialization = caravan::alpaka::sequence(
+                caravan::alpaka::sequence(
                     pmacc::async::fill(*computeQueue, buff1->getDeviceBuffer().getOwnedAlpakaView(), 0u),
                     pmacc::async::fill(*computeQueue, buff2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
                 evo.initEvolution(

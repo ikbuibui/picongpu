@@ -109,7 +109,7 @@ namespace pmacc
                 queue,
                 stackIndexer.getDeviceBuffer().sizeOnDeviceBuffer(),
                 stackIndexer.getDeviceBuffer().sizeHostSideBuffer());
-            return caravan::alpaka::then(std::move(stackSize), std::move(indexSize));
+            return caravan::alpaka::sequence(std::move(stackSize), std::move(indexSize));
         }
 
         template<typename T_Queue>
@@ -123,7 +123,7 @@ namespace pmacc
                 queue,
                 stackIndexer.getDeviceBuffer().sizeHostSideBuffer(),
                 stackIndexer.getDeviceBuffer().sizeOnDeviceBuffer());
-            return caravan::alpaka::then(std::move(stackSize), std::move(indexSize));
+            return caravan::alpaka::sequence(std::move(stackSize), std::move(indexSize));
         }
 
         size_t getHostCurrentSize()

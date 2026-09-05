@@ -23,6 +23,22 @@ namespace caravan::alpaka
 {
     namespace detail
     {
+        inline thread_local std::size_t completionCallbackDepth = 0u;
+
+        class CompletionCallbackGuard
+        {
+        public:
+            CompletionCallbackGuard()
+            {
+                ++completionCallbackDepth;
+            }
+
+            ~CompletionCallbackGuard()
+            {
+                --completionCallbackDepth;
+            }
+        };
+
         template<typename T_Queue, typename T_Receiver, typename... T_Submits>
         class SubmitOperation
         {
@@ -63,7 +79,8 @@ namespace caravan::alpaka
                         }
                         catch(...)
                         {
-                            error = std::current_exception();
+                            // Retained state cannot be released unless every partially submitted queue is quiescent.
+                            std::terminate();
                         }
                     }
                     complete([&] { m_receiver.set_error(std::move(error)); });
@@ -94,7 +111,13 @@ namespace caravan::alpaka
                 }
                 else
                     // This is the CPU policy too: completion is an alpaka queue callback, never a polling thread.
-                    ::alpaka::enqueue(queue, [this]() noexcept { complete([this] { m_receiver.set_value(); }); });
+                    ::alpaka::enqueue(
+                        queue,
+                        [this]() noexcept
+                        {
+                            CompletionCallbackGuard guard;
+                            complete([this] { m_receiver.set_value(); });
+                        });
             }
 
             template<typename T_Complete>
@@ -112,6 +135,12 @@ namespace caravan::alpaka
         };
     } // namespace detail
 
+    /** Whether the caller is running in an alpaka queue-completion callback. */
+    inline bool isCompletionCallback() noexcept
+    {
+        return detail::completionCallbackDepth != 0u;
+    }
+
     /** Lazy alpaka-native chain over borrowed caller-supplied queues.
      *
      * Every queue must outlive the connected operation. Submit callables and primitive arguments are retained by value
@@ -119,6 +148,11 @@ namespace caravan::alpaka
      * Same-queue stages use FIFO. A queue change records an alpaka event and inserts a native queue wait. Only the
      * final queue callback publishes host-visible completion, so intermediate accelerator dependencies never
      * host-wait.
+     *
+     * Terminal receivers run on alpaka's callback thread. They must not block on the originating queue or destroy its
+     * last handle; use continuesOn before attaching unrestricted application continuations. If submission-error
+     * cleanup cannot establish quiescence by waiting every participating queue, Caravan terminates rather than release
+     * retained state that native work may still access.
      */
     template<typename T_Queue, typename... T_Submits>
     class SubmitSender
@@ -149,7 +183,7 @@ namespace caravan::alpaka
         friend class SubmitSender;
 
         template<typename T_OtherQueue, typename... T_Left, typename... T_Right>
-        friend auto then(SubmitSender<T_OtherQueue, T_Left...>, SubmitSender<T_OtherQueue, T_Right...>);
+        friend auto sequence(SubmitSender<T_OtherQueue, T_Left...>, SubmitSender<T_OtherQueue, T_Right...>);
 
     private:
         std::array<T_Queue*, stageCount> m_queues;
@@ -165,9 +199,9 @@ namespace caravan::alpaka
         return SubmitSender<T_Queue, Submit>{{&queue}, {std::move(submit)}};
     }
 
-    /** Alpaka-domain composition preserving FIFO/events instead of crossing host-visible completion. */
+    /** Alpaka-domain sequencing preserving FIFO/events instead of crossing host-visible completion. */
     template<typename T_Queue, typename... T_Left, typename... T_Right>
-    auto then(SubmitSender<T_Queue, T_Left...> left, SubmitSender<T_Queue, T_Right...> right)
+    auto sequence(SubmitSender<T_Queue, T_Left...> left, SubmitSender<T_Queue, T_Right...> right)
     {
         std::array<T_Queue*, sizeof...(T_Left) + sizeof...(T_Right)> queues;
         auto output = queues.begin();
@@ -176,6 +210,15 @@ namespace caravan::alpaka
         return SubmitSender<T_Queue, T_Left..., T_Right...>{
             queues,
             std::tuple_cat(std::move(left.m_submits), std::move(right.m_submits))};
+    }
+
+    /** Compatibility spelling; generic caravan::then transforms values instead. */
+    template<typename T_Queue, typename... T_Left, typename... T_Right>
+    [[deprecated("use caravan::alpaka::sequence")]] auto then(
+        SubmitSender<T_Queue, T_Left...> left,
+        SubmitSender<T_Queue, T_Right...> right)
+    {
+        return sequence(std::move(left), std::move(right));
     }
 
     /** Lazy byte fill. The buffer/view handle is retained by value. */

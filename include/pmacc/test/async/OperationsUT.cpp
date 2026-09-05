@@ -68,7 +68,7 @@ namespace
         pmacc::ComputeDeviceQueue& queue,
         pmacc::StackExchangeBuffer<int, int, DIM1>& stack)
     {
-        return caravan::alpaka::then(stack.resetAsync(queue), stack.publishDeviceSizes(queue));
+        return caravan::alpaka::sequence(stack.resetAsync(queue), stack.publishDeviceSizes(queue));
     }
 } // namespace
 
@@ -87,9 +87,9 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
     pmacc::HostBuffer<int, DIM1> output(one);
     input->data()[0] = 41;
 
-    auto step = caravan::alpaka::then(
-        caravan::alpaka::then(
-            caravan::alpaka::then(
+    auto step = caravan::alpaka::sequence(
+        caravan::alpaka::sequence(
+            caravan::alpaka::sequence(
                 pmacc::async::fill(queue, device->getOwnedAlpakaView(), 0u),
                 pmacc::async::copy(queue, device->getOwnedAlpakaView(), input->getOwnedAlpakaView(), extent)),
             pmacc::async::kernel<pmacc::Acc<DIM1>>(
@@ -97,7 +97,7 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
                 workDiv,
                 Increment{},
                 pmacc::async::retain(device->data(), device->getOwnedAlpakaView()))),
-        caravan::alpaka::then(
+        caravan::alpaka::sequence(
             caravan::alpaka::size(queue, device->sizeOnDeviceBuffer(), device->sizeHostSideBuffer()),
             pmacc::async::copy(queue, output.getOwnedAlpakaView(), device->getOwnedAlpakaView(), extent)));
 

@@ -148,13 +148,13 @@ auto run(caravan::MpiContext& mpi) -> int
 
     auto boundaryKernel
         = PMACC_LOCKSTEP_KERNEL(SetBoundaryConditions{}).config(borderMapper.getGridDim(), SuperCell{});
-    auto initialValues = caravan::alpaka::then(
-        caravan::alpaka::then(
+    auto initialValues = caravan::alpaka::sequence(
+        caravan::alpaka::sequence(
             pmacc::async::fill(computeQueue, buff1->getDeviceBuffer().getOwnedAlpakaView(), 0u),
             pmacc::async::fill(computeQueue, buff2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
         pmacc::async::fill(computeQueue, residualBuffer->getDeviceBuffer().getOwnedAlpakaView(), 0u));
-    auto initialBoundaries = caravan::alpaka::then(
-        caravan::alpaka::then(
+    auto initialBoundaries = caravan::alpaka::sequence(
+        caravan::alpaka::sequence(
             std::move(initialValues),
             boundaryKernel.sender(
                 computeQueue,
@@ -237,9 +237,9 @@ auto run(caravan::MpiContext& mpi) -> int
                     residualView,
                     pmacc::DataSpace<DIM1>::create(1).toAlpakaMemVec());
                 auto resetResidual = pmacc::async::fill(computeQueue, std::move(residualView), 0u);
-                return caravan::alpaka::then(
-                    caravan::alpaka::then(
-                        caravan::alpaka::then(std::move(boundary), std::move(border)),
+                return caravan::alpaka::sequence(
+                    caravan::alpaka::sequence(
+                        caravan::alpaka::sequence(std::move(boundary), std::move(border)),
                         std::move(copyResidual)),
                     std::move(resetResidual));
             });

@@ -56,11 +56,11 @@ int main(int argc, char** argv)
             bool acceleratorStarted = false;
             bool mpiStarted = false;
             bool continued = false;
-            auto accelerator = caravan::alpaka::then(
-                caravan::alpaka::then(
+            auto accelerator = caravan::alpaka::sequence(
+                caravan::alpaka::sequence(
                     caravan::alpaka::submit(queue, [&](Queue&) { acceleratorStarted = true; }),
                     caravan::alpaka::copy(queue, deviceValue, hostValue, one)),
-                caravan::alpaka::then(
+                caravan::alpaka::sequence(
                     caravan::alpaka::kernel<Acc>(
                         queue,
                         alpaka::WorkDivMembers<Dim, Idx>{one, one, one},

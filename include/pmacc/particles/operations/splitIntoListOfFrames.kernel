@@ -316,9 +316,9 @@ namespace pmacc
                 auto fill = destSpecies.fillAllGapsAsync(queue);
                 auto copy = counterBuffer->deviceToHost(queue);
                 return caravan::then(
-                    caravan::alpaka::then(
-                        caravan::alpaka::then(
-                            caravan::alpaka::then(std::move(initialize), std::move(split)),
+                    caravan::alpaka::sequence(
+                        caravan::alpaka::sequence(
+                            caravan::alpaka::sequence(std::move(initialize), std::move(split)),
                             std::move(fill)),
                         std::move(copy)),
                     [counterBuffer, numParticles, logLvl]
