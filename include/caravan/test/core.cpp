@@ -516,6 +516,9 @@ namespace
     void testSyncWait()
     {
         caravan::syncWait(caravan::asSender(caravan::readyEvent()));
+        auto moveOnly = caravan::syncWait<std::unique_ptr<int>>(
+            AsyncValueSender<std::unique_ptr<int>>{caravan::readyEvent(), std::make_unique<int>(42)});
+        assert(*moveOnly == 42);
 
         bool started = false;
         {
@@ -758,6 +761,31 @@ namespace
         successor.setReady();
         completion.wait();
         assert(lifetime.expired());
+
+        caravan::Promise<std::unique_ptr<int>> promise;
+        auto consumedAlias = promise.future();
+        auto consumed = scope.spawnFuture<std::unique_ptr<int>>(caravan::consumeAsSender(promise.future()));
+        promise.setValue(std::make_unique<int>(42));
+        auto consumedValue = std::move(consumed).takeResult();
+        assert(*consumedValue == 42);
+        try
+        {
+            static_cast<void>(consumedAlias.result());
+            assert(false);
+        }
+        catch(std::logic_error const&)
+        {
+        }
+
+        caravan::Promise<int> failedPromise;
+        auto failedBridge = scope.spawn(caravan::consumeAsSender(failedPromise.future()));
+        failedPromise.setFailed(std::make_exception_ptr(std::runtime_error("future bridge failure")));
+        assert(failedBridge.state() == caravan::CompletionState::failed);
+
+        caravan::Promise<int> stoppedPromise;
+        auto stoppedBridge = scope.spawn(caravan::consumeAsSender(stoppedPromise.future()));
+        stoppedPromise.setStopped();
+        assert(stoppedBridge.state() == caravan::CompletionState::stopped);
         scope.join().wait();
     }
 
