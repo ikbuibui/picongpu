@@ -21,7 +21,6 @@
 
 #pragma once
 
-#include "pmacc/eventSystem/transactions/TransactionManager.hpp"
 #include "pmacc/types.hpp"
 
 #include <caravan/mpi.hpp>
@@ -47,7 +46,6 @@ namespace pmacc
             friend pmacc::Environment<DIM1>;
             friend pmacc::Environment<DIM2>;
             friend pmacc::Environment<DIM3>;
-            friend pmacc::TransactionManager;
 
             EnvironmentContext() = default;
 

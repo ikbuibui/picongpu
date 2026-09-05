@@ -22,14 +22,11 @@
 #pragma once
 
 
-#include "pmacc/Environment.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/exec/KernelLauncher.hpp"
 #include "pmacc/exec/KernelWithDynSharedMem.hpp"
 #include "pmacc/traits/GetNComponents.hpp"
 #include "pmacc/types.hpp"
-
-#include <string>
 
 namespace pmacc::exec
 {
@@ -47,26 +44,13 @@ namespace pmacc::exec
             static constexpr uint32_t dim = 1;
         };
 
-        /** Wraps a user kernel functor to prepare the execution on the device.
-         *
-         * This objects contains the kernel functor, kernel meta information.
-         * Object is used to apply the grid and block extents and optionally the amount of dynamic shared memory to the
-         * kernel.
-         */
+        /** Wrap a user kernel functor and apply launch extents and dynamic shared memory. */
         template<typename T_KernelFunctor>
         struct KernelPreperationWrapper
         {
             T_KernelFunctor const m_kernelFunctor;
-            std::string const m_file;
-            size_t const m_line;
 
-            HINLINE KernelPreperationWrapper(
-                T_KernelFunctor const& kernelFunctor,
-                std::string const& file = std::string(),
-                size_t const line = 0)
-                : m_kernelFunctor(kernelFunctor)
-                , m_file(file)
-                , m_line(line)
+            HINLINE KernelPreperationWrapper(T_KernelFunctor const& kernelFunctor) : m_kernelFunctor(kernelFunctor)
             {
             }
 
@@ -106,19 +90,16 @@ namespace pmacc::exec
      * @code{.cpp}
      *   pmacc::exec::kernel([]ALPAKA_FN_ACC(auto const& acc) -> void{
      *       printf("Hello World.\n");
-     *   })(1,1)()
+     *   })(1,1).sender(queue)
      * @endcode
      *
      * @tparam T_KernelFunctor type of the kernel functor
      * @param kernelFunctor instance of the functor, lambda are supported
-     * @param file file name (for debug)
-     * @param line line number in the file (for debug)
      */
     template<typename T_KernelFunctor>
-    auto kernel(T_KernelFunctor const& kernelFunctor, std::string const& file = std::string(), size_t const line = 0)
-        -> detail::KernelPreperationWrapper<T_KernelFunctor>
+    auto kernel(T_KernelFunctor const& kernelFunctor) -> detail::KernelPreperationWrapper<T_KernelFunctor>
     {
-        return detail::KernelPreperationWrapper<T_KernelFunctor>(kernelFunctor, file, line);
+        return detail::KernelPreperationWrapper<T_KernelFunctor>(kernelFunctor);
     }
 } // namespace pmacc::exec
 
@@ -145,15 +126,9 @@ namespace alpaka
     } // namespace trait
 } // namespace alpaka
 
-/** Create a kernel object out of a functor instance.
- *
- * This macro add the current filename and line number to the kernel object.
- * @see ::pmacc::exec::kernel
- *
- * @param ... instance of kernel functor
- */
-#define PMACC_KERNEL(...) ::pmacc::exec::kernel(__VA_ARGS__, __FILE__, static_cast<size_t>(__LINE__))
+/** Create a kernel object out of a functor instance. */
+#define PMACC_KERNEL(...) ::pmacc::exec::kernel(__VA_ARGS__)
 
 
-#include "pmacc/eventSystem/events/kernelEvents.tpp"
+#include "pmacc/exec/Kernel.tpp"
 #include "pmacc/exec/KernelLauncher.tpp"

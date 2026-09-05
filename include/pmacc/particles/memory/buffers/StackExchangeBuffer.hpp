@@ -126,30 +126,6 @@ namespace pmacc
             return caravan::alpaka::then(std::move(stackSize), std::move(indexSize));
         }
 
-        void setSize(size_t const size)
-        {
-            // do host and device setSize parallel
-            EventTask split = eventSystem::getTransactionEvent();
-            EventTask e1;
-
-            if(!Environment<>::get().isMpiDirectEnabled())
-            {
-                eventSystem::startTransaction(split);
-                stackIndexer.getHostBuffer().setSize(size);
-                stack.getHostBuffer().setSize(size);
-                e1 = eventSystem::endTransaction();
-            }
-
-            eventSystem::startTransaction(split);
-            stackIndexer.getDeviceBuffer().setSize(size);
-            EventTask e2 = eventSystem::endTransaction();
-            eventSystem::startTransaction(split);
-            stack.getDeviceBuffer().setSize(size);
-            EventTask e3 = eventSystem::endTransaction();
-
-            eventSystem::setTransactionEvent(e1 + e2 + e3);
-        }
-
         size_t getHostCurrentSize()
         {
             size_t result = 0u;

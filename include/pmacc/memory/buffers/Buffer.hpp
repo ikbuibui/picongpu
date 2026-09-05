@@ -70,10 +70,7 @@ namespace pmacc
             setSizeHostSide(size.productOfComponents());
         }
 
-        virtual ~Buffer()
-        {
-            eventSystem::startOperation(ITask::TASK_HOST);
-        }
+        virtual ~Buffer() = default;
 
         /** get the capacity of the buffer
          *
@@ -108,7 +105,7 @@ namespace pmacc
             return currentSizeBufferHost;
         }
 
-        /** Update the host-side size without creating a legacy event-system dependency.
+        /** Update the host-side size.
          *
          * Device-side size synchronization, when enabled, must be explicitly composed by the caller.
          */
@@ -116,16 +113,6 @@ namespace pmacc
         {
             PMACC_ASSERT(static_cast<size_t>(newSize) <= static_cast<size_t>(capacityND().productOfComponents()));
             alpaka::getPtrNative(this->currentSizeBufferHost)[0] = newSize;
-        }
-
-        /** set total number of elements
-         *
-         * @param newSize number of elements per dimension
-         */
-        virtual void setSize(size_t const newSize)
-        {
-            eventSystem::startOperation(ITask::TASK_HOST);
-            setSizeHostSide(newSize);
         }
 
         /** Total number of elements mapped to the N-dimensional size of the buffer */
@@ -190,15 +177,6 @@ namespace pmacc
 
             return tmp;
         }
-
-        /** set all data to zero and reset current size to the capacity of the container */
-        virtual void reset(bool preserveData = false) = 0;
-
-        /** set all data to the same value
-         *
-         * @param value value assigned to each element of the buffer
-         */
-        virtual void setValue(T_Type const& value) = 0;
 
         /** get accessor to the container elements */
         virtual DataBox<PitchedBox<T_Type, T_dim>> getDataBox() = 0;

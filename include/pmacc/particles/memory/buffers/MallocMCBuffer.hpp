@@ -29,6 +29,8 @@
 #include <memory>
 #include <string>
 
+#include <caravan/alpaka.hpp>
+
 #if (ALPAKA_ACC_GPU_CUDA_ENABLED || ALPAKA_ACC_GPU_HIP_ENABLED)
 
 #    include <memory>
@@ -63,7 +65,8 @@ namespace pmacc
             return hostBufferOffset;
         }
 
-        void synchronize() override;
+        template<typename T_Queue>
+        auto synchronize(T_Queue& queue);
 
     private:
         std::optional<BufferType> hostBuffer;
@@ -105,8 +108,10 @@ namespace pmacc
             return 0u;
         }
 
-        void synchronize() override
+        template<typename T_Queue>
+        auto synchronize(T_Queue& queue)
         {
+            return caravan::alpaka::submit(queue, [](T_Queue&) {});
         }
     };
 

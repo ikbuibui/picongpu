@@ -51,6 +51,15 @@ namespace pmacc
 
     class IdProvider : public ISimulationData
     {
+        struct FetchId
+        {
+            template<typename T_Worker>
+            DINLINE void operator()(T_Worker const& worker, IdGenerator idGenerator, uint64_t* nextId) const
+            {
+                *nextId = idGenerator.fetchInc(worker);
+            }
+        };
+
     public:
         struct State
         {
@@ -60,12 +69,6 @@ namespace pmacc
             uint64_t startId;
             /** Maximum number of processes ever used (never decreases) */
             uint64_t maxNumProc;
-        };
-
-        void synchronize() override
-        {
-            idBuffer.deviceToHost();
-            eventSystem::getTransactionEvent().waitForFinished();
         };
 
         /** Return a lazy copy of the current device state to the host. */
@@ -85,16 +88,6 @@ namespace pmacc
             return IdGenerator{idBuffer.getDeviceBuffer().data()};
         }
 
-        /** Returns the state (e.g. for saving)
-         *  Result is the same as the parameter to @ref setState
-         */
-        State getState()
-        {
-            idBuffer.deviceToHost();
-            eventSystem::getTransactionEvent().waitForFinished();
-            return getStateHost();
-        }
-
         /** Read state previously synchronized to the host. */
         State getStateHost() const
         {
@@ -107,9 +100,7 @@ namespace pmacc
         {
             auto newIdBuffer = std::make_shared<HostDeviceBuffer<uint64_t, 1>>(DataSpace<1>{1});
             auto& deviceBuffer = newIdBuffer->getDeviceBuffer();
-            auto kernel = [] ALPAKA_FN_ACC(auto const& worker, auto idGenerator, uint64_t* nextId) -> void
-            { *nextId = idGenerator.fetchInc(worker); };
-            auto fetch = PMACC_LOCKSTEP_KERNEL(kernel).template config<1>(1).sender(
+            auto fetch = PMACC_LOCKSTEP_KERNEL(FetchId{}).template config<1>(1).sender(
                 queue,
                 getDeviceGenerator(),
                 async::retain(deviceBuffer.data(), deviceBuffer.getOwnedAlpakaView()));
@@ -117,14 +108,6 @@ namespace pmacc
             return caravan::then(
                 caravan::alpaka::then(std::move(fetch), std::move(copy)),
                 [newIdBuffer] { return *newIdBuffer->getHostBuffer().data(); });
-        }
-
-        /** Sets the internal state (e.g. after a restart)
-         */
-        void setState(State const& state)
-        {
-            setStateHost(state);
-            idBuffer.hostToDevice();
         }
 
         /** Set host state; call initialize() before device use. */

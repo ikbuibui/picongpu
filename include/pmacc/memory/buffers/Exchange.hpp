@@ -24,8 +24,6 @@
 #include "pmacc/assert.hpp"
 #include "pmacc/async.hpp"
 #include "pmacc/dimensions/GridLayout.hpp"
-#include "pmacc/eventSystem/tasks/Factory.hpp"
-#include "pmacc/eventSystem/tasks/TaskReceive.hpp"
 #include "pmacc/mappings/simulation/GridController.hpp"
 #include "pmacc/memory/buffers/DeviceBuffer.hpp"
 #include "pmacc/memory/buffers/HostBuffer.hpp"
@@ -366,16 +364,6 @@ namespace pmacc
                         });
                     return caravan::then(std::move(copy), [metadata] { return metadata; });
                 });
-        }
-
-        EventTask startSend()
-        {
-            return Environment<>::get().Factory().createTaskSend(*this);
-        }
-
-        EventTask startReceive()
-        {
-            return Environment<>::get().Factory().createTaskReceive(*this);
         }
 
         /**

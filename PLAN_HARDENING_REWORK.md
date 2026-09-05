@@ -38,9 +38,9 @@ validation gates remain open.
 
 The current implementation has two main kinds of work remaining:
 
-1. **Transitional complexity:** the legacy Manager/task system, explicit
-   runtime-sized eager adapters, and new sender infrastructure coexist; remaining
-   PIConGPU callers still keep the old PMacc task paths alive.
+1. **PIConGPU migration:** PMacc's legacy Manager/task system and eager adapters are
+   deleted. PIConGPU still references the removed interfaces and will be ported only
+   after review of this PMacc-first change.
 2. **Unverified performance and platforms:** allocation counts, MPI progress cost,
    sanitizer runs, GPU-aware MPI, and the performance gates in `PLAN.md` have not
    been demonstrated.
@@ -97,7 +97,7 @@ Every change in this plan must preserve the following invariants.
 | P1 | P1 | Deferred | Add allocation and dispatch measurement harness | Allocation decisions |
 | P2 | P1 | Deferred | Remove unconditional eager-path allocations | Performance gates |
 | P3 | P1 | Deferred | Bound and tune progress-loop work | MPI latency and CPU-cost gates |
-| M1-M2 | P1 | In progress | Complete PMacc migration and delete legacy paths | PIConGPU entry gate |
+| M1-M2 | P1 | Review | PMacc migration and legacy deletion implemented | PIConGPU entry gate |
 | V1 | P1 | In progress | Run sanitizer, multi-rank, GPU, and performance validation | Production acceptance |
 
 C1-C6 and S1-S6 are implemented. Structural allocation optimizations in P2 must
@@ -401,9 +401,8 @@ does not otherwise use operation IDs.
 used directly: `ICommunicator` and its dimension-erasing `EnvironmentController`
 registry are removed. Grid topology remains owned by `GridController` and
 `CommunicatorMPI`, while asynchronous execution delegates directly to the attached
-Caravan `MpiContext`. The eager communicator methods and compatibility-owned async
-context are removed; the remaining legacy MPI tasks own their temporary eager
-bridge locally until M2 deletes those tasks.
+Caravan `MpiContext`. The eager communicator methods, compatibility-owned async
+context, and legacy MPI tasks are removed.
 
 Ordinary `OperationSender<T>` now stores concrete, MPI-free operation descriptors
 instead of an allocating `std::function` start closure. Native types and the
@@ -458,16 +457,14 @@ MPI read inputs now use `ConstBufferLease` while mutable receive/output storage 
 gather reject all overlapping input/output ranges rather than exposing incomplete
 root in-place semantics. The stale managed-communicator argument at the final
 native reduction request caller was removed. Legacy factories, task states,
-observers, and stringification that still have callers remain tracked for deletion
-with those callers in M2; no compatibility shells were added.
+observers, and stringification are now deleted; no compatibility shells were added.
 
 ---
 
 # Phase P: allocation and dispatch performance
 
-**Implementation status: deferred until M1-M2 complete.** Measuring and tuning both
-legacy and replacement dispatch paths would optimize transitional code that M2 is
-intended to delete.
+**Implementation status: deferred until the PMacc API review.** The legacy path is
+now deleted, so subsequent measurements cover only the replacement architecture.
 
 ## P1: Establish a reproducible allocation baseline
 
@@ -599,7 +596,10 @@ Add allocation-specific gates:
 
 ## M1: PMacc migration
 
-**Implementation status: in progress.** The PIConGPU executable now runs under
+**Implementation status: complete for PMacc and awaiting review.** The legacy PMacc
+runtime and compatibility APIs are deleted. PIConGPU migration is intentionally
+paused until this PMacc-first API change is reviewed. The earlier vertical slices
+already landed remain in place. The PIConGPU executable now runs under
 `MpiRuntime` and passes its owned `MpiContext` through `SimulationStarter` to PMacc
 device initialization. `SimulationHelper` owns one shared PMacc async context, and
 the initial E/B guard exchange uses the sender-first field API through that context.
@@ -637,20 +637,19 @@ synchronous scalar-return boundary without transaction-backed operations. The em
 lazy fills, kernel submission, copies, plane reductions, communicator splitting, and variable gathers; its
 raw MPI communicator and global-transaction dependencies are removed.
 
-Migrate vertically by subsystem rather than completing all PMacc changes while
-leaving PIConGPU broken. For each field, particle, reduction/gather, buffer/kernel
-helper, and simulation-control slice: finalize the PMacc sender API, migrate its
-PIConGPU callers and tests, then remove that slice's compatibility adapter. Keep
+For the remaining PIConGPU phase, migrate vertically by subsystem. For each field,
+particle, reduction/gather, buffer/kernel helper, and simulation-control slice,
+port PIConGPU callers and tests to the reviewed PMacc sender API. Keep
 each committed step buildable; a temporary local break is acceptable only within
 one tightly scoped migration. This preserves PIConGPU as the integration test for
 the PMacc API and avoids discovering API mismatches after a repository-wide
 PMacc-only migration.
 
-### Remaining M1 inventory
+### Remaining PIConGPU inventory after PMacc review
 
-The current audit baseline is commit `ea7902c129`. Update these counts as migration
-lands; completion is determined by the zero-legacy-reference gate below rather than
-by preserving the baseline counts.
+The PMacc legacy deletion intentionally leaves PIConGPU uncompilable until this
+inventory is ported after review. Completion is determined by the zero-legacy-reference
+gate rather than by preserving old call shapes.
 
 - [ ] **Simulation orchestration:** replace the global transaction and `EventTask`
       graph in `picongpu/simulation/control/Simulation.hpp`, particle push, current
@@ -659,34 +658,23 @@ by preserving the baseline counts.
 - [ ] **Field communication:** migrate `EMFieldBase`, `FieldJ`, `FieldTmp`, PML,
       FDTD, particle-to-grid, and charge-conservation callers from
       `asyncCommunication(EventTask)` and field task factories to field senders.
-- [ ] **Particle communication:** migrate particle push from the legacy generic
-      `asyncCommunication` overload, then remove the old overload and the remaining
-      transaction paths in `ParticlesBase`, particle buffers, stack exchange, and
-      mallocMC helpers.
-- [ ] **Reduction and gather:** make `MPIReduce` sender-first instead of waiting on
-      the global transaction and calling `syncWait`; migrate its PIConGPU callers.
-      Migrate the remaining legacy `GatherSlice::gatherSlice` callers in
-      `Visualisation.hpp` and `Shadowgraphy.x.cpp`.
-- [ ] **Kernel and buffer helpers:** convert every remaining eager kernel launch to
-      `.sender(queue, ...)` and replace no-queue copies/fills with queue-taking
-      senders, including PIConGPU dimensional tests. Any call through
-      `KernelLauncher::operator()` still requires `TaskKernel` and blocks M2.
-- [ ] **Compatibility boundary:** either migrate or identify for M2 deletion every
-      remaining direct dependency on `EventTask`, `eventSystem`, `ITask`, eager
-      buffer overloads, and field/particle factories. Keep only deliberately named
-      migration/interop adapters until their final caller is gone.
+- [ ] **Particle communication:** migrate particle push to
+      `pmacc::particles::spawnCommunication` and the queue-taking particle senders.
+- [ ] **Reduction and gather:** migrate PIConGPU callers to sender-first `MPIReduce`
+      and the explicit gather boundary.
+- [ ] **Kernel and buffer helpers:** convert every remaining PIConGPU eager kernel
+      launch to `.sender(queue, ...)` and replace no-queue copies/fills with
+      queue-taking senders, including dimensional tests.
+- [ ] **Removed API references:** eliminate PIConGPU dependencies on `EventTask`,
+      `eventSystem`, `ITask`, eager buffer overloads, and field/particle factories.
 - [ ] **Validation:** keep each vertical slice buildable and run its focused CPU,
       multi-rank, and available GPU tests; complete the full backend checks listed
       below before marking M1 complete.
 
-At this baseline, 39 PIConGPU files directly reference `EventTask`, `eventSystem`,
-or `ITask`; 20 PMacc production files outside the event-system and field/particle
-task implementation directories do so; 21 PIConGPU files reference `MPIReduce`;
-and two PIConGPU callers use the legacy gather entry point. There are 129 PMacc
-kernel-macro sites across 78 files to audit, including already migrated sender
-calls. M1 is complete when no legacy reference remains outside the directories and
-named adapters that M2 will delete, no eager kernel/task launch remains, and no
-normal primitive accepts a legacy predecessor.
+At the PMacc review point, 43 PIConGPU files directly reference removed event/task
+APIs and 57 PIConGPU files contain kernel-launch macros to audit. Refresh these
+counts when Phase 8 starts. PMacc itself has zero references to the removed runtime,
+and no normal PMacc primitive accepts a legacy predecessor.
 
 1. Convert field, particle, reduction, gather, signal, and helper operations to the
    sender-first API.
@@ -699,7 +687,7 @@ normal primitive accepts a legacy predecessor.
 
 ## M2: Legacy deletion
 
-After the final PMacc caller has migrated, delete:
+**Implementation status: complete for PMacc.** The following were deleted:
 
 - the global Manager and transaction stack;
 - task IDs, task maps, observers, and destructor notifications;
@@ -775,15 +763,15 @@ Track deleted concepts and call sites, not only added sender equivalents.
       measurements.
 - [x] S5 collective ordering state has one documented model.
 - [x] S6 smaller redundant dependencies and unsafe edge cases are removed.
-- [ ] Eager adapters are isolated and named as migration/interop boundaries.
+- [x] Eager PMacc compatibility adapters are deleted.
 
 ## Before the PIConGPU entry gate
 
 - [ ] P1 allocation and latency baseline is recorded.
 - [ ] P2 eager and scope allocation budgets pass.
 - [ ] P3 progress fairness, CPU use, and MPI latency gates pass.
-- [ ] Remaining PMacc callers and tests are migrated.
-- [ ] Legacy Manager, transactions, tasks, observers, and adapters are deleted.
+- [x] Remaining PMacc callers and tests are migrated.
+- [x] Legacy Manager, transactions, tasks, observers, and adapters are deleted.
 - [ ] Sanitizer and backend validation matrices pass.
 - [ ] Target GPU and GPU-aware MPI performance gates pass or deviations are
       explicitly understood and accepted.

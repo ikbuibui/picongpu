@@ -101,7 +101,6 @@ namespace pmacc
             , gridLayout(gridLayout)
             , maxExchange(0)
         {
-            init();
         }
 
         /**
@@ -120,7 +119,6 @@ namespace pmacc
             , gridLayout(dataSpace)
             , maxExchange(0)
         {
-            init();
         }
 
         /**
@@ -143,7 +141,6 @@ namespace pmacc
             , gridLayout(gridLayout)
             , maxExchange(0)
         {
-            init();
         }
 
         GridBuffer(
@@ -158,7 +155,6 @@ namespace pmacc
             , gridLayout(gridLayout)
             , maxExchange(0)
         {
-            init();
         }
 
         /**
@@ -457,13 +453,6 @@ namespace pmacc
          * This operation runs sequential to other code but intern asynchronous
          *
          */
-        EventTask communication()
-        {
-            EventTask ev = this->asyncCommunication(eventSystem::getTransactionEvent());
-            eventSystem::setTransactionEvent(ev);
-            return ev;
-        }
-
         caravan::Event sendCompletion(uint32_t exchange) const
         {
             return sendCompletions[exchange];
@@ -498,7 +487,7 @@ namespace pmacc
             return receiveExchanges[exchange]->receive(queue);
         }
 
-        /** Eager runtime-sized adapter used by PMacc examples during migration. */
+        /** Eager runtime-sized boundary for dynamically selected exchange directions. */
         template<typename T_Queue>
         caravan::Event spawnCommunication(async::Context& context, T_Queue& queue)
         {
@@ -528,52 +517,6 @@ namespace pmacc
         }
 
         /**
-         * Starts sync data from own device buffer to neighbor device buffer.
-         *
-         * Asynchronously starts synchronization data from internal DeviceBuffer using added
-         * Exchange buffers.
-         *
-         */
-        EventTask asyncCommunication(EventTask serialEvent)
-        {
-            EventTask evR;
-            for(uint32_t i = 0; i < maxExchange; ++i)
-            {
-                evR += asyncReceive(serialEvent, i);
-
-                ExchangeType sendEx = Mask::getMirroredExchangeType(i);
-
-                evR += asyncSend(serialEvent, sendEx);
-            }
-            return evR;
-        }
-
-        EventTask asyncSend(EventTask serialEvent, uint32_t sendEx)
-        {
-            if(hasSendExchange(sendEx))
-            {
-                eventSystem::startTransaction(serialEvent + sendEvents[sendEx]);
-                sendEvents[sendEx] = sendExchanges[sendEx]->startSend();
-                eventSystem::endTransaction();
-                return sendEvents[sendEx];
-            }
-            return EventTask();
-        }
-
-        EventTask asyncReceive(EventTask serialEvent, uint32_t recvEx)
-        {
-            if(hasReceiveExchange(recvEx))
-            {
-                eventSystem::startTransaction(serialEvent + receiveEvents[recvEx]);
-                receiveEvents[recvEx] = receiveExchanges[recvEx]->startReceive();
-
-                eventSystem::endTransaction();
-                return receiveEvents[recvEx];
-            }
-            return EventTask();
-        }
-
-        /**
          * Returns the GridLayout describing this GridBuffer.
          *
          * @return the layout of this buffer
@@ -581,20 +524,6 @@ namespace pmacc
         GridLayout<DIM> getGridLayout()
         {
             return gridLayout;
-        }
-
-    private:
-        friend class Environment<DIM>;
-
-        void init()
-        {
-            for(uint32_t i = 0; i < 27; ++i)
-            {
-                /* fill array with valid empty events to avoid side effects if
-                 * array is accessed without calling hasExchange() before usage */
-                receiveEvents[i] = EventTask();
-                sendEvents[i] = EventTask();
-            }
         }
 
     protected:
@@ -608,8 +537,6 @@ namespace pmacc
 
         std::unique_ptr<Exchange<BORDERTYPE, DIM>> sendExchanges[27];
         std::unique_ptr<Exchange<BORDERTYPE, DIM>> receiveExchanges[27];
-        EventTask receiveEvents[27];
-        EventTask sendEvents[27];
         caravan::Event receiveCompletions[27];
         caravan::Event sendCompletions[27];
 
