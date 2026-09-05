@@ -4,8 +4,6 @@
  */
 #pragma once
 
-#include <algorithm>
-#include <climits>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -30,8 +28,10 @@ namespace caravan
 
     /** Native requests and lifetime tokens transferred to the MPI context.
      *
-     * Build the batch before starting requests. Until Caravan accepts the
-     * returned batch, its destructor drains requests during exception cleanup.
+     * Build the batch before starting requests. If a native start hook throws
+     * after partial submission, Caravan transfers the batch into normal progress
+     * and delays failure until every request is terminal. Destroying a live batch
+     * anywhere else is a fatal contract violation.
      */
     class NativeRequestBatch
     {
@@ -58,19 +58,7 @@ namespace caravan
 
         NativeRequestBatch& operator=(NativeRequestBatch&&) = delete;
 
-        ~NativeRequestBatch()
-        {
-            if(!m_ownsRequests)
-                return;
-            std::size_t offset = 0u;
-            while(offset < requests.size())
-            {
-                auto const count
-                    = static_cast<int>(std::min(requests.size() - offset, static_cast<std::size_t>(INT_MAX)));
-                MPI_Waitall(count, requests.data() + offset, MPI_STATUSES_IGNORE);
-                offset += static_cast<std::size_t>(count);
-            }
-        }
+        ~NativeRequestBatch();
 
         std::vector<MPI_Request> requests;
         std::vector<std::shared_ptr<void>> lifetimes;
@@ -85,6 +73,46 @@ namespace caravan
 
         friend struct detail::NativeAccess;
     };
+
+    namespace detail
+    {
+        inline thread_local NativeRequestBatch* nativeRequestRecovery = nullptr;
+
+        class NativeRequestRecoveryGuard
+        {
+        public:
+            explicit NativeRequestRecoveryGuard(NativeRequestBatch& batch) noexcept
+                : m_previous(std::exchange(nativeRequestRecovery, &batch))
+            {
+            }
+
+            ~NativeRequestRecoveryGuard()
+            {
+                nativeRequestRecovery = m_previous;
+            }
+
+        private:
+            NativeRequestBatch* m_previous;
+        };
+    } // namespace detail
+
+    inline NativeRequestBatch::~NativeRequestBatch()
+    {
+        if(!m_ownsRequests)
+            return;
+        bool active = false;
+        for(auto const request : requests)
+            active |= request != MPI_REQUEST_NULL;
+        if(!active)
+            return;
+
+        auto* recovery = detail::nativeRequestRecovery;
+        if(recovery == nullptr || recovery == this || !recovery->requests.empty())
+            std::terminate();
+        recovery->requests.swap(requests);
+        recovery->lifetimes.swap(lifetimes);
+        m_ownsRequests = false;
+    }
 
     namespace detail
     {
