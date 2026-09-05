@@ -31,6 +31,7 @@ namespace caravan
     inline constexpr CommunicatorId worldCommunicator{0u};
 
     class MpiContext;
+    class MpiExternalRuntime;
 
     namespace detail
     {
@@ -206,7 +207,9 @@ namespace caravan
         explicit MpiContext(std::unique_ptr<Impl> implementation);
 
         void run();
+        bool progress();
         void requestShutdown();
+        bool shutdownComplete() const noexcept;
         void submitNative(detail::NativeSubmission submission);
         void invokeBlocking(detail::NativeBlockingSubmission submission);
 
@@ -217,10 +220,38 @@ namespace caravan
         void abandonManagedCollective(detail::ManagedCollectiveTicket ticket) noexcept;
 
         friend class MpiRuntime;
+        friend class MpiExternalRuntime;
         friend struct detail::CollectiveAccess;
         friend struct detail::NativeAccess;
     };
 
+    /** Attach Caravan's request engine to an MPI lifecycle owned by the caller.
+     *
+     * MPI must already be initialized. Construct and drive this object only from
+     * the thread on which native MPI calls are permitted. progress() performs one
+     * bounded, nonblocking submission/progress turn and returns false after a
+     * requested shutdown becomes quiescent. The caller retains responsibility
+     * for MPI_Finalize and must finish Caravan first.
+     */
+    class MpiExternalRuntime
+    {
+    public:
+        MpiExternalRuntime();
+        ~MpiExternalRuntime();
+
+        MpiExternalRuntime(MpiExternalRuntime const&) = delete;
+        MpiExternalRuntime& operator=(MpiExternalRuntime const&) = delete;
+
+        MpiContext& context() noexcept;
+        bool progress();
+        void requestShutdown();
+        void finish();
+
+    private:
+        std::unique_ptr<MpiContext> m_context;
+    };
+
+    /** Convenience MPI lifecycle/driver using a dedicated FUNNELED thread. */
     class MpiRuntime
     {
     public:
