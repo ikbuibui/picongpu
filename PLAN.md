@@ -406,9 +406,12 @@ reliably, but custom APIs should not diverge semantically without a measured nee
 Before adding more backend or PMacc composition code, the custom migration layer
 must provide one small, typed vocabulary: `then`, value-forwarding `letValue`,
 fixed-arity sender `whenAll`, and a coherent sender concept/completion-signature
-representation used by those algorithms and backend senders. Do not add the rest
-of P2300 speculatively; add environment/query machinery only when continuation
-placement or a real backend requires it.
+representation used by those algorithms and backend senders. The migration
+`Sender` concept deliberately accepts exactly one alternative of owned values,
+`std::exception_ptr` errors, and stopped completion. Composition forwards a
+receiver's environment when present, but Caravan defines no environment queries
+or cancellation contract; stopped is a completion channel, not a cancellation
+claim. Do not add the rest of P2300 speculatively.
 
 ### 7. `Event` is an eager, type-erased completion bridge, not the universal async model
 
@@ -733,7 +736,10 @@ Required behavior:
 Initial `Event` implementation may continue using `std::shared_ptr`, a mutex,
 condition variable, and compact terminal state. Optimization comes only after
 profiling. `Future<T>` remains a shared immutable eager result for migration and
-runtime boundaries, not a replacement for sender value channels.
+runtime boundaries, not a replacement for sender value channels. Its explicit
+`consumeAsSender(std::move(future))` bridge is the exception: it invalidates the
+shared value under an exclusive-ownership precondition so move-only results can
+re-enter typed sender composition.
 
 ### Completion/continuation placement
 
@@ -878,9 +884,12 @@ DedicatedThreadMpiPolicy
 ```
 
 This remains the PMacc production configuration during migration because it
-provides independent progress and a simple MPI threading contract. The architecture
-must not prevent future attach/MULTIPLE/external-runtime/Sessions-based policies,
-but do not implement them without a consumer.
+provides independent progress and a simple MPI threading contract.
+`MpiExternalRuntime` is the narrow integration seam for a caller that already owns
+MPI lifecycle: it attaches the same request engine to initialized MPI and exposes
+one bounded, nonblocking progress turn. It adds no executor hierarchy or alternate
+request implementation; the caller supplies the MPI-valid driving thread and
+finalizes MPI only after explicit Caravan shutdown.
 
 ### The MPI context/progress authority is not a scheduler
 
@@ -1675,6 +1684,10 @@ abstraction.
     continuations on the selected run-loop scheduler.
 12. **Implemented and tested:** supported caller-supplied queues accept concurrent
     starts without Caravan serialization.
+13. **Implemented:** successful receiver delivery identifies alpaka callback
+    context. Such receivers must not block on the originating queue or destroy its
+    last handle; unrestricted application code first crosses `continuesOn`.
+    Submission cleanup terminates if queue waits cannot establish quiescence.
 
 **Exit criterion met for the hardware-independent Phase 4 scope:** PMacc can start
 accelerator operations through sender-like alpaka primitives; native accelerator-
