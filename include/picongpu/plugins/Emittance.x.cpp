@@ -448,11 +448,11 @@ namespace picongpu
 
             auto binaryKernel = [&](auto filter)
             {
-                auto initialize = caravan::alpaka::then(
-                    caravan::alpaka::then(
+                auto initialize = caravan::alpaka::sequence(
+                    caravan::alpaka::sequence(
                         async::fill(queue, gSumMom2->getDeviceBuffer().getOwnedAlpakaView(), 0u),
                         async::fill(queue, gSumPos2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
-                    caravan::alpaka::then(
+                    caravan::alpaka::sequence(
                         async::fill(queue, gSumMomPos->getDeviceBuffer().getOwnedAlpakaView(), 0u),
                         async::fill(queue, gCount_e->getDeviceBuffer().getOwnedAlpakaView(), 0u)));
                 auto kernel = PMACC_LOCKSTEP_KERNEL(KernelCalcEmittance{})
@@ -467,7 +467,7 @@ namespace picongpu
                                       globalOffset,
                                       mapper,
                                       filter);
-                caravan::syncWait(caravan::alpaka::then(std::move(initialize), std::move(kernel)));
+                caravan::syncWait(caravan::alpaka::sequence(std::move(initialize), std::move(kernel)));
             };
 
             auto idProvider = dc.get<IdProvider>("globalId");
@@ -477,9 +477,9 @@ namespace picongpu
                 idProvider->getDeviceGenerator(),
                 binaryKernel);
 
-            auto copies = caravan::alpaka::then(
-                caravan::alpaka::then(gSumMom2->deviceToHost(queue), gSumPos2->deviceToHost(queue)),
-                caravan::alpaka::then(gSumMomPos->deviceToHost(queue), gCount_e->deviceToHost(queue)));
+            auto copies = caravan::alpaka::sequence(
+                caravan::alpaka::sequence(gSumMom2->deviceToHost(queue), gSumPos2->deviceToHost(queue)),
+                caravan::alpaka::sequence(gSumMomPos->deviceToHost(queue), gCount_e->deviceToHost(queue)));
             caravan::syncWait(std::move(copies));
 
             auto const localDomSizeY = subGrid.getLocalDomain().size.y();

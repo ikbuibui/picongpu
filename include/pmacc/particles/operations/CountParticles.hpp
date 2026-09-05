@@ -156,7 +156,9 @@ namespace pmacc
                                  parFilter);
             auto copy = counter->deviceToHost(queue);
             return caravan::then(
-                caravan::alpaka::then(caravan::alpaka::then(std::move(initialize), std::move(count)), std::move(copy)),
+                caravan::alpaka::sequence(
+                    caravan::alpaka::sequence(std::move(initialize), std::move(count)),
+                    std::move(copy)),
                 [counter] { return *(counter->getHostBuffer().getDataBox()); });
         }
 

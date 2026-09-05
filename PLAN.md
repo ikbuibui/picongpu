@@ -1666,7 +1666,7 @@ abstraction.
    completion; native dependency availability precedes it.
 8. **Implemented:** native events remain private to `caravan::alpaka`; MPI and
    generic sender edges continue to consume host-visible completion.
-9. **Implemented:** the small `caravan::alpaka::then` domain transformation merges
+9. **Implemented:** the small `caravan::alpaka::sequence` domain transformation merges
    typed alpaka senders into one native FIFO/event chain without adding a scheduler
    hierarchy.
 10. **Implemented:** CPU and GPU use the same explicit alpaka queue-host-callback

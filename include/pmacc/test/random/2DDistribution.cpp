@@ -202,7 +202,7 @@ namespace pmacc
                 auto const device = manager::Device<ComputeDevice>::get().current();
                 ComputeDeviceQueue queue(device);
                 async::Context context;
-                auto initialize = caravan::alpaka::then(
+                auto initialize = caravan::alpaka::sequence(
                     rngProvider->init(queue, 0x4213'3742),
                     async::fill(queue, detector.getDeviceBuffer().getOwnedAlpakaView(), 0u));
                 auto generate = generateRandomNumbers(
@@ -216,8 +216,8 @@ namespace pmacc
                 pmacc::TimeInterval timer;
                 timer.toggleStart();
                 context.wait(context.spawn(
-                    caravan::alpaka::then(
-                        caravan::alpaka::then(std::move(initialize), std::move(generate)),
+                    caravan::alpaka::sequence(
+                        caravan::alpaka::sequence(std::move(initialize), std::move(generate)),
                         std::move(copy))));
                 timer.toggleEnd();
                 std::cout << "Done in " << timer.getInterval() << "ms" << std::endl;
