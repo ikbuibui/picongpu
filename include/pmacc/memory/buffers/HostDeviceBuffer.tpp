@@ -159,13 +159,6 @@ namespace pmacc
     }
 
     template<typename T_Type, unsigned T_dim>
-    void HostDeviceBuffer<T_Type, T_dim>::reset(bool preserveData)
-    {
-        deviceBuffer->reset(preserveData);
-        hostBuffer->reset(preserveData);
-    }
-
-    template<typename T_Type, unsigned T_dim>
     template<typename T_Queue>
     auto HostDeviceBuffer<T_Type, T_dim>::hostToDevice(T_Queue& queue)
     {
@@ -186,22 +179,11 @@ namespace pmacc
     }
 
     template<typename T_Type, unsigned T_dim>
-    void HostDeviceBuffer<T_Type, T_dim>::hostToDevice()
-    {
-        deviceBuffer->copyFrom(*hostBuffer);
-    }
-
-    template<typename T_Type, unsigned T_dim>
     template<typename T_Queue>
     auto HostDeviceBuffer<T_Type, T_dim>::deviceToHost(T_Queue& queue)
     {
         return detail::copyBuffer<T_dim>(queue, *hostBuffer, *deviceBuffer, [](T_Queue&, auto const&) {});
     }
 
-    template<typename T_Type, unsigned T_dim>
-    void HostDeviceBuffer<T_Type, T_dim>::deviceToHost()
-    {
-        hostBuffer->copyFrom(*deviceBuffer);
-    }
 
 } // namespace pmacc

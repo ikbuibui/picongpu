@@ -22,7 +22,7 @@
 #pragma once
 
 
-#include "pmacc/eventSystem/events/kernelEvents.hpp"
+#include "pmacc/exec/Kernel.hpp"
 #include "pmacc/types.hpp"
 
 #include <cstdint>
@@ -37,12 +37,7 @@ namespace pmacc::exec::detail
         size_t const sharedMemByte) const
         -> KernelLauncher<KernelWithDynSharedMem<T_KernelFunctor>, GetDim<T_VectorGrid>::dim>
     {
-        return {
-            KernelWithDynSharedMem<T_KernelFunctor>(m_kernelFunctor, sharedMemByte),
-            m_file,
-            m_line,
-            gridExtent,
-            blockExtent};
+        return {KernelWithDynSharedMem<T_KernelFunctor>(m_kernelFunctor, sharedMemByte), gridExtent, blockExtent};
     }
 
     template<typename T_KernelFunctor>
@@ -51,7 +46,7 @@ namespace pmacc::exec::detail
         T_VectorGrid const& gridExtent,
         T_VectorBlock const& blockExtent) const -> KernelLauncher<T_KernelFunctor, GetDim<T_VectorGrid>::dim>
     {
-        return {m_kernelFunctor, m_file, m_line, gridExtent, blockExtent};
+        return {m_kernelFunctor, gridExtent, blockExtent};
     }
 
 } // namespace pmacc::exec::detail

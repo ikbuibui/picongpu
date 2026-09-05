@@ -93,8 +93,11 @@ The immediate implementation order is:
 7. **Phase 5 representative path implemented:** replace PMacc polling task chains
    with local sender composition and retain Event only at unavoidable legacy
    boundaries; and
-8. **Phase 6 M1/M2 implemented:** port generic grid-buffer exchange branches and
-   both target example step graphs to explicit sender/Event composition.
+8. **Phase 6 implemented:** port generic grid-buffer, field, and particle communication
+   branches and both target example step graphs to explicit sender/Event composition.
+9. **Phase 7 PMacc migration and cleanup implemented, pending review and remaining
+   hardware/performance validation:** delete the legacy PMacc event runtime and eager
+   adapters before beginning the PIConGPU source port.
 
 ---
 
@@ -1736,8 +1739,8 @@ four-rank CPU residual regression and CUDA translation pass. M3 has also replace
 the polling signal task and eager signal/barrier adapters with explicitly scoped
 typed MPI senders. Generic field pack/receive/insert branches and dedicated
 recursive particle chunk senders are now available without polling tasks. Both target
-examples pass CUDA and HIP runtime regressions; GPU-aware MPI, PIConGPU call-site
-conversion, and adapter deletion remain.
+examples pass CUDA and HIP runtime regressions. The PMacc legacy adapters and task
+runtime are now deleted; GPU-aware MPI and PIConGPU call-site conversion remain.
 
 1. Port `Exchange` send and receive to explicit operation chains.
 2. Preserve host staging, double buffering, and GPU-aware MPI.
@@ -1759,6 +1762,16 @@ remain only if a still-unmigrated Phase 7 PMacc path requires them.
 ---
 
 ## Phase 7: Complete PMacc and pass the PIConGPU entry gate
+
+**Current state:** the PMacc source migration and cleanup are implemented for review.
+The Manager, transaction stack, task IDs, observers, polling tasks, field/particle
+factories, global queue controller, eager kernel/buffer/reduction adapters, and the
+entire `pmacc/eventSystem` tree are deleted. PMacc tests, standalone header checks,
+the CPU target-example regressions, and CUDA translation pass. The PIConGPU source
+still references the intentionally removed APIs and is deferred until this PMacc
+change is reviewed. GPU-aware MPI, full target-GPU runtime, sanitizers, and the
+performance gates remain open, so the complete PIConGPU entry gate is not yet
+accepted.
 
 1. Replace remaining field parent send/receive polling tasks with explicit
    direction composition.

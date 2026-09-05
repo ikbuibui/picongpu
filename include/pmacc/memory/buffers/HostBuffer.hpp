@@ -27,8 +27,6 @@
 #include "pmacc/assert.hpp"
 #include "pmacc/async/Operations.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
-#include "pmacc/eventSystem/eventSystem.hpp"
-#include "pmacc/eventSystem/tasks/Factory.hpp"
 #include "pmacc/memory/Array.hpp"
 #include "pmacc/memory/boxes/DataBoxDim1Access.hpp"
 #include "pmacc/memory/boxes/PitchedBox.hpp"
@@ -36,8 +34,6 @@
 
 namespace pmacc
 {
-    class EventTask;
-
     template<class TYPE, unsigned DIM>
     class DeviceBuffer;
 
@@ -126,19 +122,7 @@ namespace pmacc
                 alpaka::getPitchesInBytes(subView)));
         }
 
-        ~HostBuffer() override
-        {
-            eventSystem::startOperation(ITask::TASK_HOST);
-        }
-
-        /** Copies the data from the given DeviceBuffer to this HostBuffer.
-         *
-         * @param other DeviceBuffer to copy data from
-         */
-        void copyFrom(DeviceBuffer<T_Type, T_dim>& other)
-        {
-            Environment<>::get().Factory().createTaskCopy(other, *this);
-        }
+        ~HostBuffer() override = default;
 
         T_Type* data() override
         {
@@ -146,10 +130,9 @@ namespace pmacc
             return alpaka::getPtrNative(*view);
         }
 
-        void reset(bool preserveData = true) override
+        void reset(bool preserveData = true)
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
-            this->setSize(this->capacityND().productOfComponents());
+            this->setSizeHostSide(this->capacityND().productOfComponents());
             if(!preserveData)
             {
                 /* if it is a pointer out of other memory we can not assume that
@@ -171,7 +154,7 @@ namespace pmacc
             }
         }
 
-        void setValue(T_Type const& value) override
+        void setValue(T_Type const& value)
         {
             auto memBox = this->getDataBox();
             // narrowing conversion, implicit assumption when using a DataSpace is that size fits in int.
@@ -194,7 +177,6 @@ namespace pmacc
         typename Buffer<T_Type, T_dim>::CPtr getCPtrCurrentSize() final
         {
             PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
-            // size is notifying the event system, no need to do it manually
             size_t const size = this->size();
             return {alpaka::getPtrNative(*view), size};
         }

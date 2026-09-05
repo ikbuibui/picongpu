@@ -25,6 +25,7 @@
 #include <pmacc/math/Vector.hpp>
 #include <pmacc/math/operation.hpp>
 #include <pmacc/memory/boxes/CachedBox.hpp>
+#include <pmacc/memory/dataTypes/Mask.hpp>
 
 enum Directions
 {

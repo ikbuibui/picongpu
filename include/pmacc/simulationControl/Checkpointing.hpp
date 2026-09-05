@@ -23,6 +23,7 @@
 #pragma once
 
 #include "pmacc/Environment.hpp"
+#include "pmacc/async/Context.hpp"
 #include "pmacc/filesystem.hpp"
 #include "pmacc/mappings/simulation/Filesystem.hpp"
 #include "pmacc/mappings/simulation/GridController.hpp"
@@ -145,16 +146,15 @@ namespace pmacc::simulationControl
         }
 
         template<unsigned DIM>
-        void dump(uint32_t currentStep)
+        void dump(uint32_t currentStep, async::Context& asyncContext)
         {
             /* trigger checkpoint notification */
             if(pluginSystem::containsStep(seqCheckpointPeriod, currentStep))
             {
                 GridController<DIM>& gc = Environment<DIM>::get().GridController();
 
-                /* ensure that all MPI ranks are in the same time step to avoid that MPI collectives block asynchronous
-                 * communication enqueued in the event system. */
-                eventSystem::mpiBlocking(gc.getCommunicator());
+                /* Ensure that all MPI ranks are in the same time step. */
+                asyncContext.wait(asyncContext.spawn(gc.getCommunicator().barrier()));
 
                 /* create directory containing checkpoints  */
                 if(numCheckpoints == 0 && gc.getGlobalRank() == 0)
@@ -164,9 +164,8 @@ namespace pmacc::simulationControl
 
                 Environment<DIM>::get().PluginConnector().checkpointPlugins(currentStep, checkpointDirectory);
 
-                /* ensure that all MPI ranks are in the same time step to avoid that MPI collectives block asynchronous
-                 * communication enqueued in the event system. */
-                eventSystem::mpiBlocking(gc.getCommunicator());
+                /* Ensure every rank completed its checkpoint plugins. */
+                asyncContext.wait(asyncContext.spawn(gc.getCommunicator().barrier()));
 
                 /** important synchronize: only if no errors occurred until this  point guarantees that a checkpoint is
                  * usable
@@ -410,7 +409,7 @@ namespace pmacc::simulationControl
         }
 
         template<unsigned DIM>
-        void dump(uint32_t currentStep)
+        void dump(uint32_t currentStep, async::Context&)
         {
         }
 

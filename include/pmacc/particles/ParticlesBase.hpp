@@ -91,67 +91,39 @@ namespace pmacc
             delete this->particlesBuffer;
         }
 
-        /** Shift all particles in an area defined by a mapper factory
-         *
-         * The factory type must be such that StrideMapperFactory<T_MapperFactory, stride> is specialized
-         *
-         * @param onlyProcessMustShiftSupercells whether to process only supercells with mustShift set to true
-         * (optimization to be used with particle pusher) or process all supercells
-         */
-        template<uint32_t T_area>
-        void shiftParticles(bool onlyProcessMustShiftSupercells)
+        /** Lazily shift particles in an area defined by a mapper factory. */
+        template<uint32_t T_area, typename T_Queue>
+        auto shiftParticlesAsync(T_Queue& queue, bool onlyProcessMustShiftSupercells)
         {
-            this->shiftParticles(StrideAreaMapperFactory<T_area, 3>{}, onlyProcessMustShiftSupercells);
+            return shiftParticlesAsync(queue, StrideAreaMapperFactory<T_area, 3>{}, onlyProcessMustShiftSupercells);
         }
 
-        /** Shift all particles in the area defined by the given factory
-         *
-         * Note that the area itself is not strided, but the factory must produce stride mappers for the area.
-         *
-         * @tparam T_strideMapperFactory factory type to construct a stride mapper,
-         *                               resulting mapper must have stride of at least 3,
-         *                               adheres to the MapperFactory concept
-         *
-         * @param mapperFactory factory instance
-         * @param onlyProcessMustShiftSupercells whether to process only supercells with mustShift set to true
-         * (optimization to be used with particle pusher) or process all supercells
-         */
-        template<typename T_MapperFactory>
-        void shiftParticles(T_MapperFactory const& mapperFactory, bool onlyProcessMustShiftSupercells)
+        template<typename T_Queue, typename T_MapperFactory>
+        auto shiftParticlesAsync(
+            T_Queue& queue,
+            T_MapperFactory const& mapperFactory,
+            bool onlyProcessMustShiftSupercells)
         {
-            this->shiftParticlesImpl(
+            return shiftParticlesImplAsync(
+                queue,
                 StrideMapperFactory<T_MapperFactory, 3>{mapperFactory},
                 onlyProcessMustShiftSupercells);
         }
 
     public:
-        /** Fill gaps in an area defined by a mapper factory
-         *
-         * @tparam T_MapperFactory factory type to construct a mapper that defines the area to process
-         *
-         * @param mapperFactory factory instance
-         */
-        template<typename T_MapperFactory>
-        void fillGaps(T_MapperFactory const& mapperFactory)
+        template<typename T_Queue, typename T_MapperFactory>
+        auto fillGapsAsync(T_Queue& queue, T_MapperFactory const& mapperFactory)
         {
             auto const mapper = mapperFactory(this->cellDescription);
-
-            PMACC_LOCKSTEP_KERNEL(KernelFillGaps{})
-                .config(mapper.getGridDim(), *particlesBuffer)(particlesBuffer->getDeviceParticleBox(), mapper);
+            return PMACC_LOCKSTEP_KERNEL(KernelFillGaps{})
+                .config(mapper.getGridDim(), *particlesBuffer)
+                .sender(queue, particlesBuffer->getDeviceParticleBox(), mapper);
         }
 
-        /* fill gaps in a the complete simulation area (include GUARD)
-         */
-        void fillAllGaps()
+        template<typename T_Queue>
+        auto fillAllGapsAsync(T_Queue& queue)
         {
-            this->fillGaps(AreaMapperFactory<CORE + BORDER + GUARD>{});
-        }
-
-        /* fill all gaps in the border of the simulation
-         */
-        void fillBorderGaps()
-        {
-            this->fillGaps(AreaMapperFactory<BORDER>{});
+            return fillGapsAsync(queue, AreaMapperFactory<CORE + BORDER + GUARD>{});
         }
 
         template<typename T_Queue>
@@ -163,16 +135,11 @@ namespace pmacc
                 .sender(queue, particlesBuffer->getDeviceParticleBox(), mapper);
         }
 
-        /* Delete all particles in GUARD for one direction.
-         */
-        void deleteGuardParticles(uint32_t exchangeType);
-
         template<typename T_Queue>
         auto deleteGuardParticlesAsync(T_Queue& queue, uint32_t exchangeType);
 
-        /* Delete all particle in an area*/
-        template<uint32_t T_area>
-        void deleteParticlesInArea();
+        template<uint32_t T_area, typename T_Queue>
+        auto deleteParticlesInAreaAsync(T_Queue& queue);
 
         /** copy guard particles to intermediate exchange buffer
          *
@@ -183,14 +150,8 @@ namespace pmacc
          * Call fillAllGaps afterwards if you need a valid number of particles
          * and a contiguously filled last frame.
          */
-        void copyGuardToExchange(uint32_t exchangeType);
-
         template<typename T_Queue>
         auto copyGuardToExchangeAsync(T_Queue& queue, uint32_t exchangeType);
-
-        /* Insert all particles which are in device exchange buffer
-         */
-        void insertParticles(uint32_t exchangeType);
 
         template<typename T_Queue>
         auto insertParticlesAsync(T_Queue& queue, uint32_t exchangeType, size_t numParticles);
@@ -213,8 +174,13 @@ namespace pmacc
             return *particlesBuffer;
         }
 
-        /* set all internal objects to initial state*/
-        void reset(uint32_t currentStep) override;
+        template<typename T_Queue>
+        auto resetAsync(T_Queue& queue)
+        {
+            return caravan::alpaka::then(
+                deleteParticlesInAreaAsync<CORE + BORDER + GUARD>(queue),
+                particlesBuffer->resetAsync(queue));
+        }
 
     private:
         /** Shift all particles in the area defined by the given strided factory
@@ -230,26 +196,34 @@ namespace pmacc
          * @param onlyProcessMustShiftSupercells whether to process only supercells with mustShift set to true
          * (optimization to be used with particle pusher) or process all supercells
          */
-        template<typename T_strideMapperFactory>
-        void shiftParticlesImpl(T_strideMapperFactory const& strideMapperFactory, bool onlyProcessMustShiftSupercells)
+        template<typename T_Queue, typename T_StrideMapperFactory>
+        auto shiftParticlesImplAsync(
+            T_Queue& queue,
+            T_StrideMapperFactory const& strideMapperFactory,
+            bool onlyProcessMustShiftSupercells)
         {
             auto mapper = strideMapperFactory(this->cellDescription);
             PMACC_CASSERT_MSG(
                 shiftParticles_stride_mapper_condition_failure____stride_must_be_at_least_3,
                 decltype(mapper)::stride >= 3);
-            ParticlesBoxType pBox = particlesBuffer->getDeviceParticleBox();
+            auto const pBox = particlesBuffer->getDeviceParticleBox();
             auto const numSupercellsWithGuards = particlesBuffer->getSuperCellsCount();
-
-            eventSystem::startTransaction(eventSystem::getTransactionEvent());
-            do
-            {
-                PMACC_LOCKSTEP_KERNEL(KernelShiftParticles{})
-                    .config(
-                        mapper.getGridDim(),
-                        pBox)(pBox, mapper, numSupercellsWithGuards, onlyProcessMustShiftSupercells);
-            } while(mapper.next());
-
-            eventSystem::setTransactionEvent(eventSystem::endTransaction());
+            return caravan::alpaka::submit(
+                queue,
+                [mapper, pBox, numSupercellsWithGuards, onlyProcessMustShiftSupercells](T_Queue& nativeQueue) mutable
+                {
+                    do
+                    {
+                        PMACC_LOCKSTEP_KERNEL(KernelShiftParticles{})
+                            .config(mapper.getGridDim(), pBox)
+                            .enqueueNative(
+                                nativeQueue,
+                                pBox,
+                                mapper,
+                                numSupercellsWithGuards,
+                                onlyProcessMustShiftSupercells);
+                    } while(mapper.next());
+                });
         }
     };
 

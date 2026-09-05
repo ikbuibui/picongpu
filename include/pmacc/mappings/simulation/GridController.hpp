@@ -24,7 +24,6 @@
 
 #include "pmacc/communication/CommunicatorMPI.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
-#include "pmacc/eventSystem/eventSystem.hpp"
 #include "pmacc/mappings/simulation/SubGrid.hpp"
 
 namespace pmacc
@@ -160,11 +159,9 @@ namespace pmacc
          *
          * @return true if the position of the calling GPU is switched to the end, false otherwise
          */
+        /** @pre All work using grid coordinates is quiescent. */
         bool slide()
         {
-            /* wait that all tasks are finished */
-            eventSystem::waitForAllTasks();
-
             bool result = comm.slide();
 
             updateDomainOffset();
