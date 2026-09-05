@@ -20,7 +20,7 @@ cmake -S <source> -B <build> \
   -Dalpaka_ACC_CPU_B_SEQ_T_SEQ_ENABLE=ON \
   -Dalpaka_ACC_GPU_CUDA_ENABLE=OFF \
   -DCMAKE_CXX_COMPILER=g++
-cmake --build <build> -j2
+cmake --build <build> -j4
 ```
 
 The examples additionally used `-DGOL_RELEASE=ON` and

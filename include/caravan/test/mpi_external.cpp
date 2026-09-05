@@ -17,6 +17,8 @@ int main(int argc, char** argv)
     int provided = MPI_THREAD_SINGLE;
     assert(MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided) == MPI_SUCCESS);
     assert(provided >= MPI_THREAD_FUNNELED);
+    MPI_Errhandler originalErrorHandler = MPI_ERRHANDLER_NULL;
+    assert(MPI_Comm_get_errhandler(MPI_COMM_WORLD, &originalErrorHandler) == MPI_SUCCESS);
 
     {
         caravan::MpiExternalRuntime runtime;
@@ -53,5 +55,10 @@ int main(int argc, char** argv)
         }
     }
 
+    MPI_Errhandler restoredErrorHandler = MPI_ERRHANDLER_NULL;
+    assert(MPI_Comm_get_errhandler(MPI_COMM_WORLD, &restoredErrorHandler) == MPI_SUCCESS);
+    assert(restoredErrorHandler == originalErrorHandler);
+    assert(MPI_Errhandler_free(&originalErrorHandler) == MPI_SUCCESS);
+    assert(MPI_Errhandler_free(&restoredErrorHandler) == MPI_SUCCESS);
     assert(MPI_Finalize() == MPI_SUCCESS);
 }
