@@ -182,21 +182,6 @@ namespace pmacc
                 return reduce(func, dest, src, n, ::pmacc::mpi::reduceMethods::AllReduce{});
             }
 
-            /** Legacy blocking adapter; remove with its remaining task-system callers in M2. */
-            template<class Functor, typename Type, class ReduceMethod>
-            HINLINE void operator()(Functor func, Type* dest, Type* src, size_t const n, ReduceMethod method)
-            {
-                eventSystem::getTransactionEvent().waitForFinished();
-                caravan::syncWait(reduce(func, dest, src, n, method));
-            }
-
-            template<class Functor, typename Type>
-            HINLINE void operator()(Functor func, Type* dest, Type* src, size_t const n)
-            {
-                this->operator()(func, dest, src, n, ::pmacc::mpi::reduceMethods::AllReduce{});
-            }
-
-
         private:
             std::optional<caravan::CommunicatorInfo> caravanCommunicator;
             caravan::MpiContext* mpiContext{nullptr};

@@ -102,10 +102,12 @@ namespace pmacc
              */
             static std::string getName();
             SimulationDataId getUniqueId() override;
-            void synchronize() override;
 
-            //! Synchronize device data with host data
-            void syncToDevice();
+            template<typename T_Queue>
+            auto synchronize(T_Queue& queue);
+
+            template<typename T_Queue>
+            auto syncToDevice(T_Queue& queue);
 
             /**
              * Return a reference to the buffer containing the states

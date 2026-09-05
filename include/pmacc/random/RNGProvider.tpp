@@ -137,15 +137,17 @@ namespace pmacc
         }
 
         template<uint32_t T_dim, class T_RNGMethod>
-        void RNGProvider<T_dim, T_RNGMethod>::synchronize()
+        template<typename T_Queue>
+        auto RNGProvider<T_dim, T_RNGMethod>::synchronize(T_Queue& queue)
         {
-            buffer->deviceToHost();
+            return buffer->deviceToHost(queue);
         }
 
         template<uint32_t T_dim, class T_RNGMethod>
-        void RNGProvider<T_dim, T_RNGMethod>::syncToDevice()
+        template<typename T_Queue>
+        auto RNGProvider<T_dim, T_RNGMethod>::syncToDevice(T_Queue& queue)
         {
-            buffer->hostToDevice();
+            return buffer->hostToDevice(queue);
         }
 
     } // namespace random

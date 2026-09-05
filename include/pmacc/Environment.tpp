@@ -46,36 +46,6 @@ namespace pmacc
 {
     namespace detail
     {
-        pmacc::QueueController& Environment::QueueController()
-        {
-            PMACC_ASSERT_MSG(
-                EnvironmentContext::getInstance().isDeviceSelected(),
-                "Environment< DIM >::initDevices() must be called before this method!");
-            return QueueController::getInstance();
-        }
-
-        pmacc::Factory& Environment::Factory()
-        {
-            PMACC_ASSERT_MSG(
-                EnvironmentContext::getInstance().isMpiInitialized()
-                    && EnvironmentContext::getInstance().isDeviceSelected(),
-                "Environment< DIM >::initDevices() must be called before this method!");
-            return Factory::getInstance();
-        }
-
-        pmacc::EventPool& Environment::EventPool()
-        {
-            PMACC_ASSERT_MSG(
-                EnvironmentContext::getInstance().isDeviceSelected(),
-                "Environment< DIM >::initDevices() must be called before this method!");
-            return EventPool::getInstance();
-        }
-
-        pmacc::ParticleFactory& Environment::ParticleFactory()
-        {
-            return ParticleFactory::getInstance();
-        }
-
         pmacc::DataConnector& Environment::DataConnector()
         {
             return DataConnector::getInstance();
@@ -145,7 +115,6 @@ namespace pmacc
         detail::EnvironmentContext::getInstance().init(mpiContext);
         GridController().init(mpiContext, devices, periodic);
         detail::EnvironmentContext::getInstance().setDevice(static_cast<int>(GridController().getHostRank()));
-        QueueController().activate();
         MemoryInfo();
         SimulationDescription();
     }
@@ -182,11 +151,9 @@ namespace pmacc
         {
             if(m_isMpiInitialized)
             {
-                eventSystem::waitForAllTasks();
-                // Required by scorep for flushing the buffers
+                // Required by scorep for flushing the buffers. Application async contexts must already be joined.
                 alpaka::wait(manager::Device<ComputeDevice>::get().current());
                 m_isMpiInitialized = false;
-                /* The gpu context is freed by the QueueController. Caravan owns MPI finalization. */
                 m_mpiContext = nullptr;
             }
         }
@@ -296,14 +263,3 @@ namespace pmacc
 
     } // namespace detail
 } // namespace pmacc
-
-/* PMACC_NO_TPP_INCLUDE is only defined if pmaccHeaderCheck is running.
- * In this case the current tested hpp file can include a file which depend on the tested hpp file.
- * This will build a cyclic include we can only solve if we write everywhere clean header files without
- * implementations.
- */
-#if !defined(PMACC_NO_TPP_INCLUDE)
-#    include "pmacc/eventSystem/tasks/Factory.tpp"
-#    include "pmacc/fields/tasks/FieldFactory.tpp"
-#    include "pmacc/particles/tasks/ParticleFactory.tpp"
-#endif

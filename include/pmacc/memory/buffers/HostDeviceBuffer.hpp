@@ -89,28 +89,13 @@ namespace pmacc
          */
         HINLINE DBuffer& getDeviceBuffer() const;
 
-        /**
-         * Resets both internal buffers.
-         *
-         * See DeviceBuffer::reset and HostBuffer::reset for details.
-         *
-         * @param preserveData determines if data on internal buffers should not be erased
-         */
-        void reset(bool preserveData = true);
-
         /** Return a lazy copy from the internal host buffer to the device buffer. */
         template<typename T_Queue>
         HINLINE auto hostToDevice(T_Queue& queue);
 
-        /** Legacy eager copy from the internal host buffer to the device buffer. */
-        HINLINE void hostToDevice();
-
         /** Return a lazy copy from the internal device buffer to the host buffer. */
         template<typename T_Queue>
         HINLINE auto deviceToHost(T_Queue& queue);
-
-        /** Legacy eager copy from the internal device buffer to the host buffer. */
-        HINLINE void deviceToHost();
 
     private:
         std::unique_ptr<HBuffer> hostBuffer;

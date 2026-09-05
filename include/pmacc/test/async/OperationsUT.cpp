@@ -120,6 +120,38 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
     CHECK(continued);
 }
 
+TEST_CASE("DeviceBuffer value fill is a lazy sender", "[async][memory]")
+{
+    struct LargeValue
+    {
+        int values[40];
+    };
+
+    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
+    pmacc::ComputeDeviceQueue queue(device);
+    auto const extent = pmacc::MemSpace<DIM1>{3u};
+
+    pmacc::HostDeviceBuffer<int, DIM1> small(extent);
+    auto smallFill = small.getDeviceBuffer().setValueAsync(queue, 42);
+    static_assert(caravan::Sender<decltype(smallFill)>);
+    caravan::syncWait(std::move(smallFill));
+    caravan::syncWait(small.deviceToHost(queue));
+    for(size_t i = 0u; i < 3u; ++i)
+        CHECK(small.getHostBuffer().data()[i] == 42);
+
+    pmacc::HostDeviceBuffer<LargeValue, DIM1> large(extent);
+    LargeValue value{};
+    value.values[0] = 17;
+    value.values[39] = 23;
+    caravan::syncWait(large.getDeviceBuffer().setValueAsync(queue, value));
+    caravan::syncWait(large.deviceToHost(queue));
+    for(size_t i = 0u; i < 3u; ++i)
+    {
+        CHECK(large.getHostBuffer().data()[i].values[0] == 17);
+        CHECK(large.getHostBuffer().data()[i].values[39] == 23);
+    }
+}
+
 TEST_CASE("Device reduction returns a lazy sender", "[async][reduce]")
 {
     auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
@@ -137,7 +169,6 @@ TEST_CASE("Device reduction returns a lazy sender", "[async][reduce]")
     auto result = caravan::syncWait<int>(std::move(reduction));
 
     CHECK(result == 10);
-    CHECK(reduce(pmacc::math::operation::Add{}, input.getDeviceBuffer().getDataBox(), 4u) == 10);
 }
 
 TEST_CASE("Host-device buffer queue overloads return lazy copies", "[async][memory]")
