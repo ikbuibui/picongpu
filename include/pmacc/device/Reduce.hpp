@@ -94,17 +94,6 @@ namespace pmacc
                     { return *reinterpret_cast<Type const*>(::alpaka::getPtrNative(host.view)); });
             }
 
-            /** Legacy blocking adapter; remove with its remaining task-system callers in M2. */
-            template<class Functor, typename Src>
-            HINLINE typename traits::GetValueType<Src>::ValueType operator()(Functor func, Src src, uint32_t n)
-            {
-                using Type
-                    = std::remove_const_t<std::remove_reference_t<typename traits::GetValueType<Src>::ValueType>>;
-                eventSystem::getTransactionEvent().waitForFinished();
-                ComputeDeviceQueue queue(manager::Device<ComputeDevice>::get().current());
-                return caravan::syncWait<Type>(reduce(queue, std::move(func), std::move(src), n));
-            }
-
         private:
             template<typename T_Queue, class Functor, typename Src, typename Type>
             HINLINE static void enqueueReduction(

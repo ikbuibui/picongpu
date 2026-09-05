@@ -76,7 +76,7 @@ namespace pmacc
     void SimulationHelper<DIM, CheckpointingClass>::dumpOneStep(uint32_t currentStep)
     {
         checkSignals(currentStep);
-        checkpointing.template dump<DIM>(currentStep);
+        checkpointing.template dump<DIM>(currentStep, asyncContext);
     }
 
     template<unsigned DIM, typename CheckpointingClass>
@@ -130,7 +130,7 @@ namespace pmacc
         DataConnector& dc = Environment<>::get().DataConnector();
         auto idProvider = std::make_shared<IdProvider>("globalId", rank, maxRanks);
         dc.share(idProvider);
-        auto& idProviderQueue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+        ComputeDeviceQueue idProviderQueue(manager::Device<ComputeDevice>::get().current());
         asyncContext.wait(asyncContext.spawn(idProvider->initialize(idProviderQueue)));
 
         init();
@@ -150,7 +150,8 @@ namespace pmacc
              * easier to hunt because the rank that outputs timings will only show the timing for the initialization if
              * all ranks reached this point.
              */
-            eventSystem::mpiBlocking(Environment<DIM>::get().GridController().getCommunicator());
+            auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
+            asyncContext.wait(asyncContext.spawn(communicator.barrier()));
 
             tInit.toggleEnd();
             if(output)
@@ -211,12 +212,8 @@ namespace pmacc
             }
 
             // The simulation is finished, wait until all MPI ranks finished the time step loop.
-            eventSystem::mpiBlocking(
-                Environment<DIM>::get().GridController().getCommunicator(),
-                [&] { checkSignals(currentStep); });
-
-            // ensure that the event system processed all tasks
-            eventSystem::getTransactionEvent().waitForFinished();
+            auto barrier = asyncContext.spawn(communicator.barrier());
+            asyncContext.wait(barrier, [&] { checkSignals(currentStep); });
 
             tSimCalculation.toggleEnd();
 

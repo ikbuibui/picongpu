@@ -49,6 +49,17 @@ TEST_CASE("PMacc async context owns work and drives host continuations", "[async
     context.wait(externalCompletion.event());
     external.join();
 
+    caravan::EventSource progressed;
+    size_t progressCalls = 0u;
+    context.wait(
+        progressed.event(),
+        [&]
+        {
+            ++progressCalls;
+            progressed.setReady();
+        });
+    CHECK(progressCalls == 1u);
+
     caravan::EventSource pending;
     caravan::EventSource checked;
     context.scheduler().post(

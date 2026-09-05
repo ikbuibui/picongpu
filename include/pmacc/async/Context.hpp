@@ -54,13 +54,23 @@ namespace pmacc::async
         /** Drive host continuations until this operation is terminal. */
         void wait(caravan::Event const& event)
         {
+            wait(event, [] {});
+        }
+
+        /** Drive host continuations and an application progress hook until completion. */
+        template<typename T_Progress>
+        void wait(caravan::Event const& event, T_Progress progress)
+        {
             if(caravan::isExecutorThread() && event.state() == caravan::CompletionState::pending)
                 throw std::logic_error("A PMacc async continuation cannot wait on pending work");
             auto scheduler = m_loop.scheduler();
             auto wake = event.continueWith(scheduler, [](caravan::Event) {});
             static_cast<void>(wake);
             while(event.state() == caravan::CompletionState::pending)
+            {
+                progress();
                 m_loop.runOne();
+            }
             event.wait();
         }
 

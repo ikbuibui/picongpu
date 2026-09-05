@@ -682,19 +682,18 @@ added later only if it materially simplifies the call site.
 4. Return immutable receive metadata/counts.
 5. Validate buffer reuse across directions and time steps.
 6. Replace field polling task classes and factories. Explicit field
-   pack/send/receive/insert branches are implemented; legacy PIConGPU callers still
-   keep the old classes alive.
+   pack/send/receive/insert branches are implemented and the old classes are deleted;
+   PIConGPU callers must move to the sender API after PMacc review.
 7. Replace particle enum/polling state machines with sender continuation,
    coroutine, or standard-execution-compatible chunk loops over the same backend
-   operations. Lazy dedicated sender operation states now handle exact-capacity
-   and multi-chunk exchange; legacy PIConGPU callers still need conversion before
-   deletion.
+   operations. Lazy dedicated sender operation states handle exact-capacity and
+   multi-chunk exchange, and the old classes are deleted.
 8. Port remaining reductions, gathers, signals, tests, and helpers. The signal
    all-reduce and barrier helpers now expose typed senders directly.
-9. Delete `TaskSendMPI`, `TaskReceiveMPI`, `TaskSignal`, and other migration
-   adapters after their last user is removed. `TaskSignal` is deleted.
-10. Delete Manager, transaction, observer, task-ID, logical-and, and polling task
-    infrastructure only after complete PMacc regression passes.
+9. `TaskSendMPI`, `TaskReceiveMPI`, `TaskSignal`, and the other migration adapters
+   are deleted.
+10. Manager, transaction, observer, task-ID, logical-and, and polling task
+    infrastructure are deleted after the focused PMacc regressions passed.
 
 ### Required regression cases
 
@@ -841,8 +840,8 @@ application storage.
 
 - [x] M1 `gameOfLife2D` complete graph migrated.
 - [x] M2 `heatEquation2D` migrated.
-- [ ] M3 generic PMacc communication and remaining helpers migrated.
-- [ ] Legacy Manager, transactions, tasks, observers, and adapters deleted.
+- [x] M3 generic PMacc communication and remaining PMacc helpers migrated.
+- [x] Legacy Manager, transactions, tasks, observers, and adapters deleted.
 - [ ] PMacc CPU/GPU/multi-rank regression matrix passes.
 - [ ] V1 target hardware and performance gates pass or deviations are explicitly
       accepted.

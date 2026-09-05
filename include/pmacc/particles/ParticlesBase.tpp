@@ -34,15 +34,6 @@
 namespace pmacc
 {
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
-    void ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::deleteGuardParticles(uint32_t exchangeType)
-    {
-        ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
-
-        PMACC_LOCKSTEP_KERNEL(KernelDeleteParticles{})
-            .config(mapper.getGridDim(), *particlesBuffer)(particlesBuffer->getDeviceParticleBox(), mapper);
-    }
-
-    template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
     template<typename T_Queue>
     auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::deleteGuardParticlesAsync(
         T_Queue& queue,
@@ -55,37 +46,13 @@ namespace pmacc
     }
 
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
-    template<uint32_t T_area>
-    void ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::deleteParticlesInArea()
+    template<uint32_t T_area, typename T_Queue>
+    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::deleteParticlesInAreaAsync(T_Queue& queue)
     {
         auto const mapper = makeAreaMapper<T_area>(this->cellDescription);
-
-        PMACC_LOCKSTEP_KERNEL(KernelDeleteParticles{})
-            .config(mapper.getGridDim(), *particlesBuffer)(particlesBuffer->getDeviceParticleBox(), mapper);
-    }
-
-    template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
-    void ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::reset(uint32_t)
-    {
-        deleteParticlesInArea<CORE + BORDER + GUARD>();
-        particlesBuffer->reset();
-    }
-
-    template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
-    void ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::copyGuardToExchange(uint32_t exchangeType)
-    {
-        if(particlesBuffer->hasSendExchange(exchangeType))
-        {
-            ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
-
-            particlesBuffer->getSendExchangeStack(exchangeType).setSize(0);
-
-            PMACC_LOCKSTEP_KERNEL(KernelCopyGuardToExchange{})
-                .config(mapper.getGridDim(), *particlesBuffer)(
-                    particlesBuffer->getDeviceParticleBox(),
-                    particlesBuffer->getSendExchangeStack(exchangeType).getDeviceExchangePushDataBox(),
-                    mapper);
-        }
+        return PMACC_LOCKSTEP_KERNEL(KernelDeleteParticles{})
+            .config(mapper.getGridDim(), *particlesBuffer)
+            .sender(queue, particlesBuffer->getDeviceParticleBox(), mapper);
     }
 
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
@@ -110,30 +77,6 @@ namespace pmacc
     }
 
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
-    void ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::insertParticles(uint32_t exchangeType)
-    {
-        if(particlesBuffer->hasReceiveExchange(exchangeType))
-        {
-            size_t numParticles = 0u;
-            if(Environment<>::get().isMpiDirectEnabled())
-                numParticles = particlesBuffer->getReceiveExchangeStack(exchangeType).getDeviceCurrentSize();
-            else
-                numParticles = particlesBuffer->getReceiveExchangeStack(exchangeType).getHostCurrentSize();
-
-            if(numParticles != 0u)
-            {
-                ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
-
-                PMACC_LOCKSTEP_KERNEL(KernelInsertParticles{})
-                    .config(numParticles, *particlesBuffer)(
-                        particlesBuffer->getDeviceParticleBox(),
-                        particlesBuffer->getReceiveExchangeStack(exchangeType).getDeviceExchangePopDataBox(),
-                        mapper);
-            }
-        }
-    }
-
-    template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
     template<typename T_Queue>
     auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::insertParticlesAsync(
         T_Queue& queue,
@@ -151,5 +94,3 @@ namespace pmacc
     }
 
 } // namespace pmacc
-
-#include "pmacc/particles/AsyncCommunicationImpl.hpp"

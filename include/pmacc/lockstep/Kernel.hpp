@@ -22,7 +22,7 @@
 #pragma once
 
 
-#include "pmacc/eventSystem/events/kernelEvents.hpp"
+#include "pmacc/exec/Kernel.hpp"
 #include "pmacc/exec/KernelLauncher.hpp"
 #include "pmacc/exec/KernelWithDynSharedMem.hpp"
 #include "pmacc/lockstep/BlockCfg.hpp"
@@ -59,12 +59,7 @@ namespace pmacc::lockstep
                 }
             };
 
-            /** Wraps a user kernel functor to prepare the execution on the device.
-             *
-             * This objects contains the kernel functor, kernel meta information.
-             * Object is used to apply the grid and block extents and optionally the amount of dynamic shared memory to
-             * the kernel.
-             */
+            /** Wrap a user kernel functor and apply launch extents and dynamic shared memory. */
             template<typename T_UserKernelFunctor>
             struct KernelPreperationWrapper
             {
@@ -72,16 +67,9 @@ namespace pmacc::lockstep
                 using KernelFunctor = detail::LockStepKernel<T_UserKernelFunctor, T_BlockCfg>;
 
                 T_UserKernelFunctor const m_UserKernelFunctor;
-                std::string const m_file;
-                size_t const m_line;
 
-                HINLINE KernelPreperationWrapper(
-                    T_UserKernelFunctor const& kernelFunctor,
-                    std::string const& file = std::string(),
-                    size_t const line = 0)
+                HINLINE KernelPreperationWrapper(T_UserKernelFunctor const& kernelFunctor)
                     : m_UserKernelFunctor(kernelFunctor)
-                    , m_file(file)
-                    , m_line(line)
                 {
                 }
 
@@ -109,8 +97,6 @@ namespace pmacc::lockstep
                     blockExtent.x() = BlockConfiguration::numWorkers();
                     return pmacc::exec::detail::KernelLauncher<KernelFunctor<BlockConfiguration>, dim>{
                         m_UserKernelFunctor,
-                        m_file,
-                        m_line,
                         gridSize,
                         blockExtent};
                 }
@@ -133,8 +119,6 @@ namespace pmacc::lockstep
                     blockSizeND.x() = BlockConfiguration::numWorkers();
                     return pmacc::exec::detail::KernelLauncher<KernelFunctor<BlockConfiguration>, dim>{
                         m_UserKernelFunctor,
-                        m_file,
-                        m_line,
                         gridSize,
                         blockSizeND};
                 }
@@ -157,8 +141,6 @@ namespace pmacc::lockstep
                     blockExtent.x() = BlockConfiguration::numWorkers();
                     return pmacc::exec::detail::KernelLauncher<KernelFunctor<BlockConfiguration>, dim>{
                         m_UserKernelFunctor,
-                        m_file,
-                        m_line,
                         gridSize,
                         blockExtent};
                 }
@@ -184,8 +166,6 @@ namespace pmacc::lockstep
                         pmacc::exec::detail::KernelWithDynSharedMem<KernelFunctor<BlockConfiguration>>(
                             m_UserKernelFunctor,
                             sharedMemByte),
-                        m_file,
-                        m_line,
                         gridSize,
                         blockExtent};
                 }
@@ -214,8 +194,6 @@ namespace pmacc::lockstep
                         pmacc::exec::detail::KernelWithDynSharedMem<KernelFunctor<BlockConfiguration>>(
                             m_UserKernelFunctor,
                             sharedMemByte),
-                        m_file,
-                        m_line,
                         gridSize,
                         blockExtent};
                 }
@@ -246,8 +224,6 @@ namespace pmacc::lockstep
                         pmacc::exec::detail::KernelWithDynSharedMem<KernelFunctor<BlockConfiguration>>(
                             m_UserKernelFunctor,
                             sharedMemByte),
-                        m_file,
-                        m_line,
                         gridSize,
                         blockExtent};
                 }
@@ -263,33 +239,21 @@ namespace pmacc::lockstep
          * @code{.cpp}
          *   pmacc::lockstep::exec::kernel([]ALPAKA_FN_ACC(auto const& acc) -> void{
          *       printf("Hello World.\n");
-         *   }).config<1>(1)()
+         *   }).config<1>(1).sender(queue)
          * @endcode
          *
          * @tparam T_KernelFunctor type of the kernel functor
          * @param kernelFunctor instance of the functor, lambda are supported
-         * @param file file name (for debug)
-         * @param line line number in the file (for debug)
          */
         template<typename T_KernelFunctor>
-        inline auto kernel(
-            T_KernelFunctor const& kernelFunctor,
-            std::string const& file = std::string(),
-            size_t const line = 0) -> detail::KernelPreperationWrapper<T_KernelFunctor>
+        inline auto kernel(T_KernelFunctor const& kernelFunctor) -> detail::KernelPreperationWrapper<T_KernelFunctor>
         {
-            return detail::KernelPreperationWrapper<T_KernelFunctor>(kernelFunctor, file, line);
+            return detail::KernelPreperationWrapper<T_KernelFunctor>(kernelFunctor);
         }
 
 
     } // namespace exec
 } // namespace pmacc::lockstep
 
-/** Create a kernel object out of a functor instance.
- *
- * This macro add the current filename and line number to the kernel object.
- * @see ::pmacc::lockstep::exec::kernel
- *
- * @param ... instance of kernel functor
- */
-#define PMACC_LOCKSTEP_KERNEL(...)                                                                                    \
-    ::pmacc::lockstep::exec::kernel(__VA_ARGS__, __FILE__, static_cast<size_t>(__LINE__))
+/** Create a kernel object out of a functor instance. */
+#define PMACC_LOCKSTEP_KERNEL(...) ::pmacc::lockstep::exec::kernel(__VA_ARGS__)

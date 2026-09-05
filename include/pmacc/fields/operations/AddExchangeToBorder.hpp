@@ -177,42 +177,6 @@ namespace pmacc
                             direction,
                             mapper);
                 }
-
-                template<typename T_DestBuffer, typename T_SuperCellSize>
-                void operator()(
-                    T_DestBuffer& destBuffer,
-                    T_SuperCellSize const& superCellSize,
-                    uint32_t const exchangeType) const
-                {
-                    boost::ignore_unused(superCellSize);
-
-                    using SuperCellSize = T_SuperCellSize;
-
-                    constexpr uint32_t dim = T_SuperCellSize::dim;
-
-                    using MappingDesc = MappingDescription<dim, SuperCellSize>;
-
-                    /* use only the x dimension to determine the number of supercells in the GUARD
-                     *
-                     * @warning pmacc restriction: all dimension must have the some number of guarding
-                     * supercells
-                     */
-                    auto const numGuardSuperCells = destBuffer.getGridLayout().guardSizeND() / SuperCellSize::toRT();
-
-                    MappingDesc const mappingDesc(destBuffer.getGridLayout().sizeND(), numGuardSuperCells);
-
-                    ExchangeMapping<GUARD, MappingDesc> mapper(mappingDesc, exchangeType);
-
-                    DataSpace<dim> const direction = Mask::getRelativeDirections<dim>(mapper.getExchangeType());
-
-                    PMACC_LOCKSTEP_KERNEL(KernelAddExchangeToBorder{})
-                        .config(mapper.getGridDim(), SuperCellSize{})(
-                            destBuffer.getDeviceBuffer().getDataBox(),
-                            destBuffer.getReceiveExchange(exchangeType).getDeviceBuffer().getDataBox(),
-                            destBuffer.getReceiveExchange(exchangeType).getDeviceBuffer().capacityND(),
-                            direction,
-                            mapper);
-                }
             };
 
         } // namespace operations
