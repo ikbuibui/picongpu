@@ -286,6 +286,27 @@ namespace caravan::mpi
                 std::forward<T_Receiver>(receiver)};
         }
 
+        /** Whether start() immediately submits a collective for this lane. */
+        bool managedCollectiveOn(MpiContext const& context, CommunicatorId communicator) const noexcept
+        {
+            if(m_context != &context)
+                return false;
+            return std::visit(
+                [communicator](auto const& descriptor)
+                {
+                    using Operation = std::decay_t<decltype(descriptor)>;
+                    if constexpr(std::is_same_v<Operation, operation_detail::CreateCartesian>)
+                        return communicator == worldCommunicator;
+                    else if constexpr(
+                        std::is_same_v<Operation, operation_detail::Send>
+                        || std::is_same_v<Operation, operation_detail::Receive>)
+                        return false;
+                    else
+                        return descriptor.communicator == communicator;
+                },
+                m_descriptor);
+        }
+
     private:
         MpiContext* m_context;
         Descriptor m_descriptor;
