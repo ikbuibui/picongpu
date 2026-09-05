@@ -177,7 +177,7 @@ namespace pmacc
         template<typename T_Queue>
         auto resetAsync(T_Queue& queue)
         {
-            return caravan::alpaka::then(
+            return caravan::alpaka::sequence(
                 deleteParticlesInAreaAsync<CORE + BORDER + GUARD>(queue),
                 particlesBuffer->resetAsync(queue));
         }

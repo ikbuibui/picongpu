@@ -89,7 +89,7 @@ namespace pmacc
                 auto copy = reduceBuffer->deviceToHost(queue);
                 auto host = reduceBuffer->getHostBuffer().getOwnedAlpakaView();
                 return caravan::then(
-                    caravan::alpaka::then(std::move(kernels), std::move(copy)),
+                    caravan::alpaka::sequence(std::move(kernels), std::move(copy)),
                     [host = std::move(host)]
                     { return *reinterpret_cast<Type const*>(::alpaka::getPtrNative(host.view)); });
             }

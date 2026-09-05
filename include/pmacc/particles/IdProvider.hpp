@@ -106,7 +106,7 @@ namespace pmacc
                 async::retain(deviceBuffer.data(), deviceBuffer.getOwnedAlpakaView()));
             auto copy = newIdBuffer->deviceToHost(queue);
             return caravan::then(
-                caravan::alpaka::then(std::move(fetch), std::move(copy)),
+                caravan::alpaka::sequence(std::move(fetch), std::move(copy)),
                 [newIdBuffer] { return *newIdBuffer->getHostBuffer().data(); });
         }
 
