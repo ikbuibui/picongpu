@@ -79,6 +79,27 @@ namespace caravan
         using ValueTupleOf = typename ValueTuple<CompletionSignaturesOf<T_Sender>>::type;
 
         template<typename T_Tuple>
+        struct DecayedTuple;
+
+        template<typename... T>
+        struct DecayedTuple<std::tuple<T...>>
+        {
+            using type = std::tuple<std::decay_t<T>...>;
+        };
+
+        template<typename T_Tuple>
+        using DecayedTupleOf = typename DecayedTuple<T_Tuple>::type;
+
+        template<typename T_Tuple>
+        struct LvalueTuple;
+
+        template<typename... T>
+        struct LvalueTuple<std::tuple<T...>>
+        {
+            using type = std::tuple<T&...>;
+        };
+
+        template<typename T_Tuple>
         struct ValueSignatureFromTuple;
 
         template<typename... T>
@@ -108,8 +129,12 @@ namespace caravan
         using ThenCompletionSignatures = DefaultCompletionSignatures<
             ResultValueSignature<typename InvokeResultFromTuple<T_Function, ValueTupleOf<T_Sender>>::type>>;
 
+        template<typename T_Sender>
+        using StoredValueTuple = DecayedTupleOf<ValueTupleOf<T_Sender>>;
+
         template<typename T_Sender, typename T_Function>
-        using SuccessorSender = typename InvokeResultFromTuple<T_Function, ValueTupleOf<T_Sender>>::type;
+        using SuccessorSender =
+            typename InvokeResultFromTuple<T_Function, typename LvalueTuple<StoredValueTuple<T_Sender>>::type>::type;
 
         template<typename... T_Senders>
         using CombinedValueTuple = decltype(std::tuple_cat(std::declval<ValueTupleOf<T_Senders>>()...));
@@ -402,7 +427,10 @@ namespace caravan
             {
                 try
                 {
-                    m_successor.emplace(std::invoke(m_factory, std::forward<T>(values)...), this);
+                    m_values.emplace(std::forward<T>(values)...);
+                    auto successor
+                        = std::apply([this](auto&... stored) { return std::invoke(m_factory, stored...); }, *m_values);
+                    m_successor.emplace(std::move(successor), this);
                     m_successor->start();
                 }
                 catch(...)
@@ -414,6 +442,7 @@ namespace caravan
             T_Factory m_factory;
             T_Receiver m_receiver;
             decltype(std::declval<T_Sender&&>().connect(std::declval<PredecessorReceiver>())) m_predecessor;
+            std::optional<StoredValueTuple<T_Sender>> m_values;
             std::optional<SuccessorOperation> m_successor;
         };
     } // namespace detail

@@ -153,7 +153,10 @@ namespace caravan::mpi
             {
                 try
                 {
-                    m_successor.emplace(std::invoke(m_factory, std::forward<T>(values)...), this);
+                    m_values.emplace(std::forward<T>(values)...);
+                    auto successor
+                        = std::apply([this](auto&... stored) { return std::invoke(m_factory, stored...); }, *m_values);
+                    m_successor.emplace(std::move(successor), this);
                     release([this]() noexcept { m_successor->start(); });
                 }
                 catch(...)
@@ -181,6 +184,7 @@ namespace caravan::mpi
             T_Factory m_factory;
             T_Receiver m_receiver;
             decltype(std::declval<T_Sender&&>().connect(std::declval<PredecessorReceiver>())) m_predecessor;
+            std::optional<caravan::detail::StoredValueTuple<T_Sender>> m_values;
             std::optional<SuccessorOperation> m_successor;
         };
 

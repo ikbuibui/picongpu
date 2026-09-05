@@ -492,6 +492,26 @@ namespace
         eagerPredecessor.setReady();
         eagerCompletion.wait();
         eagerJoin.wait();
+
+        caravan::EventSource valueReady;
+        caravan::EventSource borrowedBySuccessor;
+        auto value = std::make_shared<int>(42);
+        std::weak_ptr<int> valueLifetime = value;
+        caravan::AsyncScope valueScope;
+        auto valueCompletion = valueScope.spawn(
+            caravan::letValue(
+                AsyncValueSender<std::shared_ptr<int>>{valueReady.event(), std::move(value)},
+                [&borrowedBySuccessor](std::shared_ptr<int> const& stored)
+                {
+                    assert(*stored == 42);
+                    return caravan::asSender(borrowedBySuccessor.event());
+                }));
+        valueReady.setReady();
+        assert(!valueLifetime.expired());
+        borrowedBySuccessor.setReady();
+        valueCompletion.wait();
+        assert(valueLifetime.expired());
+        valueScope.join().wait();
     }
 
     void testTypedSenderVocabulary()
