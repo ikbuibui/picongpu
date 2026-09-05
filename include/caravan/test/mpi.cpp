@@ -936,6 +936,53 @@ int main(int argc, char** argv)
             {
             }
 
+            constexpr int partialStartTag = 924;
+            auto partialReceiveBuffer = std::make_shared<int>(-1);
+            std::weak_ptr<int> partialReceiveLifetime = partialReceiveBuffer;
+            auto partialStartFailure = caravan::mpi::request<void>(
+                mpi,
+                [buffer = std::move(partialReceiveBuffer),
+                 communicator = cartesian.communicator,
+                 rank = cartesian.rank](caravan::NativeMpiContext& context)
+                {
+                    caravan::NativeRequestBatch batch({MPI_REQUEST_NULL}, {buffer});
+                    int const error = MPI_Irecv(
+                        buffer.get(),
+                        1,
+                        MPI_INT,
+                        rank,
+                        partialStartTag,
+                        context.communicator(communicator),
+                        &batch.requests[0]);
+                    if(error != MPI_SUCCESS)
+                        throw std::runtime_error("partial native MPI_Irecv failed");
+                    throw std::runtime_error("expected partial native start failure");
+                    return batch;
+                },
+                [](std::span<MPI_Status const>) { assert(false); });
+            int partialSendValue = 42;
+            caravan::AsyncScope partialStartScope;
+            auto partialFailure = partialStartScope.spawn(std::move(partialStartFailure));
+            auto partialSend = partialStartScope.spawn(
+                caravan::mpi::send(
+                    mpi,
+                    caravan::BufferLease::borrowed(&partialSendValue, sizeof(partialSendValue)),
+                    caravan::Peer{cartesian.rank},
+                    caravan::MessageTag{partialStartTag},
+                    cartesian.communicator));
+            partialSend.wait();
+            try
+            {
+                partialFailure.wait();
+                assert(false);
+            }
+            catch(std::runtime_error const&)
+            {
+            }
+            partialStartScope.join().wait();
+            while(!partialReceiveLifetime.expired())
+                std::this_thread::yield();
+
             caravan::AsyncScope nativeScope;
             auto queuedBarrier = nativeScope.spawn(caravan::mpi::barrier(mpi, cartesian.communicator));
             auto const duplicatedCommunicator

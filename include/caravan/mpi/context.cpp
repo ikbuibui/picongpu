@@ -441,32 +441,38 @@ namespace caravan
                 { static_cast<Impl*>(implementation)->destroyCommunicator(id); });
         }
 
-        void startNative(detail::NativeSubmission output)
+        void trackNative(
+            detail::NativeSubmission const& output,
+            NativeRequestBatch& batch,
+            std::exception_ptr failure = {})
         {
-            assertOwner();
             auto context = nativeContext();
-            auto batch = output.start(context);
-            output.start = {};
             auto const activeRequests = static_cast<std::size_t>(std::count_if(
                 batch.requests.begin(),
                 batch.requests.end(),
                 [](MPI_Request request) { return request != MPI_REQUEST_NULL; }));
-            m_requests.reserve(m_requests.size() + activeRequests);
-            m_active.reserve(m_active.size() + activeRequests);
 
             if(batch.requests.empty())
             {
                 detail::NativeAccess::release(batch);
-                output.completed(context, {});
+                if(failure)
+                    output.failed(std::move(failure));
+                else
+                    output.completed(context, {});
                 finishOperation();
                 return;
             }
 
+            m_requests.reserve(m_requests.size() + activeRequests);
+            m_active.reserve(m_active.size() + activeRequests);
+            std::vector<MPI_Status> statuses(batch.requests.size());
             auto group = std::make_shared<NativeGroup>(
                 output,
-                std::vector<MPI_Status>(batch.requests.size()),
-                std::move(batch.lifetimes),
-                batch.requests.size());
+                std::move(statuses),
+                std::vector<std::shared_ptr<void>>{},
+                batch.requests.size(),
+                std::move(failure));
+            group->lifetimes.swap(batch.lifetimes);
             for(std::size_t index = 0u; index < batch.requests.size(); ++index)
             {
                 if(batch.requests[index] == MPI_REQUEST_NULL)
@@ -479,6 +485,45 @@ namespace caravan
                 m_active.emplace_back(group, index);
             }
             detail::NativeAccess::release(batch);
+        }
+
+        [[noreturn]] void failWithLiveNativeRequests() const noexcept
+        {
+            MPI_Abort(MPI_COMM_WORLD, MPI_ERR_OTHER);
+            std::terminate();
+        }
+
+        void startNative(detail::NativeSubmission output)
+        {
+            assertOwner();
+            NativeRequestBatch recovered;
+            detail::NativeRequestRecoveryGuard recoveryGuard{recovered};
+            try
+            {
+                auto context = nativeContext();
+                auto batch = output.start(context);
+                output.start = {};
+                trackNative(output, batch);
+            }
+            catch(...)
+            {
+                auto failure = std::current_exception();
+                output.start = {};
+                if(recovered.requests.empty())
+                {
+                    output.failed(std::move(failure));
+                    finishOperation();
+                    return;
+                }
+                try
+                {
+                    trackNative(output, recovered, std::move(failure));
+                }
+                catch(...)
+                {
+                    failWithLiveNativeRequests();
+                }
+            }
         }
 
         void startBlocking(detail::NativeBlockingSubmission output)
