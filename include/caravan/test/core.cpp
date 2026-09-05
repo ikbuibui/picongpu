@@ -34,6 +34,29 @@ namespace
         }
     };
 
+    struct UnsupportedMultiValueSender
+    {
+        using completion_signatures = caravan::CompletionSignatures<
+            caravan::ValueSignature<int>,
+            caravan::ValueSignature<double>,
+            caravan::ErrorSignature<std::exception_ptr>,
+            caravan::StoppedSignature>;
+    };
+
+    struct UnsupportedErrorSender
+    {
+        using completion_signatures = caravan::
+            CompletionSignatures<caravan::ValueSignature<>, caravan::ErrorSignature<int>, caravan::StoppedSignature>;
+    };
+
+    struct UnsupportedReferenceSender
+    {
+        using completion_signatures = caravan::CompletionSignatures<
+            caravan::ValueSignature<int&>,
+            caravan::ErrorSignature<std::exception_ptr>,
+            caravan::StoppedSignature>;
+    };
+
     struct EventReceiver
     {
         void set_value() noexcept
@@ -209,6 +232,59 @@ namespace
         }
     };
 
+    struct EnvironmentReceiver
+    {
+        void set_value(int value) noexcept
+        {
+            *output = value;
+        }
+
+        void set_error(std::exception_ptr) noexcept
+        {
+            assert(false);
+        }
+
+        void set_stopped() noexcept
+        {
+            assert(false);
+        }
+
+        int get_env() const noexcept
+        {
+            return 10;
+        }
+
+        int* output;
+    };
+
+    struct EnvironmentSender
+    {
+        using completion_signatures = caravan::detail::DefaultCompletionSignatures<caravan::ValueSignature<int>>;
+
+        template<typename T_Receiver>
+        struct Operation
+        {
+            void start() & noexcept
+            {
+                *observed += receiver.get_env();
+                receiver.set_value(value);
+            }
+
+            int value;
+            int* observed;
+            T_Receiver receiver;
+        };
+
+        template<typename T_Receiver>
+        auto connect(T_Receiver&& receiver) &&
+        {
+            return Operation<std::decay_t<T_Receiver>>{value, observed, std::forward<T_Receiver>(receiver)};
+        }
+
+        int value;
+        int* observed;
+    };
+
     struct RecursionTrackingExecutor
     {
         template<typename T_Function>
@@ -262,6 +338,15 @@ namespace
         assert(runs == 2u);
         loop.runReady();
         assert(runs == 3u);
+
+        caravan::AsyncScope scope;
+        bool scheduled = false;
+        auto completion = scope.spawn(caravan::then(scheduler.schedule(), [&] { scheduled = true; }));
+        assert(!scheduled && completion.state() == caravan::CompletionState::pending);
+        loop.runReady();
+        completion.wait();
+        assert(scheduled);
+        scope.join().wait();
     }
 
     void testSchedulerHandleLifetime()
@@ -516,9 +601,28 @@ namespace
 
     void testTypedSenderVocabulary()
     {
+        static_assert(!caravan::Sender<UnsupportedMultiValueSender>);
+        static_assert(!caravan::Sender<UnsupportedErrorSender>);
+        static_assert(!caravan::Sender<UnsupportedReferenceSender>);
         static_assert(caravan::Sender<caravan::EventSender>);
         static_assert(caravan::SenderTo<caravan::EventSender, EventReceiver>);
         static_assert(caravan::Sender<AsyncValueSender<int>>);
+
+        int environmentObservations = 0;
+        int environmentResult = 0;
+        auto environmentChain = caravan::then(
+            caravan::continuesOn(
+                caravan::letValue(
+                    caravan::whenAll(
+                        EnvironmentSender{20, &environmentObservations},
+                        EnvironmentSender{21, &environmentObservations}),
+                    [&environmentObservations](int left, int right)
+                    { return EnvironmentSender{left + right, &environmentObservations}; }),
+                InlineExecutor{}),
+            [](int value) { return value + 1; });
+        auto environmentOperation = std::move(environmentChain).connect(EnvironmentReceiver{&environmentResult});
+        environmentOperation.start();
+        assert(environmentObservations == 30 && environmentResult == 42);
 
         caravan::EventSource thenReady;
         auto doubled

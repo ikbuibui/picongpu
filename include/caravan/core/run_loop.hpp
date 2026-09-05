@@ -17,6 +17,7 @@
 namespace caravan
 {
     class RunLoopScheduler;
+    class RunLoopScheduleSender;
 
     /** Manually driven single-thread queue for host/control work. */
     class RunLoop
@@ -115,6 +116,8 @@ namespace caravan
             m_loop->post(std::forward<T_Function>(function));
         }
 
+        RunLoopScheduleSender schedule() const noexcept;
+
     private:
         explicit RunLoopScheduler(RunLoop& loop) : m_loop(&loop)
         {
@@ -124,6 +127,58 @@ namespace caravan
 
         friend class RunLoop;
     };
+
+    /** Lazy scheduling operation for the manually driven run loop. */
+    class RunLoopScheduleSender
+    {
+    public:
+        using completion_signatures = detail::DefaultCompletionSignatures<ValueSignature<>>;
+
+        explicit RunLoopScheduleSender(RunLoopScheduler scheduler) : m_scheduler(scheduler)
+        {
+        }
+
+        template<typename T_Receiver>
+        class Operation
+        {
+        public:
+            Operation(RunLoopScheduler scheduler, T_Receiver receiver)
+                : m_scheduler(scheduler)
+                , m_receiver(std::move(receiver))
+            {
+            }
+
+            void start() & noexcept
+            {
+                try
+                {
+                    m_scheduler.post([this] { m_receiver.set_value(); });
+                }
+                catch(...)
+                {
+                    m_receiver.set_error(std::current_exception());
+                }
+            }
+
+        private:
+            RunLoopScheduler m_scheduler;
+            T_Receiver m_receiver;
+        };
+
+        template<typename T_Receiver>
+        auto connect(T_Receiver&& receiver) &&
+        {
+            return Operation<std::decay_t<T_Receiver>>{m_scheduler, std::forward<T_Receiver>(receiver)};
+        }
+
+    private:
+        RunLoopScheduler m_scheduler;
+    };
+
+    inline RunLoopScheduleSender RunLoopScheduler::schedule() const noexcept
+    {
+        return RunLoopScheduleSender{*this};
+    }
 
     inline RunLoopScheduler RunLoop::scheduler() noexcept
     {
