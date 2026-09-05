@@ -40,14 +40,23 @@ namespace caravan
     using CompletionSignaturesOf = typename std::remove_cvref_t<T_Sender>::completion_signatures;
 
     template<typename T>
-    inline constexpr bool isCompletionSignatures = false;
+    inline constexpr bool isSupportedCompletionSignatures = false;
 
-    template<typename... T_Signatures>
-    inline constexpr bool isCompletionSignatures<CompletionSignatures<T_Signatures...>> = true;
+    template<typename... T>
+    inline constexpr bool isSupportedCompletionSignatures<
+        CompletionSignatures<ValueSignature<T...>, ErrorSignature<std::exception_ptr>, StoppedSignature>>
+        = ((!std::is_reference_v<T> && std::is_same_v<T, std::remove_cv_t<T>>) && ...);
 
+    /** The deliberately narrow Caravan migration-sender profile.
+     *
+     * A sender has exactly one alternative of owned values, an exception_ptr
+     * error channel, and a stopped channel. Stopped completion is propagated but
+     * does not imply cancellation support. Receiver environments are forwarded
+     * by composition, but Caravan currently defines no environment queries.
+     */
     template<typename T_Sender>
     concept Sender = requires { typename CompletionSignaturesOf<T_Sender>; }
-                     && isCompletionSignatures<CompletionSignaturesOf<T_Sender>>;
+                     && isSupportedCompletionSignatures<CompletionSignaturesOf<T_Sender>>;
 
     template<typename T_Operation>
     concept OperationState = requires(T_Operation& operation) {
@@ -64,15 +73,11 @@ namespace caravan
         template<typename T_Signatures>
         struct ValueTuple;
 
-        template<typename... T, typename... T_Rest>
-        struct ValueTuple<CompletionSignatures<ValueSignature<T...>, T_Rest...>>
+        template<typename... T>
+        struct ValueTuple<
+            CompletionSignatures<ValueSignature<T...>, ErrorSignature<std::exception_ptr>, StoppedSignature>>
         {
             using type = std::tuple<T...>;
-        };
-
-        template<typename T_First, typename... T_Rest>
-        struct ValueTuple<CompletionSignatures<T_First, T_Rest...>> : ValueTuple<CompletionSignatures<T_Rest...>>
-        {
         };
 
         template<typename T_Sender>
@@ -161,6 +166,12 @@ namespace caravan
                 void set_stopped() noexcept
                 {
                     owner->transferStopped();
+                }
+
+                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
+                    requires requires(T_Receiver const& receiver) { receiver.get_env(); }
+                {
+                    return owner->m_receiver.get_env();
                 }
 
                 ContinuesOnOperation* owner;
@@ -293,6 +304,12 @@ namespace caravan
                     owner->m_receiver.set_stopped();
                 }
 
+                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
+                    requires requires(T_Receiver const& receiver) { receiver.get_env(); }
+                {
+                    return owner->m_receiver.get_env();
+                }
+
                 ThenOperation* owner;
             };
 
@@ -360,6 +377,12 @@ namespace caravan
                     owner->m_receiver.set_stopped();
                 }
 
+                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
+                    requires requires(T_Receiver const& receiver) { receiver.get_env(); }
+                {
+                    return owner->m_receiver.get_env();
+                }
+
                 LetValueOperation* owner;
             };
 
@@ -379,6 +402,12 @@ namespace caravan
                 void set_stopped() noexcept
                 {
                     owner->m_receiver.set_stopped();
+                }
+
+                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
+                    requires requires(T_Receiver const& receiver) { receiver.get_env(); }
+                {
+                    return owner->m_receiver.get_env();
                 }
 
                 LetValueOperation* owner;
@@ -528,6 +557,12 @@ namespace caravan
                 owner->setStopped();
             }
 
+            decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Owner const&>().getEnv()))
+                requires requires(T_Owner const& value) { value.getEnv(); }
+            {
+                return owner->getEnv();
+            }
+
             T_Owner* owner;
         };
 
@@ -584,6 +619,12 @@ namespace caravan
                     m_receiver.set_value();
                 else
                     (Holder<T_Index>::start(), ...);
+            }
+
+            decltype(auto) getEnv() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
+                requires requires(T_Receiver const& receiver) { receiver.get_env(); }
+            {
+                return m_receiver.get_env();
             }
 
             template<std::size_t T_I, typename... T>
