@@ -188,11 +188,24 @@ namespace caravan
 
             T const& value() const
             {
+                if(!m_value)
+                    throw std::logic_error("Caravan future value was already consumed");
                 return *m_value;
+            }
+
+            T takeValue()
+            {
+                std::lock_guard lock(m_consumeMutex);
+                if(!m_value)
+                    throw std::logic_error("Caravan future value was already consumed");
+                T value = std::move(*m_value);
+                m_value.reset();
+                return value;
             }
 
         private:
             std::optional<T> m_value;
+            std::mutex m_consumeMutex;
         };
     } // namespace detail
 
@@ -246,9 +259,11 @@ namespace caravan
             reportFailure();
         }
 
+        /** Compatibility-only eager composition; prefer asSender plus sender algorithms. */
         template<typename T_Executor, typename T_Operation>
         Event then(T_Executor executor, T_Operation&& operation) const;
 
+        /** Compatibility-only eager observation retained for runtime boundaries. */
         template<typename T_Executor, typename T_Continuation>
         Event continueWith(T_Executor executor, T_Continuation&& continuation) const;
 
@@ -490,6 +505,19 @@ namespace caravan
             return m_state->value();
         }
 
+        /** Consume the shared result.
+         *
+         * The caller must have exclusive logical ownership: aliases remain valid
+         * completion handles but can no longer read the consumed value.
+         */
+        T takeResult() &&
+        {
+            event().wait();
+            auto state = std::exchange(m_state, {});
+            return state->takeValue();
+        }
+
+        /** Compatibility-only eager composition; prefer consumeAsSender(). */
         template<typename T_Executor, typename T_Operation>
         auto then(T_Executor executor, T_Operation&& operation) const;
 
@@ -711,6 +739,21 @@ namespace caravan
         return EventSender{std::move(event)};
     }
 
+    /** Lazy, typed, consuming bridge for an already-started Future.
+     *
+     * Starting the sender consumes the Future's shared value. No Future alias may
+     * read the result afterward. This explicit consuming contract supports
+     * move-only values without adding another eager transformation model.
+     */
+    template<typename T>
+    auto consumeAsSender(Future<T>&& future)
+    {
+        auto ready = future.event();
+        return then(
+            asSender(std::move(ready)),
+            [future = std::move(future)]() mutable { return std::move(future).takeResult(); });
+    }
+
     namespace detail
     {
         template<typename T>
@@ -776,7 +819,7 @@ namespace caravan
         auto result = output.future();
         auto operation = std::move(sender).connect(detail::SyncWaitReceiver<T>{output});
         operation.start();
-        return result.result();
+        return std::move(result).takeResult();
     }
 
     template<typename T_Sender>
