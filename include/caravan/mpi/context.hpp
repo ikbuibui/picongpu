@@ -248,7 +248,8 @@ namespace caravan
         void finish();
 
     private:
-        std::unique_ptr<MpiContext> m_context;
+        class Impl;
+        std::unique_ptr<Impl> m_implementation;
     };
 
     /** Convenience MPI lifecycle/driver using a dedicated FUNNELED thread. */
