@@ -157,9 +157,12 @@ namespace caravan
                 std::lock_guard lock(m_queueMutex);
                 if(!m_stopping || m_outstanding != 0u)
                     return true;
-                m_finished = true;
             }
             releaseCommunicators();
+            {
+                std::lock_guard lock(m_queueMutex);
+                m_finished = true;
+            }
             return false;
         }
 
