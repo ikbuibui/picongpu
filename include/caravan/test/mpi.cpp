@@ -62,6 +62,36 @@ namespace
 
         caravan::EventSource output;
     };
+
+    struct SelfDeletingReceiver
+    {
+        void finish() noexcept
+        {
+            auto* const operation = std::exchange(*operationAddress, nullptr);
+            auto* const completedFlag = completed;
+            destroy(operation);
+            completedFlag->store(true);
+        }
+
+        void set_value() noexcept
+        {
+            finish();
+        }
+
+        void set_error(std::exception_ptr) noexcept
+        {
+            finish();
+        }
+
+        void set_stopped() noexcept
+        {
+            finish();
+        }
+
+        void** operationAddress;
+        void (*destroy)(void*);
+        std::atomic<bool>* completed;
+    };
 } // namespace
 
 int main(int argc, char** argv)
@@ -268,6 +298,37 @@ int main(int argc, char** argv)
                 caravan::asSender(caravan::readyEvent()),
                 [&] { return caravan::mpi::barrier(mpi, cartesian.communicator); }));
             assert(!abandonedFactoryCalled);
+
+            auto mismatchedCollective = collectiveLane.submit(
+                caravan::asSender(caravan::readyEvent()),
+                [&] { return caravan::mpi::barrier(mpi, caravan::worldCommunicator); });
+            try
+            {
+                caravan::syncWait(std::move(mismatchedCollective));
+                assert(false);
+            }
+            catch(std::invalid_argument const&)
+            {
+            }
+            caravan::syncWait(collectiveLane.submit(
+                caravan::asSender(caravan::readyEvent()),
+                [&] { return caravan::mpi::barrier(mpi, cartesian.communicator); }));
+
+            std::atomic<bool> selfDeleted = false;
+            void* operationAddress = nullptr;
+            auto selfDeletingCollective = collectiveLane.submit(
+                caravan::asSender(caravan::readyEvent()),
+                [&] { return caravan::mpi::barrier(mpi, cartesian.communicator); });
+            using SelfDeletingOperation = decltype(std::move(selfDeletingCollective).connect(SelfDeletingReceiver{}));
+            auto destroySelfDeletingOperation
+                = [](void* operation) { delete static_cast<SelfDeletingOperation*>(operation); };
+            auto* selfDeletingOperation = new SelfDeletingOperation(
+                std::move(selfDeletingCollective)
+                    .connect(SelfDeletingReceiver{&operationAddress, destroySelfDeletingOperation, &selfDeleted}));
+            operationAddress = selfDeletingOperation;
+            selfDeletingOperation->start();
+            while(!selfDeleted.load())
+                std::this_thread::yield();
 
             caravan::EventSource firstCollectiveReady;
             caravan::EventSource secondCollectiveReady;
