@@ -98,8 +98,7 @@ namespace caravan
             T_Start start,
             T_Complete complete,
             typename mpi::operation_detail::ValueCallback<T>::type value,
-            mpi::operation_detail::ErrorCallback error,
-            mpi::operation_detail::StoppedCallback stopped)
+            mpi::operation_detail::ErrorCallback error)
         {
             detail::NativeAccess::submit(
                 context,
@@ -128,21 +127,19 @@ namespace caravan
                         else
                             value(detail::invokeNative(complete, statuses));
                     },
-                    std::move(error),
-                    std::move(stopped)});
+                    std::move(error)});
         }
 
         template<typename T, typename T_Operation>
-        void submitBlocking(
+        void submitInvocation(
             MpiContext& context,
             T_Operation operation,
             typename mpi::operation_detail::ValueCallback<T>::type value,
-            mpi::operation_detail::ErrorCallback error,
-            mpi::operation_detail::StoppedCallback stopped)
+            mpi::operation_detail::ErrorCallback error)
         {
-            detail::NativeAccess::invokeBlocking(
+            detail::NativeAccess::invoke(
                 context,
-                detail::NativeBlockingSubmission{
+                detail::NativeInvocation{
                     [operation = std::move(operation), value = std::move(value)](NativeMpiContext& native) mutable
                     {
                         if constexpr(std::is_void_v<T>)
@@ -153,8 +150,7 @@ namespace caravan
                         else
                             value(detail::invokeNative(operation, native));
                     },
-                    std::move(error),
-                    std::move(stopped)});
+                    std::move(error)});
         }
     } // namespace
 
@@ -433,7 +429,7 @@ namespace caravan
         return batch;
     }
 
-    mpi::OperationSender<SendResult> mpi::send(
+    mpi::OperationSender<mpi::operation_detail::Send> mpi::send(
         MpiContext& context,
         ConstBufferLease buffer,
         Peer destination,
@@ -443,7 +439,7 @@ namespace caravan
         return {context, operation_detail::Send{std::move(buffer), destination, tag, communicator}};
     }
 
-    mpi::OperationSender<ReceiveResult> mpi::receive(
+    mpi::OperationSender<mpi::operation_detail::Receive> mpi::receive(
         MpiContext& context,
         BufferLease buffer,
         Peer source,
@@ -453,7 +449,7 @@ namespace caravan
         return {context, operation_detail::Receive{std::move(buffer), source, tag, communicator}};
     }
 
-    mpi::OperationSender<AllReduceResult> mpi::allReduce(
+    mpi::OperationSender<mpi::operation_detail::AllReduce> mpi::allReduce(
         MpiContext& context,
         ConstBufferLease input,
         BufferLease output,
@@ -466,7 +462,7 @@ namespace caravan
             operation_detail::AllReduce{std::move(input), std::move(output), type, operation, communicator}};
     }
 
-    mpi::OperationSender<ReduceResult> mpi::reduce(
+    mpi::OperationSender<mpi::operation_detail::Reduce> mpi::reduce(
         MpiContext& context,
         ConstBufferLease input,
         BufferLease output,
@@ -480,7 +476,7 @@ namespace caravan
             operation_detail::Reduce{std::move(input), std::move(output), type, operation, root, communicator}};
     }
 
-    mpi::OperationSender<GatherResult> mpi::gather(
+    mpi::OperationSender<mpi::operation_detail::Gather> mpi::gather(
         MpiContext& context,
         ConstBufferLease input,
         BufferLease output,
@@ -490,7 +486,7 @@ namespace caravan
         return {context, operation_detail::Gather{std::move(input), std::move(output), root, communicator}};
     }
 
-    mpi::OperationSender<GatherResult> mpi::allGather(
+    mpi::OperationSender<mpi::operation_detail::AllGather> mpi::allGather(
         MpiContext& context,
         ConstBufferLease input,
         BufferLease output,
@@ -499,7 +495,7 @@ namespace caravan
         return {context, operation_detail::AllGather{std::move(input), std::move(output), communicator}};
     }
 
-    mpi::OperationSender<GatherResult> mpi::gatherV(
+    mpi::OperationSender<mpi::operation_detail::GatherV> mpi::gatherV(
         MpiContext& context,
         ConstBufferLease input,
         BufferLease output,
@@ -519,12 +515,12 @@ namespace caravan
                 communicator}};
     }
 
-    mpi::OperationSender<void> mpi::barrier(MpiContext& context, CommunicatorId communicator)
+    mpi::OperationSender<mpi::operation_detail::Barrier> mpi::barrier(MpiContext& context, CommunicatorId communicator)
     {
         return {context, operation_detail::Barrier{communicator}};
     }
 
-    mpi::OperationSender<TopologySnapshot> mpi::createCartesian(
+    mpi::OperationSender<mpi::operation_detail::CreateCartesian> mpi::createCartesian(
         MpiContext& context,
         std::vector<int> dimensions,
         std::vector<bool> periodic)
@@ -539,12 +535,14 @@ namespace caravan
                 topology.hostLocalRank}};
     }
 
-    mpi::OperationSender<CommunicatorId> mpi::duplicateCommunicator(MpiContext& context, CommunicatorId communicator)
+    mpi::OperationSender<mpi::operation_detail::DuplicateCommunicator> mpi::duplicateCommunicator(
+        MpiContext& context,
+        CommunicatorId communicator)
     {
         return {context, operation_detail::DuplicateCommunicator{communicator}};
     }
 
-    mpi::OperationSender<std::optional<CommunicatorInfo>> mpi::splitCommunicator(
+    mpi::OperationSender<mpi::operation_detail::SplitCommunicator> mpi::splitCommunicator(
         MpiContext& context,
         std::optional<int> color,
         int key,
@@ -553,7 +551,9 @@ namespace caravan
         return {context, operation_detail::SplitCommunicator{color, key, communicator}};
     }
 
-    mpi::OperationSender<void> mpi::destroyCommunicator(MpiContext& context, CommunicatorId communicator)
+    mpi::OperationSender<mpi::operation_detail::DestroyCommunicator> mpi::destroyCommunicator(
+        MpiContext& context,
+        CommunicatorId communicator)
     {
         return {context, operation_detail::DestroyCommunicator{communicator}};
     }
@@ -562,8 +562,7 @@ namespace caravan
         MpiContext& context,
         Send operation,
         ValueCallback<SendResult>::type value,
-        ErrorCallback error,
-        StoppedCallback stopped)
+        ErrorCallback error)
     {
         auto const bytes = operation.buffer.bytes();
         submitRequest<SendResult>(
@@ -579,16 +578,14 @@ namespace caravan
             },
             [bytes](std::span<MPI_Status const>) { return SendResult{bytes}; },
             std::move(value),
-            std::move(error),
-            std::move(stopped));
+            std::move(error));
     }
 
     void mpi::operation_detail::submit(
         MpiContext& context,
         Receive operation,
         ValueCallback<ReceiveResult>::type value,
-        ErrorCallback error,
-        StoppedCallback stopped)
+        ErrorCallback error)
     {
         submitRequest<ReceiveResult>(
             context,
@@ -603,16 +600,14 @@ namespace caravan
             },
             [](std::span<MPI_Status const> statuses) { return detail::completeReceive(statuses); },
             std::move(value),
-            std::move(error),
-            std::move(stopped));
+            std::move(error));
     }
 
     void mpi::operation_detail::submit(
         MpiContext& context,
         AllReduce operation,
         ValueCallback<AllReduceResult>::type value,
-        ErrorCallback error,
-        StoppedCallback stopped)
+        ErrorCallback error)
     {
         auto elements = std::make_shared<std::size_t>(0u);
         submitRequest<AllReduceResult>(
@@ -630,16 +625,14 @@ namespace caravan
             },
             [elements](std::span<MPI_Status const>) { return AllReduceResult{*elements}; },
             std::move(value),
-            std::move(error),
-            std::move(stopped));
+            std::move(error));
     }
 
     void mpi::operation_detail::submit(
         MpiContext& context,
         Reduce operation,
         ValueCallback<ReduceResult>::type value,
-        ErrorCallback error,
-        StoppedCallback stopped)
+        ErrorCallback error)
     {
         auto elements = std::make_shared<std::size_t>(0u);
         submitRequest<ReduceResult>(
@@ -658,16 +651,14 @@ namespace caravan
             },
             [elements](std::span<MPI_Status const>) { return ReduceResult{*elements}; },
             std::move(value),
-            std::move(error),
-            std::move(stopped));
+            std::move(error));
     }
 
     void mpi::operation_detail::submit(
         MpiContext& context,
         Gather operation,
         ValueCallback<GatherResult>::type value,
-        ErrorCallback error,
-        StoppedCallback stopped)
+        ErrorCallback error)
     {
         auto resultBytes = std::make_shared<std::size_t>(0u);
         submitRequest<GatherResult>(
@@ -684,16 +675,14 @@ namespace caravan
             },
             [resultBytes](std::span<MPI_Status const>) { return GatherResult{*resultBytes}; },
             std::move(value),
-            std::move(error),
-            std::move(stopped));
+            std::move(error));
     }
 
     void mpi::operation_detail::submit(
         MpiContext& context,
         AllGather operation,
         ValueCallback<GatherResult>::type value,
-        ErrorCallback error,
-        StoppedCallback stopped)
+        ErrorCallback error)
     {
         auto resultBytes = std::make_shared<std::size_t>(0u);
         submitRequest<GatherResult>(
@@ -709,16 +698,14 @@ namespace caravan
             },
             [resultBytes](std::span<MPI_Status const>) { return GatherResult{*resultBytes}; },
             std::move(value),
-            std::move(error),
-            std::move(stopped));
+            std::move(error));
     }
 
     void mpi::operation_detail::submit(
         MpiContext& context,
         GatherV operation,
         ValueCallback<GatherResult>::type value,
-        ErrorCallback error,
-        StoppedCallback stopped)
+        ErrorCallback error)
     {
         auto resultBytes = std::make_shared<std::size_t>(0u);
         submitRequest<GatherResult>(
@@ -737,34 +724,30 @@ namespace caravan
             },
             [resultBytes](std::span<MPI_Status const>) { return GatherResult{*resultBytes}; },
             std::move(value),
-            std::move(error),
-            std::move(stopped));
+            std::move(error));
     }
 
     void mpi::operation_detail::submit(
         MpiContext& context,
         Barrier operation,
         ValueCallback<void>::type value,
-        ErrorCallback error,
-        StoppedCallback stopped)
+        ErrorCallback error)
     {
         submitRequest<void>(
             context,
             [operation](NativeMpiContext& native) { return detail::startBarrier(native, operation.communicator); },
             [](std::span<MPI_Status const>) {},
             std::move(value),
-            std::move(error),
-            std::move(stopped));
+            std::move(error));
     }
 
     void mpi::operation_detail::submit(
         MpiContext& context,
         CreateCartesian operation,
         ValueCallback<TopologySnapshot>::type value,
-        ErrorCallback error,
-        StoppedCallback stopped)
+        ErrorCallback error)
     {
-        submitBlocking<TopologySnapshot>(
+        submitInvocation<TopologySnapshot>(
             context,
             [operation = std::move(operation)](NativeMpiContext& native) mutable
             {
@@ -776,55 +759,48 @@ namespace caravan
                     operation.hostLocalRank);
             },
             std::move(value),
-            std::move(error),
-            std::move(stopped));
+            std::move(error));
     }
 
     void mpi::operation_detail::submit(
         MpiContext& context,
         DuplicateCommunicator operation,
         ValueCallback<CommunicatorId>::type value,
-        ErrorCallback error,
-        StoppedCallback stopped)
+        ErrorCallback error)
     {
-        submitBlocking<CommunicatorId>(
+        submitInvocation<CommunicatorId>(
             context,
             [operation](NativeMpiContext& native)
             { return detail::duplicateCommunicator(native, operation.communicator); },
             std::move(value),
-            std::move(error),
-            std::move(stopped));
+            std::move(error));
     }
 
     void mpi::operation_detail::submit(
         MpiContext& context,
         SplitCommunicator operation,
         ValueCallback<std::optional<CommunicatorInfo>>::type value,
-        ErrorCallback error,
-        StoppedCallback stopped)
+        ErrorCallback error)
     {
-        submitBlocking<std::optional<CommunicatorInfo>>(
+        submitInvocation<std::optional<CommunicatorInfo>>(
             context,
             [operation](NativeMpiContext& native)
             { return detail::splitCommunicator(native, operation.color, operation.key, operation.communicator); },
             std::move(value),
-            std::move(error),
-            std::move(stopped));
+            std::move(error));
     }
 
     void mpi::operation_detail::submit(
         MpiContext& context,
         DestroyCommunicator operation,
         ValueCallback<void>::type value,
-        ErrorCallback error,
-        StoppedCallback stopped)
+        ErrorCallback error)
     {
-        submitBlocking<void>(
+        submitInvocation<void>(
             context,
             [operation](NativeMpiContext& native) { detail::destroyCommunicator(native, operation.communicator); },
             std::move(value),
-            std::move(error),
-            std::move(stopped));
+            std::move(error));
     }
 
 } // namespace caravan

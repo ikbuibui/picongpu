@@ -438,7 +438,7 @@ int main(int argc, char** argv)
 
             auto throwingCollective = collectiveScope.spawn(collectiveLane.submit(
                 caravan::asSender(caravan::readyEvent()),
-                []() -> caravan::mpi::OperationSender<void>
+                []() -> caravan::mpi::OperationSender<caravan::mpi::operation_detail::Barrier>
                 { throw std::runtime_error("expected collective factory failure"); }));
             auto followingThrow = collectiveScope.spawn(collectiveLane.submit(
                 caravan::asSender(caravan::readyEvent()),
