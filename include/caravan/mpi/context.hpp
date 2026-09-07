@@ -8,8 +8,6 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <type_traits>
-#include <utility>
 #include <vector>
 
 namespace caravan
@@ -32,6 +30,7 @@ namespace caravan
 
     class MpiContext;
     class MpiExternalRuntime;
+    class MpiRuntime;
 
     namespace detail
     {
@@ -142,33 +141,6 @@ namespace caravan
         product
     };
 
-    struct SendResult
-    {
-        std::size_t bytes;
-    };
-
-    struct ReceiveResult
-    {
-        Peer source;
-        MessageTag tag;
-        std::size_t bytes;
-    };
-
-    struct AllReduceResult
-    {
-        std::size_t elements;
-    };
-
-    struct ReduceResult
-    {
-        std::size_t elements;
-    };
-
-    struct GatherResult
-    {
-        std::size_t bytes;
-    };
-
     struct CommunicatorInfo
     {
         CommunicatorId communicator;
@@ -204,7 +176,7 @@ namespace caravan
 
     private:
         class Impl;
-        explicit MpiContext(std::unique_ptr<Impl> implementation);
+        MpiContext();
 
         void run();
         bool progress();
@@ -225,68 +197,4 @@ namespace caravan
         friend struct detail::NativeAccess;
     };
 
-    /** Attach Caravan's request engine to an MPI lifecycle owned by the caller.
-     *
-     * MPI must already be initialized. Construct and drive this object only from
-     * the thread on which native MPI calls are permitted. progress() performs one
-     * bounded, nonblocking submission/progress turn and returns false after a
-     * requested shutdown becomes quiescent. The caller retains responsibility
-     * for MPI_Finalize and must finish Caravan first.
-     */
-    class MpiExternalRuntime
-    {
-    public:
-        MpiExternalRuntime();
-        ~MpiExternalRuntime();
-
-        MpiExternalRuntime(MpiExternalRuntime const&) = delete;
-        MpiExternalRuntime& operator=(MpiExternalRuntime const&) = delete;
-
-        MpiContext& context() noexcept;
-        bool progress();
-        void requestShutdown();
-        void finish();
-
-    private:
-        class Impl;
-        std::unique_ptr<Impl> m_implementation;
-    };
-
-    /** Convenience MPI lifecycle/driver using a dedicated FUNNELED thread. */
-    class MpiRuntime
-    {
-    public:
-        template<typename T_Application>
-        static int run(int& argc, char**& argv, T_Application&& application)
-        {
-            auto invoke = [&application](MpiContext& context)
-            {
-                if constexpr(std::is_invocable_v<T_Application&, MpiContext&>)
-                {
-                    if constexpr(std::is_void_v<std::invoke_result_t<T_Application&, MpiContext&>>)
-                    {
-                        std::invoke(application, context);
-                        return 0;
-                    }
-                    else
-                        return static_cast<int>(std::invoke(application, context));
-                }
-                else
-                {
-                    static_assert(std::is_invocable_v<T_Application&>);
-                    if constexpr(std::is_void_v<std::invoke_result_t<T_Application&>>)
-                    {
-                        std::invoke(application);
-                        return 0;
-                    }
-                    else
-                        return static_cast<int>(std::invoke(application));
-                }
-            };
-            return runImpl(argc, argv, invoke);
-        }
-
-    private:
-        static int runImpl(int& argc, char**& argv, std::function<int(MpiContext&)> application);
-    };
 } // namespace caravan
