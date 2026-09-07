@@ -101,26 +101,26 @@ namespace pmacc
             return this->coordinates;
         }
 
-        caravan::mpi::OperationSender<caravan::SendResult> send(
+        caravan::mpi::OperationSender<caravan::mpi::operation_detail::Send> send(
             uint32_t ex,
             char const* sendData,
             size_t sendBytes,
             uint32_t tag);
 
-        caravan::mpi::OperationSender<caravan::ReceiveResult> receive(
+        caravan::mpi::OperationSender<caravan::mpi::operation_detail::Receive> receive(
             uint32_t ex,
             char* receiveData,
             size_t receiveBytes,
             uint32_t tag);
 
-        caravan::mpi::OperationSender<caravan::AllReduceResult> signalAllReduce(
+        caravan::mpi::OperationSender<caravan::mpi::operation_detail::AllReduce> signalAllReduce(
             void const* input,
             void* output,
             size_t bytes,
             caravan::ScalarType type,
             caravan::ReduceOperation operation);
 
-        caravan::mpi::OperationSender<void> barrier();
+        caravan::mpi::OperationSender<caravan::mpi::operation_detail::Barrier> barrier();
 
         bool slide();
 

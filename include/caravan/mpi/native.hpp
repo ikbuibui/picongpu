@@ -121,33 +121,21 @@ namespace caravan
             std::function<NativeRequestBatch(NativeMpiContext&)> start;
             std::function<void(NativeMpiContext&, std::span<MPI_Status const>)> completed;
             std::function<void(std::exception_ptr)> failed;
-            std::function<void()> stopped;
 
             void setFailed(std::exception_ptr error) const
             {
                 failed(std::move(error));
-            }
-
-            void setStopped() const
-            {
-                stopped();
             }
         };
 
-        struct NativeBlockingSubmission
+        struct NativeInvocation
         {
             std::function<void(NativeMpiContext&)> invoke;
             std::function<void(std::exception_ptr)> failed;
-            std::function<void()> stopped;
 
             void setFailed(std::exception_ptr error) const
             {
                 failed(std::move(error));
-            }
-
-            void setStopped() const
-            {
-                stopped();
             }
         };
 
@@ -182,7 +170,7 @@ namespace caravan
             }
 
             static void submit(MpiContext& context, NativeSubmission submission);
-            static void invokeBlocking(MpiContext& context, NativeBlockingSubmission submission);
+            static void invoke(MpiContext& context, NativeInvocation submission);
         };
 
         struct NativeContextFactory;
@@ -398,8 +386,7 @@ namespace caravan
                                     else
                                         m_receiver.set_value(detail::invokeNative(m_complete, statuses));
                                 },
-                                [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
-                                [this] { m_receiver.set_stopped(); }});
+                                [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); }});
                     }
                     catch(...)
                     {
@@ -447,7 +434,7 @@ namespace caravan
                 std::forward<T_Complete>(complete)};
         }
 
-        template<typename T, typename T_Operation, bool T_Blocking>
+        template<typename T, typename T_Operation>
         class ContextSender
         {
             static_assert(std::is_void_v<T> || (!std::is_reference_v<T> && !std::is_const_v<T>) );
@@ -485,22 +472,11 @@ namespace caravan
 
                     try
                     {
-                        if constexpr(T_Blocking)
-                            detail::NativeAccess::invokeBlocking(
-                                *m_context,
-                                detail::NativeBlockingSubmission{
-                                    [this](NativeMpiContext& context) { complete(context); },
-                                    [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
-                                    [this] { m_receiver.set_stopped(); }});
-                        else
-                            detail::NativeAccess::submit(
-                                *m_context,
-                                detail::NativeSubmission{
-                                    [](NativeMpiContext&) { return NativeRequestBatch{}; },
-                                    [this](NativeMpiContext& context, std::span<MPI_Status const>)
-                                    { complete(context); },
-                                    [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); },
-                                    [this] { m_receiver.set_stopped(); }});
+                        detail::NativeAccess::invoke(
+                            *m_context,
+                            detail::NativeInvocation{
+                                [this](NativeMpiContext& context) { complete(context); },
+                                [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); }});
                     }
                     catch(...)
                     {
@@ -551,7 +527,7 @@ namespace caravan
             using Operation = std::decay_t<T_Operation>;
             using Result
                 = std::remove_cv_t<std::remove_reference_t<std::invoke_result_t<Operation&, NativeMpiContext&>>>;
-            return ContextSender<Result, Operation, false>{context, std::forward<T_Operation>(operation)};
+            return ContextSender<Result, Operation>{context, std::forward<T_Operation>(operation)};
         }
 
         /** Lazily invoke a blocking operation without draining unrelated requests.
@@ -562,10 +538,7 @@ namespace caravan
         template<typename T_Operation>
         auto invokeBlocking(MpiContext& context, T_Operation&& operation)
         {
-            using Operation = std::decay_t<T_Operation>;
-            using Result
-                = std::remove_cv_t<std::remove_reference_t<std::invoke_result_t<Operation&, NativeMpiContext&>>>;
-            return ContextSender<Result, Operation, true>{context, std::forward<T_Operation>(operation)};
+            return invoke(context, std::forward<T_Operation>(operation));
         }
 
     } // namespace mpi

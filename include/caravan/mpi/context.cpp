@@ -74,7 +74,7 @@ namespace caravan
             submit(std::move(submission), [this](detail::NativeSubmission output) { startNative(std::move(output)); });
         }
 
-        void invokeBlocking(detail::NativeBlockingSubmission submission)
+        void invokeNative(detail::NativeInvocation submission)
         {
             if(detail::nativeCallbackDepth != 0u)
             {
@@ -82,9 +82,7 @@ namespace caravan
                     std::make_exception_ptr(std::logic_error("Recursive native MPI submission is not allowed")));
                 return;
             }
-            submit(
-                std::move(submission),
-                [this](detail::NativeBlockingSubmission output) { startBlocking(std::move(output)); });
+            submit(std::move(submission), [this](detail::NativeInvocation output) { invoke(std::move(output)); });
         }
 
         detail::ManagedCollectiveTicket reserveManagedCollective(CommunicatorId communicator)
@@ -548,7 +546,7 @@ namespace caravan
             }
         }
 
-        void startBlocking(detail::NativeBlockingSubmission output)
+        void invoke(detail::NativeInvocation output)
         {
             assertOwner();
             try
@@ -704,9 +702,9 @@ namespace caravan
         m_implementation->submitNative(std::move(submission));
     }
 
-    void MpiContext::invokeBlocking(detail::NativeBlockingSubmission submission)
+    void MpiContext::invokeNative(detail::NativeInvocation submission)
     {
-        m_implementation->invokeBlocking(std::move(submission));
+        m_implementation->invokeNative(std::move(submission));
     }
 
     detail::ManagedCollectiveTicket MpiContext::reserveManagedCollective(CommunicatorId communicator)
@@ -747,9 +745,9 @@ namespace caravan
         context.submitNative(std::move(submission));
     }
 
-    void detail::NativeAccess::invokeBlocking(MpiContext& context, detail::NativeBlockingSubmission submission)
+    void detail::NativeAccess::invoke(MpiContext& context, detail::NativeInvocation submission)
     {
-        context.invokeBlocking(std::move(submission));
+        context.invokeNative(std::move(submission));
     }
 
     class MpiExternalRuntime::Impl
