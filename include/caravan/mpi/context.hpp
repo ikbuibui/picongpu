@@ -17,7 +17,7 @@ namespace caravan
     namespace detail
     {
         struct NativeAccess;
-        struct NativeBlockingSubmission;
+        struct NativeInvocation;
         struct NativeSubmission;
     } // namespace detail
 
@@ -211,7 +211,7 @@ namespace caravan
         void requestShutdown();
         bool shutdownComplete() const noexcept;
         void submitNative(detail::NativeSubmission submission);
-        void invokeBlocking(detail::NativeBlockingSubmission submission);
+        void invokeNative(detail::NativeInvocation submission);
 
         std::unique_ptr<Impl> m_implementation;
 
