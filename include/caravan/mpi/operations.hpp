@@ -13,6 +13,7 @@
 
 #include <caravan/core/sender.hpp>
 #include <caravan/mpi/context.hpp>
+#include <caravan/mpi/result.hpp>
 
 namespace caravan::mpi
 {
