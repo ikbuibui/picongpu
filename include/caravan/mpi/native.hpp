@@ -15,6 +15,7 @@
 
 #include <caravan/core/sender.hpp>
 #include <caravan/mpi/context.hpp>
+#include <caravan/mpi/result.hpp>
 #include <mpi.h>
 
 namespace caravan
