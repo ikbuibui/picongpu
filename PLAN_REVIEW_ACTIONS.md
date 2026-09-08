@@ -217,11 +217,11 @@ asyncContext.spawn(
 can execute `userCode` on the MPI progress worker. `Context::spawn()` currently
 wraps the already-composed sender in `continuesOn`; that only transfers the final
 completion and cannot move an inner `then` that has already executed. The same
-issue exists for alpaka host-callback completion.
+issue exists for alpaka completion-thread delivery.
 
 This behavior is consistent with P2300 execution placement, but it is too easy to
 violate PMacc's rule that arbitrary application callbacks must not execute on MPI
-or device completion authorities.
+or backend completion authorities.
 
 ### Required API decision
 
@@ -265,7 +265,7 @@ remain possible without an unnecessary control-loop transfer.
 - `then(onControl(mpiSender), f)` runs `f` on the run-loop thread, never the MPI
   worker.
 - `then(onControl(alpakaSender), f)` runs `f` on the run-loop thread, never the
-  alpaka completion callback thread when those differ.
+  alpaka completion thread when those differ.
 - `letValue(alpakaSender, mpiFactory)` still crosses directly through the intended
   host-completion boundary and does not first execute on the PMacc run loop unless
   explicitly requested.
