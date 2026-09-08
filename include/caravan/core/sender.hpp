@@ -143,6 +143,24 @@ namespace caravan
 
         template<typename... T_Senders>
         using CombinedValueTuple = decltype(std::tuple_cat(std::declval<ValueTupleOf<T_Senders>>()...));
+
+        template<typename T_Function>
+        class SenderAdaptorClosure
+        {
+        public:
+            explicit SenderAdaptorClosure(T_Function function) : m_function(std::move(function))
+            {
+            }
+
+            template<Sender T_Sender>
+            friend auto operator|(T_Sender sender, SenderAdaptorClosure closure)
+            {
+                return std::invoke(std::move(closure.m_function), std::move(sender));
+            }
+
+        private:
+            T_Function m_function;
+        };
     } // namespace detail
 
     namespace detail
@@ -279,6 +297,13 @@ namespace caravan
     auto continuesOn(T_Sender sender, T_Scheduler scheduler)
     {
         return ContinuesOnSender<T_Sender, T_Scheduler>{std::move(sender), std::move(scheduler)};
+    }
+
+    template<typename T_Scheduler>
+    auto continuesOn(T_Scheduler scheduler)
+    {
+        return detail::SenderAdaptorClosure{[scheduler = std::move(scheduler)](auto sender) mutable
+                                            { return continuesOn(std::move(sender), std::move(scheduler)); }};
     }
 
     namespace detail
@@ -506,6 +531,13 @@ namespace caravan
         return ThenSender<T_Sender, T_Function>{std::move(sender), std::move(function)};
     }
 
+    template<typename T_Function>
+    auto then(T_Function function)
+    {
+        return detail::SenderAdaptorClosure{[function = std::move(function)](auto sender) mutable
+                                            { return then(std::move(sender), std::move(function)); }};
+    }
+
     template<typename T_Sender, typename T_Factory>
     class LetValueSender
     {
@@ -534,6 +566,13 @@ namespace caravan
     auto letValue(T_Sender sender, T_Factory factory)
     {
         return LetValueSender<T_Sender, T_Factory>{std::move(sender), std::move(factory)};
+    }
+
+    template<typename T_Factory>
+    auto letValue(T_Factory factory)
+    {
+        return detail::SenderAdaptorClosure{[factory = std::move(factory)](auto sender) mutable
+                                            { return letValue(std::move(sender), std::move(factory)); }};
     }
 
     namespace detail
