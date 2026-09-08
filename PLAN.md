@@ -1669,25 +1669,32 @@ abstraction.
    storage referenced by non-owning alpaka views remains borrowed.
 4. **Implemented:** Caravan adds no submission thread or queue.
 5. **Implemented:** same-queue stages lower directly to queue FIFO.
-6. **Implemented for supported same-device queues:** queue changes record an alpaka
-   event and insert a native queue wait.
-7. **Implemented:** only the final queue host callback publishes host-visible
-   completion; native dependency availability precedes it.
+6. **Implemented for supported same-device queues:** queue changes record a fence
+   and insert a native queue wait (alpaka events on accelerators, error-snapshot
+   barriers on nonblocking CPU queues).
+7. **Implemented:** submission-time terminal fences are polled on Caravan's
+   completion thread; later queue submissions cannot move a sender's boundary.
 8. **Implemented:** native events remain private to `caravan::alpaka`; MPI and
    generic sender edges continue to consume host-visible completion.
 9. **Implemented:** the small `caravan::alpaka::sequence` domain transformation merges
    typed alpaka senders into one native FIFO/event chain without adding a scheduler
    hierarchy.
-10. **Implemented:** CPU and GPU use the same explicit alpaka queue-host-callback
-    completion policy; no GPU-specific polling is assumed.
+10. **Implemented:** one shared progress thread scans pending CPU/GPU fences
+    without blocking on an incomplete queue or executing inside a backend callback.
 11. **Implemented and tested:** explicit `continuesOn` transfer places application
     continuations on the selected run-loop scheduler.
 12. **Implemented and tested:** supported caller-supplied queues accept concurrent
     starts without Caravan serialization.
-13. **Implemented:** successful receiver delivery identifies alpaka callback
-    context. Such receivers must not block on the originating queue or destroy its
-    last handle; unrestricted application code first crosses `continuesOn`.
-    Submission cleanup terminates if queue waits cannot establish quiescence.
+13. **Implemented:** submission-error cleanup records a fence before handing off
+    to progress. Receiver delivery and retained-state reclamation run only after
+    every recorded fence completes, with the normal executor blocking guard active.
+    Completed CPU barriers report execution failures through `set_error`; inability
+    to record a cleanup fence or query a native event safely terminates rather than
+    reclaim potentially live storage. Unrestricted application code still crosses
+    `continuesOn`.
+
+The revised completion path is covered by CPU regression and allocation-failure
+checks; its accelerator runtime behavior requires revalidation on CUDA/HIP hardware.
 
 **Exit criterion met for the hardware-independent Phase 4 scope:** PMacc can start
 accelerator operations through sender-like alpaka primitives; native accelerator-

@@ -131,7 +131,7 @@ int main()
                 caravan::alpaka::submit(queue, [](Queue&) {}),
                 [&] { callbackContextObserved = caravan::alpaka::isCompletionCallback(); }))
         .wait();
-    assert(callbackContextObserved);
+    assert(!callbackContextObserved);
 
     // Supported alpaka queues accept concurrent starts; Caravan adds no submission thread or serialization layer.
     std::atomic<unsigned> callbacks = 0u;
@@ -148,9 +148,55 @@ int main()
     for(auto& thread : submitters)
         thread.join();
 
+    auto expectFailed = [](caravan::Event const& event)
+    {
+        try
+        {
+            event.wait();
+            assert(false);
+        }
+        catch(std::exception const&)
+        {
+        }
+        assert(event.state() == caravan::CompletionState::failed);
+    };
+
     auto failed
         = scope.spawn(caravan::alpaka::submit(queue, [](Queue&) { throw std::runtime_error("submission failed"); }));
-    assert(failed.state() == caravan::CompletionState::failed);
+    expectFailed(failed);
+
+    // Submission cleanup must not wait on the alpaka callback/completion path that started the successor.
+    auto reentrantFailure = scope.spawn(
+        caravan::letValue(
+            caravan::alpaka::submit(queue, [](Queue&) {}),
+            [&]
+            {
+                return caravan::alpaka::submit(queue, [](Queue&) { throw std::runtime_error("reentrant failure"); });
+            }));
+    expectFailed(reentrantFailure);
+
+#if !ALPAKA_ACC_GPU_CUDA_ENABLED && !ALPAKA_ACC_GPU_HIP_ENABLED
+    // CPU queue synchronization must surface exceptions from asynchronously executed tasks.
+    auto executionFailure = scope.spawn(
+        caravan::alpaka::submit(
+            queue,
+            [](Queue& nativeQueue)
+            { alpaka::enqueue(nativeQueue, [] { throw std::runtime_error("execution failed"); }); }));
+    expectFailed(executionFailure);
+#endif
+
+    // No external owner: retained allocations are reclaimed only after terminal synchronization, off backend
+    // callbacks.
+    scope.spawn(caravan::alpaka::fill(queue, alpaka::allocBuf<int, Idx>(device, one), 0u)).wait();
+
+    caravan::RunLoop stoppedLoop;
+    auto stoppedScheduler = stoppedLoop.scheduler();
+    stoppedLoop.finish();
+    auto failedTransfer = scope.spawn(
+        caravan::continuesOn(
+            caravan::alpaka::fill(queue, alpaka::allocBuf<int, Idx>(device, one), 0u),
+            stoppedScheduler));
+    expectFailed(failedTransfer);
 
     scope.join().wait();
     assert(callbacks == 8u);
