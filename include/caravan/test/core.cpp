@@ -25,15 +25,6 @@
 
 namespace
 {
-    struct InlineExecutor
-    {
-        template<typename T_Function>
-        void post(T_Function&& function)
-        {
-            std::forward<T_Function>(function)();
-        }
-    };
-
     struct UnsupportedMultiValueSender
     {
         using completion_signatures = caravan::CompletionSignatures<
@@ -301,9 +292,25 @@ namespace
         unsigned* maxDepth;
     };
 
+    void testInlineScheduler()
+    {
+        caravan::InlineScheduler scheduler;
+        bool posted = false;
+        scheduler.post([&] { posted = true; });
+        assert(posted);
+
+        bool completed = false;
+        std::exception_ptr failure;
+        bool stopped = false;
+        auto operation = scheduler.schedule().connect(EventReceiver{&completed, &failure, &stopped});
+        assert(!completed);
+        operation.start();
+        assert(completed && !failure && !stopped);
+    }
+
     void testCompletionAndContinuations()
     {
-        InlineExecutor executor;
+        caravan::InlineScheduler executor;
         caravan::EventSource source;
         unsigned calls = 0u;
         auto first = source.event().then(executor, [&] { ++calls; });
@@ -458,7 +465,7 @@ namespace
             assert(concurrentJoin.state() == caravan::CompletionState::failed);
         }
 
-        InlineExecutor executor;
+        caravan::InlineScheduler executor;
         caravan::EventSource failed;
         bool called = false;
         auto successor = failed.event().then(executor, [&] { called = true; });
@@ -485,7 +492,7 @@ namespace
 
     void testFuture()
     {
-        InlineExecutor executor;
+        caravan::InlineScheduler executor;
         caravan::Promise<int> promise;
         auto doubled = promise.future().then(executor, [](int value) { return value * 2; });
         promise.setValue(21);
@@ -621,7 +628,7 @@ namespace
                         EnvironmentSender{21, &environmentObservations}),
                     [&environmentObservations](int left, int right)
                     { return EnvironmentSender{left + right, &environmentObservations}; }),
-                InlineExecutor{}),
+                caravan::InlineScheduler{}),
             [](int value) { return value + 1; });
         auto environmentOperation = std::move(environmentChain).connect(EnvironmentReceiver{&environmentResult});
         environmentOperation.start();
@@ -917,7 +924,7 @@ namespace
 
     void testRegistrationRace()
     {
-        InlineExecutor executor;
+        caravan::InlineScheduler executor;
         caravan::EventSource source;
         constexpr unsigned threadCount = 8u;
         constexpr unsigned continuationsPerThread = 100u;
@@ -948,7 +955,7 @@ namespace
 
     void testExecutorWaitGuard()
     {
-        InlineExecutor executor;
+        caravan::InlineScheduler executor;
         caravan::EventSource start;
         caravan::EventSource pending;
         auto blocked = start.event().then(executor, [&] { pending.event().wait(); });
@@ -984,6 +991,7 @@ namespace
 int main()
 {
     assert(caravan::readyEvent().isReady());
+    testInlineScheduler();
     testCompletionAndContinuations();
     testRunReadyFairness();
     testSchedulerHandleLifetime();
