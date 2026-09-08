@@ -620,16 +620,13 @@ namespace
 
         int environmentObservations = 0;
         int environmentResult = 0;
-        auto environmentChain = caravan::then(
-            caravan::continuesOn(
-                caravan::letValue(
-                    caravan::whenAll(
-                        EnvironmentSender{20, &environmentObservations},
-                        EnvironmentSender{21, &environmentObservations}),
-                    [&environmentObservations](int left, int right)
-                    { return EnvironmentSender{left + right, &environmentObservations}; }),
-                caravan::InlineScheduler{}),
-            [](int value) { return value + 1; });
+        auto environmentChain
+            = caravan::whenAll(
+                  EnvironmentSender{20, &environmentObservations},
+                  EnvironmentSender{21, &environmentObservations})
+              | caravan::letValue([&environmentObservations](int left, int right)
+                                  { return EnvironmentSender{left + right, &environmentObservations}; })
+              | caravan::continuesOn(caravan::InlineScheduler{}) | caravan::then([](int value) { return value + 1; });
         auto environmentOperation = std::move(environmentChain).connect(EnvironmentReceiver{&environmentResult});
         environmentOperation.start();
         assert(environmentObservations == 30 && environmentResult == 42);
