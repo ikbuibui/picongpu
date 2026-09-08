@@ -387,8 +387,8 @@ namespace alpaka
                 // Previously we enqueued an event into the queue but this will not guarantee that queue is empty
                 // after the event is finished because the event handling can be finished before the event task is
                 // fully removed from the queue.
-                auto f = queue.m_spQueueImpl->m_workerThread.submit([]() noexcept {});
-                f.wait();
+                auto f = queue.m_spQueueImpl->m_workerThread.submitErrorBarrier();
+                f.get();
             }
         };
     } // namespace trait
