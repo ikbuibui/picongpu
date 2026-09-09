@@ -4,13 +4,14 @@
  */
 #pragma once
 
-#include "pmacc/async/Context.hpp"
 #include "pmacc/fields/operations/AddExchangeToBorder.hpp"
 #include "pmacc/fields/operations/CopyGuardToExchange.hpp"
 #include "pmacc/traits/NumberOfExchanges.hpp"
 
 #include <array>
 #include <vector>
+
+#include <caravan/core.hpp>
 
 namespace pmacc::fields
 {
@@ -43,7 +44,7 @@ namespace pmacc::fields
      */
     template<typename T_Field, typename T_Queue>
     caravan::Event spawnCommunication(
-        async::Context& context,
+        caravan::ControlContext& context,
         T_Queue& queue,
         T_Field& field,
         caravan::Event previous = {})

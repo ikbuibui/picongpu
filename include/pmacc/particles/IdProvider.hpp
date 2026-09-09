@@ -22,13 +22,14 @@
 #pragma once
 
 #include "pmacc/algorithms/reverseBits.hpp"
-#include "pmacc/async/Operations.hpp"
 #include "pmacc/kernel/atomic.hpp"
 #include "pmacc/lockstep/Kernel.hpp"
 #include "pmacc/memory/buffers/HostDeviceBuffer.hpp"
 #include "pmacc/types.hpp"
 
 #include <bit>
+
+#include <caravan/alpaka.hpp>
 
 namespace pmacc
 {
@@ -103,7 +104,7 @@ namespace pmacc
             auto fetch = PMACC_LOCKSTEP_KERNEL(FetchId{}).template config<1>(1).sender(
                 queue,
                 getDeviceGenerator(),
-                async::retain(deviceBuffer.data(), deviceBuffer.getOwnedAlpakaView()));
+                caravan::alpaka::retain(deviceBuffer.data(), deviceBuffer.getOwnedAlpakaView()));
             auto copy = newIdBuffer->deviceToHost(queue);
             return caravan::then(
                 caravan::alpaka::sequence(std::move(fetch), std::move(copy)),

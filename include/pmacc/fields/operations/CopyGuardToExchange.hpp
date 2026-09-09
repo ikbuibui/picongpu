@@ -22,7 +22,6 @@
 
 #pragma once
 
-#include "pmacc/async/Operations.hpp"
 #include "pmacc/lockstep.hpp"
 #include "pmacc/mappings/kernel/ExchangeMapping.hpp"
 #include "pmacc/mappings/kernel/MappingDescription.hpp"
@@ -31,6 +30,8 @@
 #include "pmacc/types.hpp"
 
 #include <boost/core/ignore_unused.hpp>
+
+#include <caravan/alpaka.hpp>
 
 namespace pmacc
 {
@@ -161,10 +162,10 @@ namespace pmacc
                         .config(mapper.getGridDim(), SuperCellSize{})
                         .sender(
                             queue,
-                            async::retain(
+                            caravan::alpaka::retain(
                                 srcBuffer.getSendExchange(exchangeType).getDeviceBuffer().getDataBox(),
                                 exchange),
-                            async::retain(srcBuffer.getDeviceBuffer().getDataBox(), source),
+                            caravan::alpaka::retain(srcBuffer.getDeviceBuffer().getDataBox(), source),
                             srcBuffer.getSendExchange(exchangeType).getDeviceBuffer().capacityND(),
                             direction,
                             mapper);

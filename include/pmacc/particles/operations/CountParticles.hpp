@@ -21,7 +21,6 @@
 
 #pragma once
 
-#include "pmacc/async/Operations.hpp"
 #include "pmacc/kernel/atomic.hpp"
 #include "pmacc/lockstep.hpp"
 #include "pmacc/mappings/kernel/AreaMapping.hpp"
@@ -36,6 +35,8 @@
 
 #include <memory>
 #include <utility>
+
+#include <caravan/alpaka.hpp>
 
 namespace pmacc
 {
@@ -142,13 +143,13 @@ namespace pmacc
         {
             auto counter = std::make_shared<GridBuffer<uint64_cu, DIM1>>(DataSpace<DIM1>(1));
             auto const mapper = makeAreaMapper<AREA>(cellDescription);
-            auto initialize = async::fill(queue, counter->getDeviceBuffer().getOwnedAlpakaView(), 0u);
+            auto initialize = caravan::alpaka::fill(queue, counter->getDeviceBuffer().getOwnedAlpakaView(), 0u);
             auto count = PMACC_LOCKSTEP_KERNEL(KernelCountParticles{})
                              .config(mapper.getGridDim(), buffer)
                              .sender(
                                  queue,
                                  buffer.getDeviceParticlesBox(),
-                                 async::retain(
+                                 caravan::alpaka::retain(
                                      counter->getDeviceBuffer().data(),
                                      counter->getDeviceBuffer().getOwnedAlpakaView()),
                                  filter,

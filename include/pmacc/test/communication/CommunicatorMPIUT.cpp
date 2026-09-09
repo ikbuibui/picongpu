@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
  */
 #include <pmacc/Environment.hpp>
-#include <pmacc/async/Context.hpp>
 #include <pmacc/dimensions/DataSpace.hpp>
 #include <pmacc/math/operation/Add.hpp>
 #include <pmacc/mpi/GatherSlice.hpp>
@@ -13,6 +12,7 @@
 #include <array>
 #include <stdexcept>
 
+#include <caravan/core.hpp>
 #include <caravan/mpi.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -32,7 +32,7 @@ TEST_CASE("CommunicatorMPI consumes Caravan topology snapshots")
 
     std::array<std::uint32_t, 2> signalInput{static_cast<std::uint32_t>(topology.rank + 1), 1u};
     std::array<std::uint32_t, 2> signalOutput{};
-    pmacc::async::Context context;
+    caravan::ControlContext context;
     auto signalReduction = context.spawnFuture<caravan::AllReduceResult>(communicator.signalAllReduce(
         signalInput.data(),
         signalOutput.data(),

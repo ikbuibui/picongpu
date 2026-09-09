@@ -22,8 +22,6 @@
 #include <pmacc/boost_workaround.hpp>
 
 #include <pmacc/Environment.hpp>
-#include <pmacc/async/Context.hpp>
-#include <pmacc/async/Operations.hpp>
 #include <pmacc/lockstep.hpp>
 #include <pmacc/memory/buffers/HostDeviceBuffer.hpp>
 #include <pmacc/verify.hpp>
@@ -33,6 +31,8 @@
 #include <string>
 #include <tuple>
 
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 /** @file
@@ -80,7 +80,7 @@ inline auto iotaGerneric(T_DeviceBuffer& devBuffer, T_Queue& queue)
     uint32_t const numBlocks = bufferSize / T_chunkSize / 2u;
     return PMACC_LOCKSTEP_KERNEL(IotaGenericKernel{})
         .config<T_chunkSize>(numBlocks)
-        .sender(queue, pmacc::async::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
+        .sender(queue, caravan::alpaka::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
 
 // doc-include-end: lockstep generic kernel
@@ -103,7 +103,7 @@ inline auto iotaGernericBufferDerivedChunksize(T_DeviceBuffer& devBuffer, T_Queu
     constexpr uint32_t numBlocks = 9;
     return PMACC_LOCKSTEP_KERNEL(IotaGenericKernel{})
         .config(numBlocks, devBuffer)
-        .sender(queue, pmacc::async::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
+        .sender(queue, caravan::alpaka::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
 
 // doc-include-end: lockstep generic kernel buffer selected domain size
@@ -147,7 +147,7 @@ inline auto iotaFixedChunkSize(T_DeviceBuffer& devBuffer, T_Queue& queue)
     constexpr uint32_t numBlocks = 10;
     return PMACC_LOCKSTEP_KERNEL(IotaFixedChunkSizeKernel{})
         .config(numBlocks)
-        .sender(queue, pmacc::async::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
+        .sender(queue, caravan::alpaka::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
 
 // doc-include-end: lockstep generic kernel hard coded domain size
@@ -193,7 +193,7 @@ inline auto iotaFixedChunkSizeND(T_DeviceBuffer& devBuffer, T_Queue& queue)
     constexpr uint32_t numBlocks = 11;
     return PMACC_LOCKSTEP_KERNEL(IotaFixedChunkSizeKernelND{})
         .config(numBlocks)
-        .sender(queue, pmacc::async::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
+        .sender(queue, caravan::alpaka::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
 
 // doc-include-end: lockstep generic kernel hard coded N dimensional domain size
@@ -239,7 +239,7 @@ inline auto iotaGernericWithDynSharedMem(T_DeviceBuffer& devBuffer, T_Queue& que
     constexpr size_t requiredSharedMemBytes = T_chunkSize * sizeof(uint32_t);
     return PMACC_LOCKSTEP_KERNEL(IotaGenericKernelWithDynSharedMem{})
         .configSMem<T_chunkSize>(numBlocks, requiredSharedMemBytes)
-        .sender(queue, pmacc::async::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
+        .sender(queue, caravan::alpaka::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
 
 // doc-include-end: lockstep generic kernel with dynamic shared memory
@@ -276,7 +276,7 @@ TEST_CASE("lockstep kernel", "[iota]")
     using DeviceBuf = DeviceBuffer<uint32_t, DIM1>;
     auto const device = manager::Device<ComputeDevice>::get().current();
     ComputeDeviceQueue queue(device);
-    async::Context context;
+    caravan::ControlContext context;
 
     // register all required test functions
     auto testsFunctions = std::make_tuple(
@@ -294,7 +294,7 @@ TEST_CASE("lockstep kernel", "[iota]")
 
     auto runTest = [&](auto&& function)
     {
-        auto initialize = async::fill(queue, hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u);
+        auto initialize = caravan::alpaka::fill(queue, hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u);
         auto kernel = function(hostDeviceBuffer.getDeviceBuffer(), queue);
         auto copy = hostDeviceBuffer.deviceToHost(queue);
         context.wait(context.spawn(

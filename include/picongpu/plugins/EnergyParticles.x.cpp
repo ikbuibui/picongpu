@@ -29,7 +29,6 @@
 #include "picongpu/plugins/misc/misc.hpp"
 #include "picongpu/plugins/multi/multi.hpp"
 
-#include <pmacc/async/Operations.hpp>
 #include <pmacc/dataManagement/DataConnector.hpp>
 #include <pmacc/lockstep.hpp>
 #include <pmacc/lockstep/lockstep.hpp>
@@ -49,6 +48,8 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+
+#include <caravan/alpaka.hpp>
 
 namespace picongpu
 {
@@ -348,7 +349,7 @@ namespace picongpu
             auto& queue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
             auto binaryKernel = [&](auto filter)
             {
-                auto initialize = async::fill(queue, gEnergy->getDeviceBuffer().getOwnedAlpakaView(), 0u);
+                auto initialize = caravan::alpaka::fill(queue, gEnergy->getDeviceBuffer().getOwnedAlpakaView(), 0u);
                 auto kernel = PMACC_LOCKSTEP_KERNEL(KernelEnergyParticles{})
                                   .config(mapper.getGridDim(), *particles)
                                   .sender(

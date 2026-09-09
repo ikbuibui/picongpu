@@ -22,7 +22,6 @@
 #pragma once
 
 #include "pmacc/assert.hpp"
-#include "pmacc/async.hpp"
 #include "pmacc/dimensions/GridLayout.hpp"
 #include "pmacc/mappings/simulation/GridController.hpp"
 #include "pmacc/memory/buffers/DeviceBuffer.hpp"
@@ -34,6 +33,8 @@
 #include <optional>
 #include <stdexcept>
 
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 #include <caravan/mpi.hpp>
 
 namespace pmacc

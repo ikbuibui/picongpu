@@ -25,12 +25,13 @@
 #include "pmacc/alpakaHelper/Device.hpp"
 #include "pmacc/alpakaHelper/acc.hpp"
 #include "pmacc/assert.hpp"
-#include "pmacc/async/Operations.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/memory/Array.hpp"
 #include "pmacc/memory/boxes/DataBoxDim1Access.hpp"
 #include "pmacc/memory/boxes/PitchedBox.hpp"
 #include "pmacc/memory/buffers/Buffer.hpp"
+
+#include <caravan/alpaka.hpp>
 
 namespace pmacc
 {
@@ -76,7 +77,7 @@ namespace pmacc
         /** View retaining the underlying allocation for asynchronous operation state. */
         auto getOwnedAlpakaView() const
         {
-            return async::OwnedView{*view, *hostBuffer};
+            return caravan::alpaka::OwnedView{*view, *hostBuffer};
         }
 
         /** Allocate uninitialized data accessible from the host.

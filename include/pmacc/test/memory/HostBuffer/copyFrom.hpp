@@ -23,10 +23,11 @@
 
 /* #includes in "test/memoryUT.cu" */
 
-#include "pmacc/async/Context.hpp"
-#include "pmacc/async/Operations.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/memory/buffers/HostBuffer.hpp"
+
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 
 namespace pmacc
 {
@@ -53,7 +54,7 @@ namespace pmacc
                         std::vector<size_t> nElementsPerDim = getElementsPerDim<T_Dim>();
                         auto const device = manager::Device<ComputeDevice>::get().current();
                         ComputeDeviceQueue queue(device);
-                        async::Context context;
+                        caravan::ControlContext context;
 
                         for(unsigned i = 0; i < nElementsPerDim.size(); ++i)
                         {
@@ -70,14 +71,14 @@ namespace pmacc
                             }
 
                             context.wait(context.spawn(
-                                async::copy(
+                                caravan::alpaka::copy(
                                     queue,
                                     deviceBuffer.getOwnedAlpakaView(),
                                     hostBuffer.getOwnedAlpakaView(),
                                     dataSpace.toAlpakaMemVec())));
                             hostBuffer.reset();
                             context.wait(context.spawn(
-                                async::copy(
+                                caravan::alpaka::copy(
                                     queue,
                                     hostBuffer.getOwnedAlpakaView(),
                                     deviceBuffer.getOwnedAlpakaView(),

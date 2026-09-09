@@ -225,7 +225,7 @@ TEST_CASE("Particle chunk senders are lazy", "[particles][async]")
 {
     auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
     pmacc::ComputeDeviceQueue queue(device);
-    pmacc::async::Context context;
+    caravan::ControlContext context;
     MockParticles particles;
     auto sender = pmacc::particles::sendChunks(queue, particles, 1u);
     static_assert(caravan::Sender<decltype(sender)>);
@@ -239,7 +239,7 @@ TEST_CASE("Particle chunk senders propagate stopped completion", "[particles][as
 {
     auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
     pmacc::ComputeDeviceQueue queue(device);
-    pmacc::async::Context context;
+    caravan::ControlContext context;
     MockParticles particles;
     particles.buffer.failure = FailurePoint::packingStopped;
     CHECK_THROWS_AS(
@@ -251,7 +251,7 @@ TEST_CASE("Particle communication handles exact and partial chunks", "[particles
 {
     auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
     pmacc::ComputeDeviceQueue queue(device);
-    pmacc::async::Context context;
+    caravan::ControlContext context;
     MockParticles particles;
     context.wait(pmacc::particles::spawnCommunication(context, queue, particles));
     CHECK(particles.buffer.sendChunk == 2u);
@@ -264,7 +264,7 @@ TEST_CASE("Particle communication handles empty chunks", "[particles][async]")
 {
     auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
     pmacc::ComputeDeviceQueue queue(device);
-    pmacc::async::Context context;
+    caravan::ControlContext context;
     MockParticles particles;
     particles.buffer.sendChunks = {0u, 0u};
     particles.buffer.receiveChunks = {0u, 0u};
@@ -289,7 +289,7 @@ TEST_CASE("Particle communication forwards callback failures", "[particles][asyn
          FailurePoint::insertion,
          FailurePoint::retrySetup})
     {
-        pmacc::async::Context context;
+        caravan::ControlContext context;
         MockParticles particles;
         particles.buffer.failure = failure;
         CHECK_THROWS_AS(

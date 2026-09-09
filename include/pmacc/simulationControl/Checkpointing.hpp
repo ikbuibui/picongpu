@@ -23,7 +23,6 @@
 #pragma once
 
 #include "pmacc/Environment.hpp"
-#include "pmacc/async/Context.hpp"
 #include "pmacc/filesystem.hpp"
 #include "pmacc/mappings/simulation/Filesystem.hpp"
 #include "pmacc/mappings/simulation/GridController.hpp"
@@ -44,6 +43,8 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include <caravan/core.hpp>
 
 namespace pmacc::simulationControl
 {
@@ -146,7 +147,7 @@ namespace pmacc::simulationControl
         }
 
         template<unsigned DIM>
-        void dump(uint32_t currentStep, async::Context& asyncContext)
+        void dump(uint32_t currentStep, caravan::ControlContext& asyncContext)
         {
             /* trigger checkpoint notification */
             if(pluginSystem::containsStep(seqCheckpointPeriod, currentStep))
@@ -409,7 +410,7 @@ namespace pmacc::simulationControl
         }
 
         template<unsigned DIM>
-        void dump(uint32_t currentStep, async::Context&)
+        void dump(uint32_t currentStep, caravan::ControlContext&)
         {
         }
 

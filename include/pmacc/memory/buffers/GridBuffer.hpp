@@ -489,7 +489,7 @@ namespace pmacc
 
         /** Eager runtime-sized boundary for dynamically selected exchange directions. */
         template<typename T_Queue>
-        caravan::Event spawnCommunication(async::Context& context, T_Queue& queue)
+        caravan::Event spawnCommunication(caravan::ControlContext& context, T_Queue& queue)
         {
             std::vector<caravan::Event> branches;
             branches.reserve(maxExchange * 2u);

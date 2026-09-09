@@ -30,7 +30,6 @@
 #include "picongpu/plugins/multi/multi.hpp"
 #include "picongpu/simulation/control/MovingWindow.hpp"
 
-#include <pmacc/async/Operations.hpp>
 #include <pmacc/dataManagement/DataConnector.hpp>
 #include <pmacc/kernel/atomic.hpp>
 #include <pmacc/lockstep.hpp>
@@ -56,6 +55,7 @@
 #include <utility>
 #include <vector>
 
+#include <caravan/alpaka.hpp>
 #include <caravan/mpi.hpp>
 
 namespace picongpu
@@ -450,11 +450,11 @@ namespace picongpu
             {
                 auto initialize = caravan::alpaka::sequence(
                     caravan::alpaka::sequence(
-                        async::fill(queue, gSumMom2->getDeviceBuffer().getOwnedAlpakaView(), 0u),
-                        async::fill(queue, gSumPos2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
+                        caravan::alpaka::fill(queue, gSumMom2->getDeviceBuffer().getOwnedAlpakaView(), 0u),
+                        caravan::alpaka::fill(queue, gSumPos2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
                     caravan::alpaka::sequence(
-                        async::fill(queue, gSumMomPos->getDeviceBuffer().getOwnedAlpakaView(), 0u),
-                        async::fill(queue, gCount_e->getDeviceBuffer().getOwnedAlpakaView(), 0u)));
+                        caravan::alpaka::fill(queue, gSumMomPos->getDeviceBuffer().getOwnedAlpakaView(), 0u),
+                        caravan::alpaka::fill(queue, gCount_e->getDeviceBuffer().getOwnedAlpakaView(), 0u)));
                 auto kernel = PMACC_LOCKSTEP_KERNEL(KernelCalcEmittance{})
                                   .config(mapper.getGridDim(), *particles)
                                   .sender(
