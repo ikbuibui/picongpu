@@ -7,7 +7,7 @@
 #include <type_traits>
 #include <utility>
 
-#include <caravan/core/sender.hpp>
+#include <caravan/core/eager.hpp>
 
 namespace caravan
 {
@@ -29,6 +29,7 @@ namespace caravan
 
                 void start() & noexcept
                 {
+                    ExecutorThreadGuard guard;
                     m_receiver.set_value();
                 }
 
@@ -44,16 +45,19 @@ namespace caravan
         };
 
     public:
+        auto schedule() const noexcept
+        {
+            return ScheduleSender{};
+        }
+
+    private:
         template<typename T_Function>
         void post(T_Function&& function) const
         {
             std::forward<T_Function>(function)();
         }
 
-        auto schedule() const noexcept
-        {
-            return ScheduleSender{};
-        }
+        friend class Event;
     };
 
 } // namespace caravan

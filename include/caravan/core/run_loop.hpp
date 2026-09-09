@@ -110,15 +110,16 @@ namespace caravan
     class RunLoopScheduler
     {
     public:
+        RunLoopScheduleSender schedule() const noexcept;
+
+    private:
+        // Callable submission is only for the scheduling sender and eager wait observers.
         template<typename T_Function>
         void post(T_Function&& function) const
         {
             m_loop->post(std::forward<T_Function>(function));
         }
 
-        RunLoopScheduleSender schedule() const noexcept;
-
-    private:
         explicit RunLoopScheduler(RunLoop& loop) : m_loop(&loop)
         {
         }
@@ -126,6 +127,8 @@ namespace caravan
         RunLoop* m_loop;
 
         friend class RunLoop;
+        friend class RunLoopScheduleSender;
+        friend class Event;
     };
 
     /** Lazy scheduling operation for the manually driven run loop. */
@@ -147,6 +150,11 @@ namespace caravan
                 , m_receiver(std::move(receiver))
             {
             }
+
+            Operation(Operation const&) = delete;
+            Operation& operator=(Operation const&) = delete;
+            Operation(Operation&&) = delete;
+            Operation& operator=(Operation&&) = delete;
 
             void start() & noexcept
             {
