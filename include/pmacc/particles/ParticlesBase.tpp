@@ -40,9 +40,8 @@ namespace pmacc
         uint32_t exchangeType)
     {
         ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
-        return PMACC_LOCKSTEP_KERNEL(KernelDeleteParticles{})
-            .config(mapper.getGridDim(), *particlesBuffer)
-            .sender(queue, particlesBuffer->getDeviceParticleBox(), mapper);
+        return lockstep::exec::kernel(KernelDeleteParticles{})
+            .config(mapper.getGridDim(), *particlesBuffer)(queue, particlesBuffer->getDeviceParticleBox(), mapper);
     }
 
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
@@ -50,9 +49,8 @@ namespace pmacc
     auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::deleteParticlesInAreaAsync(T_Queue& queue)
     {
         auto const mapper = makeAreaMapper<T_area>(this->cellDescription);
-        return PMACC_LOCKSTEP_KERNEL(KernelDeleteParticles{})
-            .config(mapper.getGridDim(), *particlesBuffer)
-            .sender(queue, particlesBuffer->getDeviceParticleBox(), mapper);
+        return lockstep::exec::kernel(KernelDeleteParticles{})
+            .config(mapper.getGridDim(), *particlesBuffer)(queue, particlesBuffer->getDeviceParticleBox(), mapper);
     }
 
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
@@ -64,9 +62,8 @@ namespace pmacc
         ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
         auto stack = particlesBuffer->getSendExchangeStack(exchangeType);
         auto reset = stack.resetAsync(queue);
-        auto copy = PMACC_LOCKSTEP_KERNEL(KernelCopyGuardToExchange{})
-                        .config(mapper.getGridDim(), *particlesBuffer)
-                        .sender(
+        auto copy = lockstep::exec::kernel(KernelCopyGuardToExchange{})
+                        .config(mapper.getGridDim(), *particlesBuffer)(
                             queue,
                             particlesBuffer->getDeviceParticleBox(),
                             stack.getDeviceExchangePushDataBox(),
@@ -84,9 +81,8 @@ namespace pmacc
         size_t numParticles)
     {
         ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
-        return PMACC_LOCKSTEP_KERNEL(KernelInsertParticles{})
-            .config(numParticles, *particlesBuffer)
-            .sender(
+        return lockstep::exec::kernel(KernelInsertParticles{})
+            .config(numParticles, *particlesBuffer)(
                 queue,
                 particlesBuffer->getDeviceParticleBox(),
                 particlesBuffer->getReceiveExchangeStack(exchangeType).getDeviceExchangePopDataBox(),

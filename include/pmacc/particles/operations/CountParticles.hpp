@@ -144,9 +144,8 @@ namespace pmacc
             auto counter = std::make_shared<GridBuffer<uint64_cu, DIM1>>(DataSpace<DIM1>(1));
             auto const mapper = makeAreaMapper<AREA>(cellDescription);
             auto initialize = caravan::alpaka::fill(queue, counter->getDeviceBuffer().getOwnedAlpakaView(), 0u);
-            auto count = PMACC_LOCKSTEP_KERNEL(KernelCountParticles{})
-                             .config(mapper.getGridDim(), buffer)
-                             .sender(
+            auto count = lockstep::exec::kernel(KernelCountParticles{})
+                             .config(mapper.getGridDim(), buffer)(
                                  queue,
                                  buffer.getDeviceParticlesBox(),
                                  caravan::alpaka::retain(
