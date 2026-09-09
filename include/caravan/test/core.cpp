@@ -257,19 +257,18 @@ namespace
         {
             void start() & noexcept
             {
-                *observed += receiver.get_env();
                 receiver.set_value(value);
             }
 
             int value;
-            int* observed;
             T_Receiver receiver;
         };
 
         template<typename T_Receiver>
         auto connect(T_Receiver&& receiver) &&
         {
-            return Operation<std::decay_t<T_Receiver>>{value, observed, std::forward<T_Receiver>(receiver)};
+            *observed += receiver.get_env();
+            return Operation<std::decay_t<T_Receiver>>{value, std::forward<T_Receiver>(receiver)};
         }
 
         int value;
@@ -680,6 +679,7 @@ namespace
                                   { return EnvironmentSender{left + right, &environmentObservations}; })
               | caravan::continuesOn(caravan::InlineScheduler{}) | caravan::then([](int value) { return value + 1; });
         auto environmentOperation = std::move(environmentChain).connect(EnvironmentReceiver{&environmentResult});
+        assert(environmentObservations == 20);
         environmentOperation.start();
         assert(environmentObservations == 30 && environmentResult == 42);
 
