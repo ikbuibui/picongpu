@@ -316,19 +316,19 @@ namespace pmacc
                                      cellDesc);
                 auto fill = destSpecies.fillAllGapsAsync(queue);
                 auto copy = counterBuffer->deviceToHost(queue);
-                return caravan::then(
-                    caravan::alpaka::sequence(
-                        caravan::alpaka::sequence(
-                            caravan::alpaka::sequence(std::move(initialize), std::move(split)),
-                            std::move(fill)),
-                        std::move(copy)),
-                    [counterBuffer, numParticles, logLvl]
-                    {
-                        auto const counter = counterBuffer->getHostBuffer().getDataBox();
-                        log(logLvl, "used frames to load particles: %1%") % counter[2];
-                        if(static_cast<uint64_t>(counter[1]) != numParticles)
-                            throw std::runtime_error("Failed to load expected number of particles to GPU.");
-                    });
+                return caravan::alpaka::sequence(
+                           caravan::alpaka::sequence(
+                               caravan::alpaka::sequence(std::move(initialize), std::move(split)),
+                               std::move(fill)),
+                           std::move(copy))
+                       | caravan::then(
+                           [counterBuffer, numParticles, logLvl]
+                           {
+                               auto const counter = counterBuffer->getHostBuffer().getDataBox();
+                               log(logLvl, "used frames to load particles: %1%") % counter[2];
+                               if(static_cast<uint64_t>(counter[1]) != numParticles)
+                                   throw std::runtime_error("Failed to load expected number of particles to GPU.");
+                           });
             }
 
         } // namespace operations

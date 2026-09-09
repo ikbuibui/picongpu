@@ -88,8 +88,8 @@ int main()
     caravan::AsyncScope scope;
     std::thread::id continuationThread;
     auto completion = scope.spawn(
-        caravan::then(
-            caravan::continuesOn(std::move(sender), loop.scheduler()),
+        std::move(sender) | caravan::continuesOn(loop.scheduler())
+        | caravan::then(
             [&]
             {
                 assert(!caravan::alpaka::isCompletionCallback());
@@ -136,9 +136,8 @@ int main()
     bool callbackContextObserved = false;
     scope
         .spawn(
-            caravan::then(
-                caravan::alpaka::submit(queue, [](Queue&) {}),
-                [&] { callbackContextObserved = caravan::alpaka::isCompletionCallback(); }))
+            caravan::alpaka::submit(queue, [](Queue&) {})
+            | caravan::then([&] { callbackContextObserved = caravan::alpaka::isCompletionCallback(); }))
         .wait();
     assert(!callbackContextObserved);
 
@@ -176,8 +175,8 @@ int main()
 
     // Submission cleanup must not wait on the alpaka callback/completion path that started the successor.
     auto reentrantFailure = scope.spawn(
-        caravan::letValue(
-            caravan::alpaka::submit(queue, [](Queue&) {}),
+        caravan::alpaka::submit(queue, [](Queue&) {})
+        | caravan::letValue(
             [&]
             {
                 return caravan::alpaka::submit(queue, [](Queue&) { throw std::runtime_error("reentrant failure"); });
@@ -202,9 +201,8 @@ int main()
     auto stoppedScheduler = stoppedLoop.scheduler();
     stoppedLoop.finish();
     auto failedTransfer = scope.spawn(
-        caravan::continuesOn(
-            caravan::alpaka::fill(queue, alpaka::allocBuf<int, Idx>(device, one), 0u),
-            stoppedScheduler));
+        caravan::alpaka::fill(queue, alpaka::allocBuf<int, Idx>(device, one), 0u)
+        | caravan::continuesOn(stoppedScheduler));
     expectFailed(failedTransfer);
 
     scope.join().wait();
