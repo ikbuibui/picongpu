@@ -21,8 +21,6 @@
 
 #pragma once
 
-#include <pmacc/async/Context.hpp>
-#include <pmacc/async/Operations.hpp>
 #include <pmacc/lockstep.hpp>
 #include <pmacc/lockstep/lockstep.hpp>
 #include <pmacc/memory/buffers/HostDeviceBuffer.hpp>
@@ -33,6 +31,8 @@
 #include <cstdint>
 #include <set>
 
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 namespace pmacc
@@ -119,7 +119,7 @@ namespace pmacc
                     auto idProvider = IdProvider("id provider", rank, maxRanks);
                     auto const device = manager::Device<ComputeDevice>::get().current();
                     ComputeDeviceQueue queue(device);
-                    async::Context context;
+                    caravan::ControlContext context;
                     context.wait(context.spawn(idProvider.initialize(queue)));
                     auto getNewId = [&]
                     {
@@ -152,15 +152,16 @@ namespace pmacc
                     HostDeviceBuffer<uint64_t, 1> idBuf(numIds);
                     auto& deviceBuffer = idBuf.getDeviceBuffer();
 
-                    auto generate
-                        = PMACC_LOCKSTEP_KERNEL(GenerateIds<numIdsPerBlock>{})
-                              .template config<numIdsPerBlock>(numBlocks)
-                              .sender(
-                                  queue,
-                                  async::retain(deviceBuffer.getDataBox(), deviceBuffer.getOwnedAlpakaView()),
-                                  idProvider.getDeviceGenerator(),
-                                  numThreads,
-                                  numIdsPerThread);
+                    auto generate = PMACC_LOCKSTEP_KERNEL(GenerateIds<numIdsPerBlock>{})
+                                        .template config<numIdsPerBlock>(numBlocks)
+                                        .sender(
+                                            queue,
+                                            caravan::alpaka::retain(
+                                                deviceBuffer.getDataBox(),
+                                                deviceBuffer.getOwnedAlpakaView()),
+                                            idProvider.getDeviceGenerator(),
+                                            numThreads,
+                                            numIdsPerThread);
                     auto copy = idBuf.deviceToHost(queue);
                     context.wait(context.spawn(caravan::alpaka::sequence(std::move(generate), std::move(copy))));
                     REQUIRE(numIds == ids.size());

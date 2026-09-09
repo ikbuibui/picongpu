@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
  */
 #include <pmacc/alpakaHelper/acc.hpp>
-#include <pmacc/async.hpp>
 #include <pmacc/device/Reduce.hpp>
 #include <pmacc/fields/Communication.hpp>
 #include <pmacc/mappings/kernel/MappingDescription.hpp>
@@ -20,6 +19,7 @@
 #include <thread>
 
 #include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 namespace
@@ -90,18 +90,18 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
     auto step = caravan::alpaka::sequence(
         caravan::alpaka::sequence(
             caravan::alpaka::sequence(
-                pmacc::async::fill(queue, device->getOwnedAlpakaView(), 0u),
-                pmacc::async::copy(queue, device->getOwnedAlpakaView(), input->getOwnedAlpakaView(), extent)),
-            pmacc::async::kernel<pmacc::Acc<DIM1>>(
+                caravan::alpaka::fill(queue, device->getOwnedAlpakaView(), 0u),
+                caravan::alpaka::copy(queue, device->getOwnedAlpakaView(), input->getOwnedAlpakaView(), extent)),
+            caravan::alpaka::kernel<pmacc::Acc<DIM1>>(
                 queue,
                 workDiv,
                 Increment{},
-                pmacc::async::retain(device->data(), device->getOwnedAlpakaView()))),
+                caravan::alpaka::retain(device->data(), device->getOwnedAlpakaView()))),
         caravan::alpaka::sequence(
             caravan::alpaka::size(queue, device->sizeOnDeviceBuffer(), device->sizeHostSideBuffer()),
-            pmacc::async::copy(queue, output.getOwnedAlpakaView(), device->getOwnedAlpakaView(), extent)));
+            caravan::alpaka::copy(queue, output.getOwnedAlpakaView(), device->getOwnedAlpakaView(), extent)));
 
-    pmacc::async::Context context;
+    caravan::ControlContext context;
     auto const applicationThread = std::this_thread::get_id();
     bool continued = false;
     auto completion = context.spawn(
@@ -180,7 +180,7 @@ TEST_CASE("Host-device buffer queue overloads return lazy copies", "[async][memo
     buffer.getHostBuffer().data()[1] = 99;
     buffer.getHostBuffer().setSizeHostSide(1u);
 
-    pmacc::async::Context context;
+    caravan::ControlContext context;
     context.wait(context.spawn(buffer.hostToDevice(queue)));
 
     buffer.getDeviceBuffer().setSizeHostSide(0u);

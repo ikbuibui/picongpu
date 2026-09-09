@@ -22,11 +22,12 @@
 #pragma once
 
 #include "pmacc/Environment.hpp"
-#include "pmacc/async/Operations.hpp"
 #include "pmacc/lockstep/lockstep.hpp"
 #include "pmacc/random/RNGProvider.hpp"
 
 #include <memory>
+
+#include <caravan/alpaka.hpp>
 
 namespace pmacc
 {
@@ -80,7 +81,7 @@ namespace pmacc
                 .template config<blockSize>(gridSize)
                 .sender(
                     queue,
-                    async::retain(deviceBuffer.getDataBox(), deviceBuffer.getOwnedAlpakaView()),
+                    caravan::alpaka::retain(deviceBuffer.getDataBox(), deviceBuffer.getOwnedAlpakaView()),
                     seed,
                     m_size);
         }
