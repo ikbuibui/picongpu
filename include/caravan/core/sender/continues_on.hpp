@@ -100,7 +100,7 @@ namespace caravan
                 }
                 catch(...)
                 {
-                    m_receiver.set_error(std::current_exception());
+                    transferError(std::current_exception());
                     return;
                 }
                 m_scheduled.start();
