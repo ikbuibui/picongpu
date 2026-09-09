@@ -1,5 +1,6 @@
-# This file is part of PIConGPU.
-# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+# This file is part of Caravan.
+# SPDX-License-Identifier: MPL-2.0
+
 cmake_minimum_required(VERSION 3.28)
 project(Caravan LANGUAGES CXX)
 
