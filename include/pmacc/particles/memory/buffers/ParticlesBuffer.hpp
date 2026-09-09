@@ -295,11 +295,10 @@ namespace pmacc
         template<typename T_Queue>
         auto receiveParticles(T_Queue& queue, uint32_t exchange)
         {
-            return caravan::then(
-                caravan::whenAll(
-                    framesExchanges->receive(queue, exchange),
-                    exchangeMemoryIndexer->receive(queue, exchange)),
-                [](auto&&...) {});
+            return caravan::whenAll(
+                       framesExchanges->receive(queue, exchange),
+                       exchangeMemoryIndexer->receive(queue, exchange))
+                   | caravan::then([](auto&&...) {});
         }
 
         /**

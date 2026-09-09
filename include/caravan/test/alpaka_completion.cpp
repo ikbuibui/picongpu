@@ -109,7 +109,7 @@ int main(int argc, char** argv)
             caravan::alpaka::submit(
                 queue,
                 [gate](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [gate] { gate.wait(); }); }));
-        scope.spawn(caravan::then(caravan::alpaka::submit(secondQueue, [](Queue&) {}), [&] { release.set_value(); }))
+        scope.spawn(caravan::alpaka::submit(secondQueue, [](Queue&) {}) | caravan::then([&] { release.set_value(); }))
             .wait();
         pending.wait();
     }
@@ -186,8 +186,8 @@ int main(int argc, char** argv)
 
     // Receiver delivery uses the same blocking guards as the other Caravan progress authorities.
     auto nestedWait = scope.spawn(
-        caravan::then(
-            caravan::alpaka::submit(queue, [](Queue&) {}),
+        caravan::alpaka::submit(queue, [](Queue&) {})
+        | caravan::then(
             [&]
             {
                 assert(caravan::isExecutorThread());

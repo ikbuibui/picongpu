@@ -205,57 +205,59 @@ auto run(caravan::MpiContext& mpi) -> int
                             DX,
                             DT,
                             coreMapper);
-        auto deviceStep = caravan::letValue(
-            asyncContext.onControl(caravan::whenAll(std::move(core), caravan::asSender(std::move(communication)))),
-            [&,
-             readView = buff1->getDeviceBuffer().getOwnedAlpakaView(),
-             writeView = buff2->getDeviceBuffer().getOwnedAlpakaView(),
-             residualView = residualBuffer->getDeviceBuffer().getOwnedAlpakaView(),
-             residualHostView = residualBuffer->getHostBuffer().getOwnedAlpakaView()]() mutable
-            {
-                auto boundary = boundaryKernel(
-                    computeQueue,
-                    caravan::alpaka::retain(buff1->getDeviceBuffer().getDataBox(), readView),
-                    NUM_DEVICES_PER_DIM,
-                    gc.getPosition(),
-                    subGrid.getLocalDomain().offset,
-                    gridSize,
-                    borderMapper);
-                auto border
-                    = pmacc::lockstep::exec::kernel(StencilFourPoint{})
-                          .config(borderMapper.getGridDim(), SuperCell{})(
-                              computeQueue,
-                              caravan::alpaka::retain(buff1->getDeviceBuffer().getDataBox(), readView),
-                              caravan::alpaka::retain(buff2->getDeviceBuffer().getDataBox(), writeView),
-                              caravan::alpaka::retain(residualBuffer->getDeviceBuffer().getDataBox(), residualView),
-                              THERMAL_DIFFUSIVITY,
-                              DX,
-                              DT,
-                              borderMapper);
-                auto copyResidual = caravan::alpaka::copy(
-                    computeQueue,
-                    std::move(residualHostView),
-                    residualView,
-                    pmacc::DataSpace<DIM1>::create(1).toAlpakaMemVec());
-                auto resetResidual = caravan::alpaka::fill(computeQueue, std::move(residualView), 0u);
-                return caravan::alpaka::sequence(
-                    caravan::alpaka::sequence(
-                        caravan::alpaka::sequence(std::move(boundary), std::move(border)),
-                        std::move(copyResidual)),
-                    std::move(resetResidual));
-            });
-        auto step = caravan::letValue(
-            asyncContext.onControl(std::move(deviceStep)),
-            [&]
-            {
-                return caravan::mpi::reduce(
-                    mpi,
-                    caravan::BufferLease::borrowed(residualBuffer->getHostBuffer().data(), sizeof(float)),
-                    caravan::BufferLease::borrowed(&reducedResidual, sizeof(reducedResidual)),
-                    caravan::ScalarType::float32,
-                    caravan::ReduceOperation::sum,
-                    caravan::Peer{0});
-            });
+        auto deviceStep
+            = asyncContext.onControl(caravan::whenAll(std::move(core), caravan::asSender(std::move(communication))))
+              | caravan::letValue(
+                  [&,
+                   readView = buff1->getDeviceBuffer().getOwnedAlpakaView(),
+                   writeView = buff2->getDeviceBuffer().getOwnedAlpakaView(),
+                   residualView = residualBuffer->getDeviceBuffer().getOwnedAlpakaView(),
+                   residualHostView = residualBuffer->getHostBuffer().getOwnedAlpakaView()]() mutable
+                  {
+                      auto boundary = boundaryKernel(
+                          computeQueue,
+                          caravan::alpaka::retain(buff1->getDeviceBuffer().getDataBox(), readView),
+                          NUM_DEVICES_PER_DIM,
+                          gc.getPosition(),
+                          subGrid.getLocalDomain().offset,
+                          gridSize,
+                          borderMapper);
+                      auto border = pmacc::lockstep::exec::kernel(StencilFourPoint{})
+                                        .config(borderMapper.getGridDim(), SuperCell{})(
+                                            computeQueue,
+                                            caravan::alpaka::retain(buff1->getDeviceBuffer().getDataBox(), readView),
+                                            caravan::alpaka::retain(buff2->getDeviceBuffer().getDataBox(), writeView),
+                                            caravan::alpaka::retain(
+                                                residualBuffer->getDeviceBuffer().getDataBox(),
+                                                residualView),
+                                            THERMAL_DIFFUSIVITY,
+                                            DX,
+                                            DT,
+                                            borderMapper);
+                      auto copyResidual = caravan::alpaka::copy(
+                          computeQueue,
+                          std::move(residualHostView),
+                          residualView,
+                          pmacc::DataSpace<DIM1>::create(1).toAlpakaMemVec());
+                      auto resetResidual = caravan::alpaka::fill(computeQueue, std::move(residualView), 0u);
+                      return caravan::alpaka::sequence(
+                          caravan::alpaka::sequence(
+                              caravan::alpaka::sequence(std::move(boundary), std::move(border)),
+                              std::move(copyResidual)),
+                          std::move(resetResidual));
+                  });
+        auto step = asyncContext.onControl(std::move(deviceStep))
+                    | caravan::letValue(
+                        [&]
+                        {
+                            return caravan::mpi::reduce(
+                                mpi,
+                                caravan::BufferLease::borrowed(residualBuffer->getHostBuffer().data(), sizeof(float)),
+                                caravan::BufferLease::borrowed(&reducedResidual, sizeof(reducedResidual)),
+                                caravan::ScalarType::float32,
+                                caravan::ReduceOperation::sum,
+                                caravan::Peer{0});
+                        });
         asyncContext.wait(asyncContext.spawn(std::move(step)));
 
         std::swap(buff1, buff2);

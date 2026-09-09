@@ -67,31 +67,31 @@ int main(int argc, char** argv)
                         Preserve{},
                         alpaka::getPtrNative(deviceValue)),
                     caravan::alpaka::copy(queue, hostValue, deviceValue, one)));
-            auto chain = caravan::letValue(
-                std::move(accelerator),
-                [&]
-                {
-                    mpiStarted = true;
-                    return caravan::whenAll(
-                        caravan::mpi::send(
-                            mpi,
-                            caravan::BufferLease::borrowed(&hostValue[0], sizeof(int)),
-                            caravan::Peer{mpi.topology().rank},
-                            caravan::MessageTag{951}),
-                        caravan::mpi::receive(
-                            mpi,
-                            caravan::BufferLease::borrowed(&received, sizeof(received)),
-                            caravan::Peer{mpi.topology().rank},
-                            caravan::MessageTag{951}));
-                });
+            auto chain = std::move(accelerator)
+                         | caravan::letValue(
+                             [&]
+                             {
+                                 mpiStarted = true;
+                                 return caravan::whenAll(
+                                     caravan::mpi::send(
+                                         mpi,
+                                         caravan::BufferLease::borrowed(&hostValue[0], sizeof(int)),
+                                         caravan::Peer{mpi.topology().rank},
+                                         caravan::MessageTag{951}),
+                                     caravan::mpi::receive(
+                                         mpi,
+                                         caravan::BufferLease::borrowed(&received, sizeof(received)),
+                                         caravan::Peer{mpi.topology().rank},
+                                         caravan::MessageTag{951}));
+                             });
 
             assert(!acceleratorStarted && !mpiStarted);
             auto const applicationThread = std::this_thread::get_id();
             caravan::RunLoop loop;
             caravan::AsyncScope scope;
             auto completion = scope.spawn(
-                caravan::then(
-                    caravan::continuesOn(std::move(chain), loop.scheduler()),
+                std::move(chain) | caravan::continuesOn(loop.scheduler())
+                | caravan::then(
                     [&](caravan::SendResult sent, caravan::ReceiveResult receivedMetadata)
                     {
                         assert(std::this_thread::get_id() == applicationThread);

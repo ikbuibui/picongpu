@@ -17,8 +17,8 @@ TEST_CASE("PMacc async context owns work and drives host continuations", "[async
     caravan::EventSource backendCompletion;
 
     auto operation = context.spawn(
-        caravan::then(
-            context.onControl(caravan::asSender(backendCompletion.event())),
+        context.onControl(caravan::asSender(backendCompletion.event()))
+        | caravan::then(
             [&]
             {
                 ran = true;
@@ -60,9 +60,8 @@ TEST_CASE("PMacc async context owns work and drives host continuations", "[async
 
     caravan::EventSource pending;
     auto checked = context.spawn(
-        caravan::then(
-            context.scheduler().schedule(),
-            [&] { CHECK_THROWS_AS(context.wait(pending.event()), std::logic_error); }));
+        context.scheduler().schedule()
+        | caravan::then([&] { CHECK_THROWS_AS(context.wait(pending.event()), std::logic_error); }));
     context.wait(checked);
 }
 
