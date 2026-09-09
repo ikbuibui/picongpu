@@ -276,16 +276,43 @@ namespace
         int* observed;
     };
 
-    struct RecursionTrackingExecutor
+    struct RecursionTrackingScheduler
     {
-        template<typename T_Function>
-        void post(T_Function&& function)
+        struct ScheduleSender
         {
-            ++*depth;
-            if(*depth > *maxDepth)
-                *maxDepth = *depth;
-            std::forward<T_Function>(function)();
-            --*depth;
+            using completion_signatures = caravan::detail::DefaultCompletionSignatures<caravan::ValueSignature<>>;
+
+            template<typename T_Receiver>
+            struct Operation
+            {
+                void start() & noexcept
+                {
+                    auto* currentDepth = depth;
+                    ++*currentDepth;
+                    if(*currentDepth > *maxDepth)
+                        *maxDepth = *currentDepth;
+                    receiver.set_value();
+                    --*currentDepth;
+                }
+
+                unsigned* depth;
+                unsigned* maxDepth;
+                T_Receiver receiver;
+            };
+
+            template<typename T_Receiver>
+            auto connect(T_Receiver receiver) &&
+            {
+                return Operation<T_Receiver>{depth, maxDepth, std::move(receiver)};
+            }
+
+            unsigned* depth;
+            unsigned* maxDepth;
+        };
+
+        auto schedule() const
+        {
+            return ScheduleSender{depth, maxDepth};
         }
 
         unsigned* depth;
@@ -295,10 +322,6 @@ namespace
     void testInlineScheduler()
     {
         caravan::InlineScheduler scheduler;
-        bool posted = false;
-        scheduler.post([&] { posted = true; });
-        assert(posted);
-
         bool completed = false;
         std::exception_ptr failure;
         bool stopped = false;
@@ -313,16 +336,20 @@ namespace
         caravan::InlineScheduler executor;
         caravan::EventSource source;
         unsigned calls = 0u;
-        auto first = source.event().then(executor, [&] { ++calls; });
+        caravan::AsyncScope scope;
+        auto first = scope.spawn(
+            caravan::asSender(source.event()) | caravan::continuesOn(executor) | caravan::then([&] { ++calls; }));
         auto const firstCompletion = source.setReady();
         auto const duplicateCompletion = source.setReady();
         assert(firstCompletion);
         assert(!duplicateCompletion);
         first.wait();
 
-        auto second = source.event().then(executor, [&] { ++calls; });
+        auto second = scope.spawn(
+            caravan::asSender(source.event()) | caravan::continuesOn(executor) | caravan::then([&] { ++calls; }));
         second.wait();
         assert(calls == 2u);
+        scope.join().wait();
     }
 
     void testRunReadyFairness()
@@ -330,14 +357,15 @@ namespace
         caravan::RunLoop loop;
         auto scheduler = loop.scheduler();
         unsigned runs = 0u;
+        caravan::AsyncScope scope;
         std::function<void()> repost;
         repost = [&]
         {
             ++runs;
             if(runs < 3u)
-                scheduler.post(repost);
+                scope.spawn(caravan::then(scheduler.schedule(), repost));
         };
-        scheduler.post(repost);
+        scope.spawn(caravan::then(scheduler.schedule(), repost));
 
         loop.runReady();
         assert(runs == 1u);
@@ -346,7 +374,6 @@ namespace
         loop.runReady();
         assert(runs == 3u);
 
-        caravan::AsyncScope scope;
         bool scheduled = false;
         auto completion = scope.spawn(caravan::then(scheduler.schedule(), [&] { scheduled = true; }));
         assert(!scheduled && completion.state() == caravan::CompletionState::pending);
@@ -366,11 +393,16 @@ namespace
         caravan::Future<int> mapped;
         bool ran = false;
         bool observationRan = false;
+        caravan::AsyncScope scope;
         {
             auto scheduler = loop.scheduler();
-            continued = source.event().then(scheduler, [&] { ran = true; });
+            continued = scope.spawn(
+                caravan::asSender(source.event()) | caravan::continuesOn(scheduler)
+                | caravan::then([&] { ran = true; }));
             observed = source.event().continueWith(scheduler, [&](caravan::Event) { observationRan = true; });
-            mapped = promise.future().then(scheduler, [](int value) { return value * 2; });
+            mapped = scope.spawnFuture<int>(
+                caravan::consumeAsSender(promise.future()) | caravan::continuesOn(scheduler)
+                | caravan::then([](int value) { return value * 2; }));
         }
 
         source.setReady();
@@ -380,20 +412,23 @@ namespace
         observed.wait();
         assert(mapped.result() == 42);
         assert(ran && observationRan);
+        scope.join().wait();
     }
 
     void testNoRecursiveInlineChains()
     {
         unsigned depth = 0u;
         unsigned maxDepth = 0u;
-        RecursionTrackingExecutor executor{&depth, &maxDepth};
+        RecursionTrackingScheduler scheduler{&depth, &maxDepth};
         caravan::EventSource source;
+        caravan::AsyncScope scope;
         auto tail = source.event();
         for(unsigned i = 0u; i < 1000u; ++i)
-            tail = tail.then(executor, [] {});
+            tail = scope.spawn(caravan::asSender(tail) | caravan::continuesOn(scheduler));
         source.setReady();
         tail.wait();
         assert(maxDepth == 1u);
+        scope.join().wait();
     }
 
     void testWhenAllAndFailure()
@@ -468,7 +503,11 @@ namespace
         caravan::InlineScheduler executor;
         caravan::EventSource failed;
         bool called = false;
-        auto successor = failed.event().then(executor, [&] { called = true; });
+        caravan::AsyncScope scope;
+        auto successor = scope.spawn(
+            caravan::letValue(
+                caravan::asSender(failed.event()),
+                [&] { return caravan::then(executor.schedule(), [&] { called = true; }); }));
         failed.setFailed(std::make_exception_ptr(std::runtime_error("expected")));
         try
         {
@@ -488,15 +527,29 @@ namespace
             { failureObserved = predecessor.state() == caravan::CompletionState::failed; });
         observation.wait();
         assert(failureObserved);
+        scope.join().wait();
     }
 
     void testFuture()
     {
         caravan::InlineScheduler executor;
-        caravan::Promise<int> promise;
-        auto doubled = promise.future().then(executor, [](int value) { return value * 2; });
-        promise.setValue(21);
-        assert(doubled.result() == 42);
+        caravan::Promise<std::unique_ptr<int>> promise;
+        auto shared = promise.future();
+        caravan::AsyncScope scope;
+        auto observe = [&]
+        {
+            return scope.spawnFuture<int>(caravan::letValue(
+                caravan::asSender(shared.event()),
+                [shared, executor]
+                { return caravan::then(executor.schedule(), [shared] { return *shared.result() * 2; }); }));
+        };
+        auto doubled = observe();
+        auto peer = observe();
+        promise.setValue(std::make_unique<int>(21));
+        assert(doubled.result() == 42 && peer.result() == 42);
+        assert(observe().result() == 42);
+        assert(*shared.result() == 21); // Observation did not consume the shared value.
+        scope.join().wait();
     }
 
     void testEventSenderBridge()
@@ -810,14 +863,12 @@ namespace
         runLoop.run();
         transferred.wait();
         joined.wait();
-        try
-        {
-            scheduler.post([] {});
-            assert(false);
-        }
-        catch(std::logic_error const&)
-        {
-        }
+        bool rejectedValue = false;
+        bool rejectedStop = false;
+        std::exception_ptr rejectedError;
+        auto rejected = scheduler.schedule().connect(EventReceiver{&rejectedValue, &rejectedError, &rejectedStop});
+        rejected.start();
+        assert(!rejectedValue && rejectedError && !rejectedStop);
 
         caravan::RunLoop polledLoop;
         caravan::AsyncScope polledScope;
@@ -830,6 +881,101 @@ namespace
         polledLoop.runReady();
         polled.wait();
         polledJoin.wait();
+    }
+
+    void testScheduledCompletionChannels()
+    {
+        using State = caravan::CompletionState;
+
+        struct EventScheduler
+        {
+            auto schedule() const
+            {
+                return caravan::asSender(ready);
+            }
+
+            caravan::Event ready;
+        };
+
+        // This scheduler has no post(). Both stages must be lazy, and all three
+        // upstream channels must wait for successful scheduling before delivery.
+        for(auto state : {State::ready, State::failed, State::stopped})
+        {
+            caravan::EventSource upstream;
+            caravan::EventSource scheduled;
+            caravan::AsyncScope scope;
+            auto error = std::make_exception_ptr(std::runtime_error("upstream"));
+            auto sender = caravan::continuesOn(caravan::asSender(upstream.event()), EventScheduler{scheduled.event()});
+            if(state == State::ready)
+                upstream.setReady();
+            else if(state == State::failed)
+                upstream.setFailed(error);
+            else
+                upstream.setStopped();
+            auto result = scope.spawn(std::move(sender));
+            assert(result.state() == State::pending);
+            scheduled.setReady();
+            assert(result.state() == state);
+            if(state == State::failed)
+                assert(result.error() == error);
+            scope.join().wait();
+        }
+
+        // A scheduler's own error/stopped completion overrides the stored value.
+        for(bool stop : {false, true})
+        {
+            caravan::EventSource scheduled;
+            caravan::AsyncScope scope;
+            auto error = std::make_exception_ptr(std::runtime_error("scheduler"));
+            auto retained = std::make_shared<int>(42);
+            std::weak_ptr<int> lifetime = retained;
+            auto result = scope.spawn(
+                caravan::continuesOn(
+                    AsyncValueSender<std::shared_ptr<int>>{caravan::readyEvent(), std::move(retained)},
+                    EventScheduler{scheduled.event()}));
+            assert(!lifetime.expired());
+            if(stop)
+                scheduled.setStopped();
+            else
+                scheduled.setFailed(error);
+            assert(result.state() == (stop ? State::stopped : State::failed));
+            if(!stop)
+                assert(result.error() == error);
+            assert(lifetime.expired());
+            scope.join().wait();
+        }
+
+        caravan::RunLoop loop;
+        caravan::AsyncScope scope;
+        auto moved = scope.spawnFuture<std::unique_ptr<int>>(caravan::continuesOn(
+            AsyncValueSender<std::unique_ptr<int>>{caravan::readyEvent(), std::make_unique<int>(42)},
+            loop.scheduler()));
+        assert(moved.state() == State::pending);
+        loop.runReady();
+        assert(*std::move(moved).takeResult() == 42);
+        scope.join().wait();
+
+        // Success-only composition does not attempt scheduling on upstream failure.
+        loop.finish();
+        for(bool stop : {false, true})
+        {
+            caravan::EventSource upstream;
+            caravan::AsyncScope failureScope;
+            bool called = false;
+            auto error = std::make_exception_ptr(std::runtime_error("original failure"));
+            auto result = failureScope.spawn(
+                caravan::letValue(
+                    caravan::asSender(upstream.event()),
+                    [&] { return caravan::then(loop.scheduler().schedule(), [&] { called = true; }); }));
+            if(stop)
+                upstream.setStopped();
+            else
+                upstream.setFailed(error);
+            assert(!called && result.state() == (stop ? State::stopped : State::failed));
+            if(!stop)
+                assert(result.error() == error);
+            failureScope.join().wait();
+        }
     }
 
     void testAsyncScope()
@@ -923,6 +1069,7 @@ namespace
     {
         caravan::InlineScheduler executor;
         caravan::EventSource source;
+        caravan::AsyncScope scope;
         constexpr unsigned threadCount = 8u;
         constexpr unsigned continuationsPerThread = 100u;
         std::atomic<unsigned> calls = 0u;
@@ -937,7 +1084,9 @@ namespace
                 {
                     std::vector<caravan::Event> local;
                     for(unsigned i = 0u; i < continuationsPerThread; ++i)
-                        local.emplace_back(source.event().then(executor, [&] { calls.fetch_add(1u); }));
+                        local.emplace_back(scope.spawn(
+                            caravan::asSender(source.event()) | caravan::continuesOn(executor)
+                            | caravan::then([&] { calls.fetch_add(1u); })));
                     std::lock_guard lock(completionsMutex);
                     completions.insert(completions.end(), local.begin(), local.end());
                 });
@@ -948,6 +1097,7 @@ namespace
         completer.join();
         caravan::whenAll(completions).wait();
         assert(calls == threadCount * continuationsPerThread);
+        scope.join().wait();
     }
 
     void testExecutorWaitGuard()
@@ -955,7 +1105,10 @@ namespace
         caravan::InlineScheduler executor;
         caravan::EventSource start;
         caravan::EventSource pending;
-        auto blocked = start.event().then(executor, [&] { pending.event().wait(); });
+        caravan::AsyncScope scope;
+        auto blocked = scope.spawn(
+            caravan::asSender(start.event()) | caravan::continuesOn(executor)
+            | caravan::then([&] { pending.event().wait(); }));
         start.setReady();
         try
         {
@@ -965,6 +1118,7 @@ namespace
         catch(std::logic_error const&)
         {
         }
+        scope.join().wait();
     }
 
     void testDispatchRecoversFromThrow()
@@ -1001,6 +1155,7 @@ int main()
     testTypedSenderVocabulary();
     testEagerSenderBridgesAndOperationLifetime();
     testContinuesOnRunLoop();
+    testScheduledCompletionChannels();
     testAsyncScope();
     testPendingScopeDestructionDiagnosed();
     testExactlyOnceCompletion();

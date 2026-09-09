@@ -61,12 +61,38 @@ TEST_CASE("PMacc async context owns work and drives host continuations", "[async
     CHECK(progressCalls == 1u);
 
     caravan::EventSource pending;
-    caravan::EventSource checked;
-    context.scheduler().post(
-        [&]
+    auto checked = context.spawn(
+        caravan::then(
+            context.scheduler().schedule(),
+            [&] { CHECK_THROWS_AS(context.wait(pending.event()), std::logic_error); }));
+    context.wait(checked);
+}
+
+TEST_CASE("PMacc wait wakes for every terminal channel and survives progress errors", "[async]")
+{
+    pmacc::async::Context context;
+    for(bool stop : {false, true})
+    {
+        caravan::EventSource source;
+        auto complete = [&]
         {
-            CHECK_THROWS_AS(context.wait(pending.event()), std::logic_error);
-            checked.setReady();
-        });
-    context.wait(checked.event());
+            if(stop)
+                source.setStopped();
+            else
+                source.setFailed(std::make_exception_ptr(std::runtime_error("backend failure")));
+        };
+        if(stop)
+            CHECK_THROWS_AS(context.wait(source.event(), complete), caravan::StoppedError);
+        else
+            CHECK_THROWS_AS(context.wait(source.event(), complete), std::runtime_error);
+    }
+
+    caravan::EventSource pending;
+    CHECK_THROWS_AS(
+        context.wait(pending.event(), [] { throw std::runtime_error("progress failure"); }),
+        std::runtime_error);
+    pending.setReady(); // The earlier wait's wakeup must not reference its destroyed stack.
+    context.runReady();
+    context.wait(pending.event());
+    // Context destruction also waits on the already-joining scope.
 }

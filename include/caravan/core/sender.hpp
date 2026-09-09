@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <exception>
 #include <functional>
-#include <memory>
 #include <mutex>
 #include <optional>
 #include <tuple>
@@ -195,10 +194,36 @@ namespace caravan
                 ContinuesOnOperation* owner;
             };
 
+            struct ScheduleReceiver
+            {
+                void set_value() noexcept
+                {
+                    owner->complete();
+                }
+
+                void set_error(std::exception_ptr error) noexcept
+                {
+                    owner->m_receiver.set_error(std::move(error));
+                }
+
+                void set_stopped() noexcept
+                {
+                    owner->m_receiver.set_stopped();
+                }
+
+                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
+                    requires requires(T_Receiver const& receiver) { receiver.get_env(); }
+                {
+                    return owner->m_receiver.get_env();
+                }
+
+                ContinuesOnOperation* owner;
+            };
+
         public:
             ContinuesOnOperation(T_Sender sender, T_Scheduler scheduler, T_Receiver receiver)
-                : m_scheduler(std::move(scheduler))
-                , m_receiver(std::move(receiver))
+                : m_receiver(std::move(receiver))
+                , m_scheduled(scheduler.schedule().connect(ScheduleReceiver{this}))
                 , m_upstream(std::move(sender).connect(TransferReceiver{this}))
             {
             }
@@ -219,49 +244,45 @@ namespace caravan
             {
                 try
                 {
-                    auto storedValues = std::make_shared<std::tuple<std::decay_t<T>...>>(std::forward<T>(values)...);
-                    m_scheduler.post(
-                        [this, storedValues = std::move(storedValues)]() mutable
-                        {
-                            std::apply(
-                                [this](auto&&... unpacked)
-                                { m_receiver.set_value(std::forward<decltype(unpacked)>(unpacked)...); },
-                                std::move(*storedValues));
-                        });
+                    m_values.emplace(std::forward<T>(values)...);
                 }
                 catch(...)
                 {
                     m_receiver.set_error(std::current_exception());
+                    return;
                 }
+                m_scheduled.start();
             }
 
             void transferError(std::exception_ptr error) noexcept
             {
-                try
-                {
-                    m_scheduler.post([this, error = std::move(error)]() mutable
-                                     { m_receiver.set_error(std::move(error)); });
-                }
-                catch(...)
-                {
-                    m_receiver.set_error(std::current_exception());
-                }
+                m_error = std::move(error);
+                m_scheduled.start();
             }
 
             void transferStopped() noexcept
             {
-                try
-                {
-                    m_scheduler.post([this] { m_receiver.set_stopped(); });
-                }
-                catch(...)
-                {
-                    m_receiver.set_error(std::current_exception());
-                }
+                m_stopped = true;
+                m_scheduled.start();
             }
 
-            T_Scheduler m_scheduler;
+            void complete() noexcept
+            {
+                if(m_values)
+                    std::apply(
+                        [this](auto&&... values) { m_receiver.set_value(std::forward<decltype(values)>(values)...); },
+                        std::move(*m_values));
+                else if(m_stopped)
+                    m_receiver.set_stopped();
+                else
+                    m_receiver.set_error(std::move(m_error));
+            }
+
             T_Receiver m_receiver;
+            std::optional<StoredValueTuple<T_Sender>> m_values;
+            std::exception_ptr m_error;
+            bool m_stopped = false;
+            decltype(std::declval<T_Scheduler&>().schedule().connect(std::declval<ScheduleReceiver>())) m_scheduled;
             decltype(std::declval<T_Sender&&>().connect(std::declval<TransferReceiver>())) m_upstream;
         };
     } // namespace detail
@@ -292,7 +313,11 @@ namespace caravan
         T_Scheduler m_scheduler;
     };
 
-    /** Transfer sender completion onto an explicit scheduler. */
+    /** Transfer every upstream completion channel onto an explicit scheduler.
+     *
+     * Values remain owned by the connected operation until delivery. If scheduling
+     * fails or stops, that completion replaces the stored upstream completion.
+     */
     template<Sender T_Sender, typename T_Scheduler>
     auto continuesOn(T_Sender sender, T_Scheduler scheduler)
     {

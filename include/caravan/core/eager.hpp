@@ -259,11 +259,12 @@ namespace caravan
             reportFailure();
         }
 
-        /** Compatibility-only eager composition; prefer asSender plus sender algorithms. */
-        template<typename T_Executor, typename T_Operation>
-        Event then(T_Executor executor, T_Operation&& operation) const;
-
-        /** Compatibility-only eager observation retained for runtime boundaries. */
+        /** Eager all-channel observation for runtime wait/wakeup boundaries.
+         *
+         * Unlike sender then(), this observes failed and stopped predecessors too.
+         * The subscription and queued callback own their captures independently of
+         * the returned Event, including when a progress hook throws during wait.
+         */
         template<typename T_Executor, typename T_Continuation>
         Event continueWith(T_Executor executor, T_Continuation&& continuation) const;
 
@@ -334,52 +335,6 @@ namespace caravan
     inline Event readyEvent()
     {
         return {};
-    }
-
-    template<typename T_Executor, typename T_Operation>
-    Event Event::then(T_Executor executor, T_Operation&& operation) const
-    {
-        EventSource successor;
-        auto result = successor.event();
-        auto predecessor = *this;
-        auto work = std::make_shared<std::decay_t<T_Operation>>(std::forward<T_Operation>(operation));
-        subscribe(
-            [predecessor, successor, work, executor = std::move(executor)]() mutable
-            {
-                if(predecessor.state() == CompletionState::failed)
-                {
-                    successor.setFailed(predecessor.error());
-                    return;
-                }
-                if(predecessor.state() == CompletionState::stopped)
-                {
-                    successor.setStopped();
-                    return;
-                }
-
-                auto task = [successor, work]
-                {
-                    ExecutorThreadGuard guard;
-                    try
-                    {
-                        std::invoke(*work);
-                        successor.setReady();
-                    }
-                    catch(...)
-                    {
-                        successor.setFailed(std::current_exception());
-                    }
-                };
-                try
-                {
-                    executor.post(std::move(task));
-                }
-                catch(...)
-                {
-                    successor.setFailed(std::current_exception());
-                }
-            });
-        return result;
     }
 
     template<typename T_Executor, typename T_Continuation>
@@ -517,10 +472,6 @@ namespace caravan
             return state->takeValue();
         }
 
-        /** Compatibility-only eager composition; prefer consumeAsSender(). */
-        template<typename T_Executor, typename T_Operation>
-        auto then(T_Executor executor, T_Operation&& operation) const;
-
     private:
         explicit Future(std::shared_ptr<detail::FutureState<T>> state) : m_state(std::move(state))
         {
@@ -567,100 +518,6 @@ namespace caravan
     private:
         std::shared_ptr<detail::FutureState<T>> m_state;
     };
-
-    template<typename T>
-    template<typename T_Executor, typename T_Operation>
-    auto Future<T>::then(T_Executor executor, T_Operation&& operation) const
-    {
-        using Result = std::invoke_result_t<std::decay_t<T_Operation>&, T const&>;
-        auto predecessor = *this;
-        auto work = std::make_shared<std::decay_t<T_Operation>>(std::forward<T_Operation>(operation));
-
-        if constexpr(std::is_void_v<Result>)
-        {
-            EventSource successor;
-            auto result = successor.event();
-            event().subscribe(
-                [predecessor, successor, work, executor = std::move(executor)]() mutable
-                {
-                    auto predecessorEvent = predecessor.event();
-                    if(predecessorEvent.state() == CompletionState::failed)
-                    {
-                        successor.setFailed(predecessorEvent.error());
-                        return;
-                    }
-                    if(predecessorEvent.state() == CompletionState::stopped)
-                    {
-                        successor.setStopped();
-                        return;
-                    }
-                    auto task = [predecessor, successor, work]
-                    {
-                        ExecutorThreadGuard guard;
-                        try
-                        {
-                            std::invoke(*work, predecessor.result());
-                            successor.setReady();
-                        }
-                        catch(...)
-                        {
-                            successor.setFailed(std::current_exception());
-                        }
-                    };
-                    try
-                    {
-                        executor.post(std::move(task));
-                    }
-                    catch(...)
-                    {
-                        successor.setFailed(std::current_exception());
-                    }
-                });
-            return result;
-        }
-        else
-        {
-            using Value = std::remove_cv_t<std::remove_reference_t<Result>>;
-            Promise<Value> successor;
-            auto result = successor.future();
-            event().subscribe(
-                [predecessor, successor, work, executor = std::move(executor)]() mutable
-                {
-                    auto predecessorEvent = predecessor.event();
-                    if(predecessorEvent.state() == CompletionState::failed)
-                    {
-                        successor.setFailed(predecessorEvent.error());
-                        return;
-                    }
-                    if(predecessorEvent.state() == CompletionState::stopped)
-                    {
-                        successor.setStopped();
-                        return;
-                    }
-                    auto task = [predecessor, successor, work]
-                    {
-                        ExecutorThreadGuard guard;
-                        try
-                        {
-                            successor.setValue(std::invoke(*work, predecessor.result()));
-                        }
-                        catch(...)
-                        {
-                            successor.setFailed(std::current_exception());
-                        }
-                    };
-                    try
-                    {
-                        executor.post(std::move(task));
-                    }
-                    catch(...)
-                    {
-                        successor.setFailed(std::current_exception());
-                    }
-                });
-            return result;
-        }
-    }
 
     /** A lazy sender bridge for an already-started Event.
      *
