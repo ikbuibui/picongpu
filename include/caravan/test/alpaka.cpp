@@ -58,20 +58,29 @@ int main()
     auto sender = caravan::alpaka::sequence(
         caravan::alpaka::sequence(
             caravan::alpaka::sequence(
-                caravan::alpaka::fill(queue, deviceValue, 0u),
-                caravan::alpaka::copy(queue, deviceValue, hostValue, one)),
-            caravan::alpaka::kernel<Acc>(queue, workDiv, Increment{}, alpaka::getPtrNative(deviceValue))),
-        caravan::alpaka::sequence(
-            caravan::alpaka::copy(queue, hostValue, deviceValue, one),
-            caravan::alpaka::submit(
+                caravan::alpaka::fill(queue, caravan::alpaka::OwnedView{deviceValue, retained}, 0u),
+                caravan::alpaka::copy(
+                    queue,
+                    caravan::alpaka::OwnedView{deviceValue, retained},
+                    caravan::alpaka::OwnedView{hostValue, retained},
+                    one)),
+            caravan::alpaka::kernel<Acc>(
                 queue,
-                [&, retained = std::move(retained)](Queue&)
-                {
-                    submitted = true;
-                    assert(*retained == 7);
-                })));
+                workDiv,
+                Increment{},
+                caravan::alpaka::retain(
+                    alpaka::getPtrNative(deviceValue),
+                    caravan::alpaka::OwnedView{deviceValue, retained}))),
+        caravan::alpaka::sequence(
+            caravan::alpaka::copy(
+                queue,
+                caravan::alpaka::OwnedView{hostValue, retained},
+                caravan::alpaka::OwnedView{deviceValue, retained},
+                one),
+            caravan::alpaka::submit(queue, [&](Queue&) { submitted = true; })));
 
     static_assert(caravan::Sender<decltype(sender)>);
+    retained.reset();
     assert(!submitted);
     assert(!retainedObserver.expired());
 
