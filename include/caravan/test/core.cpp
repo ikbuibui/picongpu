@@ -883,6 +883,108 @@ namespace
         polledJoin.wait();
     }
 
+    void testControlContext()
+    {
+        caravan::ControlContext context;
+        auto const controlThread = std::this_thread::get_id();
+        std::thread::id completionThread;
+        bool ran = false;
+        caravan::EventSource backendCompletion;
+
+        auto operation = context.spawn(
+            caravan::then(
+                context.onControl(caravan::asSender(backendCompletion.event())),
+                [&]
+                {
+                    ran = true;
+                    assert(std::this_thread::get_id() == controlThread);
+                    assert(std::this_thread::get_id() != completionThread);
+                }));
+        assert(operation.state() == caravan::CompletionState::pending);
+        std::thread backend(
+            [&]
+            {
+                completionThread = std::this_thread::get_id();
+                backendCompletion.setReady();
+            });
+        context.wait(operation);
+        backend.join();
+        assert(ran);
+
+        caravan::EventSource externalCompletion;
+        std::thread external([&] { externalCompletion.setReady(); });
+        context.wait(externalCompletion.event());
+        external.join();
+
+        caravan::EventSource progressed;
+        std::size_t progressCalls = 0u;
+        context.wait(
+            progressed.event(),
+            [&]
+            {
+                ++progressCalls;
+                progressed.setReady();
+            });
+        assert(progressCalls == 1u);
+
+        caravan::EventSource pending;
+        bool rejected = false;
+        auto checked = context.spawn(
+            caravan::then(
+                context.scheduler().schedule(),
+                [&]
+                {
+                    try
+                    {
+                        context.wait(pending.event());
+                    }
+                    catch(std::logic_error const&)
+                    {
+                        rejected = true;
+                    }
+                }));
+        context.wait(checked);
+        assert(rejected);
+
+        for(bool stop : {false, true})
+        {
+            caravan::EventSource source;
+            try
+            {
+                context.wait(
+                    source.event(),
+                    [&]
+                    {
+                        if(stop)
+                            source.setStopped();
+                        else
+                            source.setFailed(std::make_exception_ptr(std::runtime_error("backend failure")));
+                    });
+                assert(false);
+            }
+            catch(caravan::StoppedError const&)
+            {
+                assert(stop);
+            }
+            catch(std::runtime_error const&)
+            {
+                assert(!stop);
+            }
+        }
+
+        try
+        {
+            context.wait(pending.event(), [] { throw std::runtime_error("progress failure"); });
+            assert(false);
+        }
+        catch(std::runtime_error const&)
+        {
+        }
+        pending.setReady();
+        context.runReady();
+        context.wait(pending.event());
+    }
+
     void testScheduledCompletionChannels()
     {
         using State = caravan::CompletionState;
@@ -1155,6 +1257,7 @@ int main()
     testTypedSenderVocabulary();
     testEagerSenderBridgesAndOperationLifetime();
     testContinuesOnRunLoop();
+    testControlContext();
     testScheduledCompletionChannels();
     testAsyncScope();
     testPendingScopeDestructionDiagnosed();
