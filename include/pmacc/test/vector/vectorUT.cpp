@@ -68,7 +68,7 @@ TEST_CASE("vector constructor generator", "[vector]")
     auto const device = manager::Device<ComputeDevice>::get().current();
     ComputeDeviceQueue queue(device);
     caravan::ControlContext context;
-    auto kernel = PMACC_KERNEL(testKernel)(1, 1).sender(
+    auto kernel = PMACC_KERNEL(testKernel)(1, 1)(
         queue,
         caravan::alpaka::retain(
             hostDeviceBuffer.getDeviceBuffer().data(),
@@ -512,7 +512,7 @@ TEST_CASE("vector ops", "[vector]")
     auto initialize = caravan::alpaka::sequence(
         caravan::alpaka::fill(queue, hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u),
         caravan::alpaka::fill(queue, numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u));
-    auto kernel = PMACC_KERNEL(VectorOpsKernel{})(1, 1).sender(
+    auto kernel = PMACC_KERNEL(VectorOpsKernel{})(1, 1)(
         queue,
         caravan::alpaka::retain(
             hostDeviceBuffer.getDeviceBuffer().data(),
@@ -557,10 +557,10 @@ TEST_CASE("vector generic", "[vector]")
         caravan::alpaka::fill(queue, numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u));
     auto compileTime = caravan::alpaka::sequence(
         caravan::alpaka::sequence(
-            PMACC_KERNEL(CompileTimeKernel1D{})(1, 1).sender(queue),
-            PMACC_KERNEL(CompileTimeKernel2D{})(1, 1).sender(queue)),
-        PMACC_KERNEL(CompileTimeKernelCompare2D{})(1, 1).sender(queue));
-    auto runTime = PMACC_KERNEL(RunTimeKernel{})(1, 1).sender(
+            PMACC_KERNEL(CompileTimeKernel1D{})(1, 1)(queue),
+            PMACC_KERNEL(CompileTimeKernel2D{})(1, 1)(queue)),
+        PMACC_KERNEL(CompileTimeKernelCompare2D{})(1, 1)(queue));
+    auto runTime = PMACC_KERNEL(RunTimeKernel{})(1, 1)(
         queue,
         caravan::alpaka::retain(
             hostDeviceBuffer.getDeviceBuffer().data(),

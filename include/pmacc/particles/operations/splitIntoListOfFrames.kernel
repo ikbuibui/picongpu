@@ -304,9 +304,8 @@ namespace pmacc
                 constexpr uint32_t frameSize = T_SrcFrame::frameSize;
                 auto initialize
                     = caravan::alpaka::fill(queue, counterBuffer->getDeviceBuffer().getOwnedAlpakaView(), 0u);
-                auto split = PMACC_LOCKSTEP_KERNEL(detail::KernelSplitIntoListOfFrames{})
-                                 .template config<frameSize>(alpaka::core::divCeil(numParticles, frameSize))
-                                 .sender(
+                auto split = lockstep::exec::kernel(detail::KernelSplitIntoListOfFrames{})
+                                 .template config<frameSize>(alpaka::core::divCeil(numParticles, frameSize))(
                                      queue,
                                      counterBuffer->getDeviceBuffer().getDataBox(),
                                      destSpecies.getDeviceParticlesBox(),

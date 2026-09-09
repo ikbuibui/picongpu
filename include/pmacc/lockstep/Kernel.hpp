@@ -239,21 +239,18 @@ namespace pmacc::lockstep
          * @code{.cpp}
          *   pmacc::lockstep::exec::kernel([]ALPAKA_FN_ACC(auto const& acc) -> void{
          *       printf("Hello World.\n");
-         *   }).config<1>(1).sender(queue)
+         *   }).config<1>(1)(queue)
          * @endcode
          *
          * @tparam T_KernelFunctor type of the kernel functor
          * @param kernelFunctor instance of the functor, lambda are supported
          */
         template<typename T_KernelFunctor>
-        inline auto kernel(T_KernelFunctor const& kernelFunctor) -> detail::KernelPreperationWrapper<T_KernelFunctor>
+        [[nodiscard]] inline auto kernel(T_KernelFunctor const& kernelFunctor)
+            -> detail::KernelPreperationWrapper<T_KernelFunctor>
         {
             return detail::KernelPreperationWrapper<T_KernelFunctor>(kernelFunctor);
         }
 
-
     } // namespace exec
 } // namespace pmacc::lockstep
-
-/** Create a kernel object out of a functor instance. */
-#define PMACC_LOCKSTEP_KERNEL(...) ::pmacc::lockstep::exec::kernel(__VA_ARGS__)
