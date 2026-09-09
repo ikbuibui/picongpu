@@ -105,8 +105,8 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
     auto const applicationThread = std::this_thread::get_id();
     bool continued = false;
     auto completion = context.spawn(
-        caravan::then(
-            context.onControl(std::move(step)),
+        context.onControl(std::move(step))
+        | caravan::then(
             [&]
             {
                 CHECK(std::this_thread::get_id() == applicationThread);

@@ -231,17 +231,17 @@ namespace gol
                     write->getDeviceBuffer().getDataBox(),
                     write->getDeviceBuffer().getOwnedAlpakaView()));
 
-            auto step = caravan::letValue(
-                caravan::whenAll(std::move(core), caravan::asSender(std::move(communication))),
-                [&,
-                 readView = read->getDeviceBuffer().getOwnedAlpakaView(),
-                 writeView = write->getDeviceBuffer().getOwnedAlpakaView()]() mutable
-                {
-                    return evo.runAsync<BORDER>(
-                        *computeQueue,
-                        caravan::alpaka::retain(read->getDeviceBuffer().getDataBox(), readView),
-                        caravan::alpaka::retain(write->getDeviceBuffer().getDataBox(), writeView));
-                });
+            auto step = caravan::whenAll(std::move(core), caravan::asSender(std::move(communication)))
+                        | caravan::letValue(
+                            [&,
+                             readView = read->getDeviceBuffer().getOwnedAlpakaView(),
+                             writeView = write->getDeviceBuffer().getOwnedAlpakaView()]() mutable
+                            {
+                                return evo.runAsync<BORDER>(
+                                    *computeQueue,
+                                    caravan::alpaka::retain(read->getDeviceBuffer().getDataBox(), readView),
+                                    caravan::alpaka::retain(write->getDeviceBuffer().getDataBox(), writeView));
+                            });
             asyncContext.wait(asyncContext.spawn(std::move(step)));
 
             /* gather::operator() gathers all the buffers and assembles those to  *

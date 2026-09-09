@@ -295,27 +295,29 @@ namespace pmacc
                 sizeof(state->send),
                 caravan::ScalarType::uint32,
                 caravan::ReduceOperation::sum));
-        auto handle = caravan::then(
-            asyncContext.onControl(std::move(reductions)),
-            [this, state](caravan::AllReduceResult, caravan::AllReduceResult)
-            {
-                auto const ranks = Environment<DIM>::get().GridController().getCommunicator().getSize();
-                bool const shouldStop = state->global[0] == static_cast<uint32_t>(ranks);
-                bool const shouldCheckpoint = state->global[1] == static_cast<uint32_t>(ranks);
-                if(shouldCheckpoint)
-                {
-                    if(output)
-                        std::cout << "SIGNAL: Activate checkpointing for step " << state->commonStep << std::endl;
-                    checkpointing.addCheckpoint(state->commonStep);
-                }
-                if(shouldStop)
-                {
-                    if(output)
-                        std::cout << "SIGNAL: Shutdown simulation at step " << state->commonStep << std::endl;
-                    Environment<>::get().SimulationDescription().setRunSteps(state->commonStep);
-                }
-                signal::release(shouldCheckpoint, shouldStop);
-            });
+        auto handle = asyncContext.onControl(std::move(reductions))
+                      | caravan::then(
+                          [this, state](caravan::AllReduceResult, caravan::AllReduceResult)
+                          {
+                              auto const ranks = Environment<DIM>::get().GridController().getCommunicator().getSize();
+                              bool const shouldStop = state->global[0] == static_cast<uint32_t>(ranks);
+                              bool const shouldCheckpoint = state->global[1] == static_cast<uint32_t>(ranks);
+                              if(shouldCheckpoint)
+                              {
+                                  if(output)
+                                      std::cout << "SIGNAL: Activate checkpointing for step " << state->commonStep
+                                                << std::endl;
+                                  checkpointing.addCheckpoint(state->commonStep);
+                              }
+                              if(shouldStop)
+                              {
+                                  if(output)
+                                      std::cout << "SIGNAL: Shutdown simulation at step " << state->commonStep
+                                                << std::endl;
+                                  Environment<>::get().SimulationDescription().setRunSteps(state->commonStep);
+                              }
+                              signal::release(shouldCheckpoint, shouldStop);
+                          });
         signalCompletion = asyncContext.spawn(std::move(handle));
     }
 

@@ -497,10 +497,9 @@ namespace pmacc
             {
                 if(hasReceiveExchange(i))
                 {
-                    auto completion
-                        = context.spawnFuture<typename Exchange<BORDERTYPE, DIM>::ReceiveMetadata>(caravan::letValue(
-                            caravan::asSender(receiveCompletions[i]),
-                            [this, &queue, i] { return receive(queue, i); }));
+                    auto completion = context.spawnFuture<typename Exchange<BORDERTYPE, DIM>::ReceiveMetadata>(
+                        caravan::asSender(receiveCompletions[i])
+                        | caravan::letValue([this, &queue, i] { return receive(queue, i); }));
                     receiveCompletions[i] = completion.event();
                     branches.push_back(completion.event());
                 }

@@ -257,9 +257,8 @@ int main(int argc, char** argv)
             caravan::EventSource dependency;
             caravan::AsyncScope dependencyScope;
             auto second = dependencyScope.spawn(
-                caravan::letValue(
-                    caravan::asSender(dependency.event()),
-                    [&mpi] { return caravan::mpi::barrier(mpi); }));
+                caravan::asSender(dependency.event())
+                | caravan::letValue([&mpi] { return caravan::mpi::barrier(mpi); }));
             assert(second.state() == caravan::CompletionState::pending);
             dependency.setReady();
             second.wait();
@@ -689,8 +688,8 @@ int main(int argc, char** argv)
             caravan::AsyncScope scope;
             std::thread::id scopedContinuationThread;
             auto scopedEvent = scope.spawn(
-                caravan::then(
-                    caravan::continuesOn(std::move(scopedSender), controlLoop.scheduler()),
+                std::move(scopedSender) | caravan::continuesOn(controlLoop.scheduler())
+                | caravan::then(
                     [&](int value)
                     {
                         assert(value == 42);
@@ -769,10 +768,9 @@ int main(int argc, char** argv)
             caravan::EventSource senderBarrierReady;
             caravan::AsyncScope barrierScope;
             auto senderBarrier = barrierScope.spawn(
-                caravan::letValue(
-                    caravan::asSender(senderBarrierReady.event()),
-                    [&mpi, communicator = cartesian.communicator]
-                    { return caravan::mpi::barrier(mpi, communicator); }));
+                caravan::asSender(senderBarrierReady.event())
+                | caravan::letValue([&mpi, communicator = cartesian.communicator]
+                                    { return caravan::mpi::barrier(mpi, communicator); }));
             assert(senderBarrier.state() == caravan::CompletionState::pending);
             senderBarrierReady.setReady();
             senderBarrier.wait();
@@ -1019,10 +1017,9 @@ int main(int argc, char** argv)
                         }
                     }));
             caravan::syncWait(
-                caravan::letValue(
-                    caravan::mpi::barrier(mpi, cartesian.communicator),
-                    [&mpi, communicator = cartesian.communicator]
-                    { return caravan::mpi::barrier(mpi, communicator); }));
+                caravan::mpi::barrier(mpi, cartesian.communicator)
+                | caravan::letValue([&mpi, communicator = cartesian.communicator]
+                                    { return caravan::mpi::barrier(mpi, communicator); }));
 
             auto invalid = caravan::mpi::send(
                 mpi,
@@ -1041,9 +1038,8 @@ int main(int argc, char** argv)
             caravan::EventSource failedDependency;
             caravan::AsyncScope failedDependencyScope;
             auto failed = failedDependencyScope.spawn(
-                caravan::letValue(
-                    caravan::asSender(failedDependency.event()),
-                    [&mpi] { return caravan::mpi::barrier(mpi); }));
+                caravan::asSender(failedDependency.event())
+                | caravan::letValue([&mpi] { return caravan::mpi::barrier(mpi); }));
             failedDependency.setFailed(std::make_exception_ptr(std::runtime_error("expected")));
             try
             {

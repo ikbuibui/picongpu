@@ -21,10 +21,10 @@ namespace pmacc::fields
     {
         using SuperCellSize = typename T_Field::MappingDesc::SuperCellSize;
         auto& buffer = field.getGridBuffer();
-        return caravan::letValue(
-            buffer.receive(queue, exchange),
-            [&buffer, &queue, exchange](auto const&)
-            { return operations::AddExchangeToBorder{}.sender(queue, buffer, SuperCellSize{}, exchange); });
+        return buffer.receive(queue, exchange)
+               | caravan::letValue(
+                   [&buffer, &queue, exchange](auto const&)
+                   { return operations::AddExchangeToBorder{}.sender(queue, buffer, SuperCellSize{}, exchange); });
     }
 
     /** Describe one lazy field pack/send branch. */
@@ -33,9 +33,8 @@ namespace pmacc::fields
     {
         using SuperCellSize = typename T_Field::MappingDesc::SuperCellSize;
         auto& buffer = field.getGridBuffer();
-        return caravan::letValue(
-            operations::CopyGuardToExchange{}.sender(queue, buffer, SuperCellSize{}, exchange),
-            [&buffer, &queue, exchange] { return buffer.send(queue, exchange); });
+        return operations::CopyGuardToExchange{}.sender(queue, buffer, SuperCellSize{}, exchange)
+               | caravan::letValue([&buffer, &queue, exchange] { return buffer.send(queue, exchange); });
     }
 
     /**
@@ -59,9 +58,9 @@ namespace pmacc::fields
             {
                 std::array dependencies{previous, buffer.receiveCompletion(exchange)};
                 auto completion = context.spawn(
-                    caravan::letValue(
-                        caravan::asSender(caravan::whenAll(dependencies)),
-                        [&queue, &field, exchange] { return receiveExchange(queue, field, exchange); }));
+                    caravan::asSender(caravan::whenAll(dependencies))
+                    | caravan::letValue([&queue, &field, exchange]
+                                        { return receiveExchange(queue, field, exchange); }));
                 buffer.setReceiveCompletion(exchange, completion);
                 branches.push_back(std::move(completion));
             }
@@ -70,9 +69,8 @@ namespace pmacc::fields
             {
                 std::array dependencies{previous, buffer.sendCompletion(exchange)};
                 auto completion = context.spawn(
-                    caravan::letValue(
-                        caravan::asSender(caravan::whenAll(dependencies)),
-                        [&queue, &field, exchange] { return sendExchange(queue, field, exchange); }));
+                    caravan::asSender(caravan::whenAll(dependencies))
+                    | caravan::letValue([&queue, &field, exchange] { return sendExchange(queue, field, exchange); }));
                 buffer.setSendCompletion(exchange, completion);
                 branches.push_back(std::move(completion));
             }

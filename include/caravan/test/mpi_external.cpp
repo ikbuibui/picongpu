@@ -29,11 +29,10 @@ int main(int argc, char** argv)
         std::array<caravan::Event, 100u> events;
         for(auto& event : events)
             event = scope.spawn(
-                caravan::then(
-                    caravan::mpi::invoke(
-                        context,
-                        [owner](caravan::NativeMpiContext&) { assert(std::this_thread::get_id() == owner); }),
-                    [&] { ++completed; }));
+                caravan::mpi::invoke(
+                    context,
+                    [owner](caravan::NativeMpiContext&) { assert(std::this_thread::get_id() == owner); })
+                | caravan::then([&] { ++completed; }));
 
         assert(completed == 0u);
         assert(runtime.progress());

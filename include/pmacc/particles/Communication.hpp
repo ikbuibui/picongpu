@@ -488,16 +488,16 @@ namespace pmacc::particles
             {
                 std::array dependencies{previous, buffer.sendCompletion(exchange)};
                 auto completion = context.spawn(
-                    caravan::letValue(
-                        caravan::asSender(caravan::whenAll(dependencies)),
-                        [&queue, &particles, exchange] { return sendChunks(queue, particles, exchange); }));
+                    caravan::asSender(caravan::whenAll(dependencies))
+                    | caravan::letValue([&queue, &particles, exchange]
+                                        { return sendChunks(queue, particles, exchange); }));
                 buffer.setSendCompletion(exchange, completion);
                 sends.push_back(std::move(completion));
             }
             else
                 sends.push_back(context.spawn(
-                    caravan::letValue(
-                        caravan::asSender(previous),
+                    caravan::asSender(previous)
+                    | caravan::letValue(
                         [&queue, &particles, exchange]
                         { return HandleNotExchanged{}.handleOutgoingAsync(queue, particles, exchange); })));
 
@@ -505,25 +505,24 @@ namespace pmacc::particles
             {
                 std::array dependencies{previous, buffer.receiveCompletion(exchange)};
                 auto completion = context.spawn(
-                    caravan::letValue(
-                        caravan::asSender(caravan::whenAll(dependencies)),
-                        [&queue, &particles, exchange] { return receiveChunks(queue, particles, exchange); }));
+                    caravan::asSender(caravan::whenAll(dependencies))
+                    | caravan::letValue([&queue, &particles, exchange]
+                                        { return receiveChunks(queue, particles, exchange); }));
                 buffer.setReceiveCompletion(exchange, completion);
                 receives.push_back(std::move(completion));
             }
             else
                 receives.push_back(context.spawn(
-                    caravan::letValue(
-                        caravan::asSender(previous),
+                    caravan::asSender(previous)
+                    | caravan::letValue(
                         [&queue, &particles, exchange]
                         { return HandleNotExchanged{}.handleIncomingAsync(queue, particles, exchange); })));
         }
 
         auto received = caravan::whenAll(receives);
         auto filled = context.spawn(
-            caravan::letValue(
-                caravan::asSender(std::move(received)),
-                [&queue, &particles] { return particles.fillBorderGapsAsync(queue); }));
+            caravan::asSender(std::move(received))
+            | caravan::letValue([&queue, &particles] { return particles.fillBorderGapsAsync(queue); }));
         sends.push_back(std::move(filled));
         return caravan::whenAll(sends);
     }
