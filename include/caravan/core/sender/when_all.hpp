@@ -18,7 +18,7 @@ namespace caravan
 {
     namespace detail
     {
-        template<std::size_t T_Index, typename T_Owner>
+        template<std::size_t T_Index, typename T_Owner, typename T_Environment>
         struct WhenAllReceiver
         {
             template<typename... T>
@@ -37,23 +37,35 @@ namespace caravan
                 owner->setStopped();
             }
 
-            decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Owner const&>().getEnv()))
-                requires requires(T_Owner const& value) { value.getEnv(); }
+            decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Environment const&>().get_env()))
+                requires requires(T_Environment const& value) { value.get_env(); }
             {
-                return owner->getEnv();
+                return environment->get_env();
             }
 
             T_Owner* owner;
+            T_Environment const* environment;
         };
 
-        template<std::size_t T_Index, typename T_Owner, typename T_Sender>
+        template<typename T_Receiver>
+        class WhenAllReceiverHolder
+        {
+        protected:
+            explicit WhenAllReceiverHolder(T_Receiver receiver) : m_receiver(std::move(receiver))
+            {
+            }
+
+            T_Receiver m_receiver;
+        };
+
+        template<std::size_t T_Index, typename T_Owner, typename T_Environment, typename T_Sender>
         class WhenAllOperationHolder
         {
-            using Receiver = WhenAllReceiver<T_Index, T_Owner>;
+            using Receiver = WhenAllReceiver<T_Index, T_Owner, T_Environment>;
 
         public:
-            WhenAllOperationHolder(T_Sender sender, T_Owner* owner)
-                : m_operation(std::move(sender).connect(Receiver{owner}))
+            WhenAllOperationHolder(T_Sender sender, T_Owner* owner, T_Environment const* environment)
+                : m_operation(std::move(sender).connect(Receiver{owner, environment}))
             {
             }
 
@@ -71,20 +83,24 @@ namespace caravan
 
         template<typename T_Receiver, std::size_t... T_Index, typename... T_Senders>
         class WhenAllOperation<T_Receiver, std::index_sequence<T_Index...>, T_Senders...>
-            : private WhenAllOperationHolder<
+            : private WhenAllReceiverHolder<T_Receiver>
+            , private WhenAllOperationHolder<
                   T_Index,
                   WhenAllOperation<T_Receiver, std::index_sequence<T_Index...>, T_Senders...>,
+                  T_Receiver,
                   T_Senders>...
         {
             using Self = WhenAllOperation<T_Receiver, std::index_sequence<T_Index...>, T_Senders...>;
+            using ReceiverHolder = WhenAllReceiverHolder<T_Receiver>;
 
             template<std::size_t T_I>
-            using Holder = WhenAllOperationHolder<T_I, Self, std::tuple_element_t<T_I, std::tuple<T_Senders...>>>;
+            using Holder
+                = WhenAllOperationHolder<T_I, Self, T_Receiver, std::tuple_element_t<T_I, std::tuple<T_Senders...>>>;
 
         public:
             WhenAllOperation(std::tuple<T_Senders...> senders, T_Receiver receiver)
-                : Holder<T_Index>(std::move(std::get<T_Index>(senders)), this)...
-                , m_receiver(std::move(receiver))
+                : ReceiverHolder(std::move(receiver))
+                , Holder<T_Index>(std::move(std::get<T_Index>(senders)), this, &this->m_receiver)...
             {
             }
 
@@ -96,15 +112,9 @@ namespace caravan
             void start() & noexcept
             {
                 if constexpr(sizeof...(T_Senders) == 0u)
-                    m_receiver.set_value();
+                    this->m_receiver.set_value();
                 else
                     (Holder<T_Index>::start(), ...);
-            }
-
-            decltype(auto) getEnv() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
-                requires requires(T_Receiver const& receiver) { receiver.get_env(); }
-            {
-                return m_receiver.get_env();
             }
 
             template<std::size_t T_I, typename... T>
@@ -158,12 +168,12 @@ namespace caravan
             {
                 if(m_error)
                 {
-                    m_receiver.set_error(std::move(m_error));
+                    this->m_receiver.set_error(std::move(m_error));
                     return;
                 }
                 if(m_stopped)
                 {
-                    m_receiver.set_stopped();
+                    this->m_receiver.set_stopped();
                     return;
                 }
 
@@ -172,16 +182,16 @@ namespace caravan
                     auto values
                         = std::apply([](auto&... value) { return std::tuple_cat(std::move(*value)...); }, m_values);
                     std::apply(
-                        [this](auto&&... value) { m_receiver.set_value(std::forward<decltype(value)>(value)...); },
+                        [this](auto&&... value)
+                        { this->m_receiver.set_value(std::forward<decltype(value)>(value)...); },
                         std::move(values));
                 }
                 catch(...)
                 {
-                    m_receiver.set_error(std::current_exception());
+                    this->m_receiver.set_error(std::current_exception());
                 }
             }
 
-            T_Receiver m_receiver;
             std::mutex m_mutex;
             std::size_t m_remaining = sizeof...(T_Senders);
             std::tuple<std::optional<ValueTupleOf<T_Senders>>...> m_values;
