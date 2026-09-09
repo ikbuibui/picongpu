@@ -7,5 +7,7 @@
 #include <caravan/core/sender/common.hpp>
 #include <caravan/core/sender/continues_on.hpp>
 #include <caravan/core/sender/let_value.hpp>
+#include <caravan/core/sender/on.hpp>
+#include <caravan/core/sender/starts_on.hpp>
 #include <caravan/core/sender/then.hpp>
 #include <caravan/core/sender/when_all.hpp>

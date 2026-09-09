@@ -275,6 +275,120 @@ namespace
         int* observed;
     };
 
+    struct GetMarker
+    {
+        template<typename T_Environment>
+        auto operator()(T_Environment const& environment) const noexcept -> decltype(environment.query(*this))
+        {
+            return environment.query(*this);
+        }
+    };
+
+    struct QueryEnvironment
+    {
+        QueryEnvironment() = default;
+        QueryEnvironment(QueryEnvironment const&) = delete;
+
+        int query(GetMarker) const noexcept
+        {
+            return 42;
+        }
+    };
+
+    struct QueryReceiver : EventReceiver
+    {
+        QueryEnvironment const& get_env() const noexcept
+        {
+            return *environment;
+        }
+
+        QueryEnvironment const* environment;
+    };
+
+    struct TaggedScheduler
+    {
+        auto schedule() const
+        {
+            return caravan::InlineScheduler{}.schedule();
+        }
+
+        int id;
+    };
+
+    struct QuerySender
+    {
+        using completion_signatures = caravan::detail::DefaultCompletionSignatures<caravan::ValueSignature<>>;
+
+        template<typename T_Receiver>
+        struct Operation
+        {
+            void start() & noexcept
+            {
+                assert(caravan::getScheduler(receiver.get_env()).id == expected);
+                assert(GetMarker{}(receiver.get_env()) == 42);
+                ++*observations;
+                receiver.set_value();
+            }
+
+            int expected;
+            int* observations;
+            T_Receiver receiver;
+        };
+
+        template<typename T_Receiver>
+        auto connect(T_Receiver receiver) &&
+        {
+            assert(caravan::getScheduler(receiver.get_env()).id == expected);
+            assert(GetMarker{}(receiver.get_env()) == 42);
+            ++*observations;
+            return Operation<T_Receiver>{expected, observations, std::move(receiver)};
+        }
+
+        int expected;
+        int* observations;
+    };
+
+    struct EventScheduler
+    {
+        auto schedule() const
+        {
+            return caravan::asSender(ready);
+        }
+
+        caravan::Event ready;
+    };
+
+    template<typename T_Scheduler>
+    struct SchedulerReceiver : EventReceiver
+    {
+        struct Environment
+        {
+            T_Scheduler query(caravan::GetScheduler) const
+            {
+                return scheduler;
+            }
+
+            T_Scheduler scheduler;
+        };
+
+        Environment get_env() const
+        {
+            return {scheduler};
+        }
+
+        T_Scheduler scheduler;
+    };
+
+    struct ThrowOnMove
+    {
+        ThrowOnMove() = default;
+
+        ThrowOnMove(ThrowOnMove&&)
+        {
+            throw std::runtime_error("value storage");
+        }
+    };
+
     struct RecursionTrackingScheduler
     {
         struct ScheduleSender
@@ -986,16 +1100,6 @@ namespace
     {
         using State = caravan::CompletionState;
 
-        struct EventScheduler
-        {
-            auto schedule() const
-            {
-                return caravan::asSender(ready);
-            }
-
-            caravan::Event ready;
-        };
-
         // This scheduler has no post(). Both stages must be lazy, and all three
         // upstream channels must wait for successful scheduling before delivery.
         for(auto state : {State::ready, State::failed, State::stopped})
@@ -1075,6 +1179,333 @@ namespace
                 assert(result.error() == error);
             failureScope.join().wait();
         }
+    }
+
+    void testStartsOn()
+    {
+        caravan::RunLoop loop;
+        caravan::EventSource nativeCompletion;
+        caravan::AsyncScope scope;
+        bool started = false;
+        std::thread::id completedOn;
+        auto work = StartTrackingSender{&started}
+                    | caravan::letValue(
+                        [&]
+                        {
+                            return AsyncValueSender<std::unique_ptr<int>>{
+                                nativeCompletion.event(),
+                                std::make_unique<int>(42)};
+                        });
+        auto result = scope.spawnFuture<std::unique_ptr<int>>(
+            std::move(work) | caravan::startsOn(loop.scheduler())
+            | caravan::then(
+                [&](std::unique_ptr<int> value)
+                {
+                    completedOn = std::this_thread::get_id();
+                    return value;
+                }));
+        assert(!started);
+        loop.runReady();
+        assert(started && result.state() == caravan::CompletionState::pending);
+        std::thread native(
+            [&]
+            {
+                auto const thread = std::this_thread::get_id();
+                nativeCompletion.setReady();
+                assert(completedOn == thread); // No return to the initiating run loop.
+            });
+        native.join();
+        assert(*std::move(result).takeResult() == 42);
+        scope.join().wait();
+
+        for(bool stop : {false, true})
+        {
+            caravan::EventSource scheduling;
+            caravan::AsyncScope failedScope;
+            bool childStarted = false;
+            auto failed = failedScope.spawn(
+                caravan::startsOn(EventScheduler{scheduling.event()}, StartTrackingSender{&childStarted}));
+            auto error = std::make_exception_ptr(std::runtime_error("start scheduling"));
+            assert(!childStarted && failed.state() == caravan::CompletionState::pending);
+            if(stop)
+                scheduling.setStopped();
+            else
+                scheduling.setFailed(error);
+            assert(!childStarted);
+            assert(failed.state() == (stop ? caravan::CompletionState::stopped : caravan::CompletionState::failed));
+            if(!stop)
+                assert(failed.error() == error);
+            failedScope.join().wait();
+        }
+
+        // Inline completion may immediately destroy both connected operations.
+        bool destroyed = false;
+        caravan::AsyncScope inlineScope;
+        auto inlineResult = inlineScope.spawn(
+            caravan::startsOn(caravan::InlineScheduler{}, ScopeOperationTrackingSender{&destroyed}));
+        assert(destroyed && inlineResult.isReady());
+        inlineScope.join().wait();
+
+        auto checkConnectFailure = [](auto sender)
+        {
+            caravan::AsyncScope failedScope;
+            try
+            {
+                failedScope.spawn(std::move(sender));
+                assert(false);
+            }
+            catch(std::runtime_error const& error)
+            {
+                assert(std::string_view{error.what()} == "connect failed");
+            }
+            failedScope.join().wait();
+        };
+        checkConnectFailure(caravan::startsOn(caravan::InlineScheduler{}, ThrowingConnectSender{}));
+        checkConnectFailure(
+            caravan::startsOn(
+                caravan::InlineScheduler{},
+                caravan::on(caravan::InlineScheduler{}, ThrowingConnectSender{})));
+    }
+
+    void testPlacementEnvironment()
+    {
+        using Unscoped = decltype(caravan::on(TaggedScheduler{1}, caravan::asSender(caravan::readyEvent())));
+        static_assert(caravan::Sender<Unscoped>);
+        static_assert(!caravan::SenderTo<Unscoped, EventReceiver>); // No implicit restoration scheduler.
+
+        bool value = false;
+        bool stopped = false;
+        std::exception_ptr error;
+        int observations = 0;
+        QueryEnvironment environment;
+        auto work = caravan::startsOn(
+            TaggedScheduler{1},
+            caravan::whenAll(
+                QuerySender{1, &observations},
+                caravan::on(TaggedScheduler{2}, QuerySender{2, &observations} | caravan::then([] {})))
+                | caravan::letValue([&] { return QuerySender{1, &observations}; })
+                | caravan::continuesOn(caravan::InlineScheduler{}));
+        auto operation = std::move(work).connect(QueryReceiver{{&value, &error, &stopped}, &environment});
+        assert(observations == 2 && !value);
+        operation.start();
+        assert(observations == 6 && value && !error && !stopped);
+    }
+
+    void testOnRestoration()
+    {
+        // Model A -> M -> B with independent native completions. Inline restoration
+        // submits B directly on M completion; application restoration deliberately hops.
+        caravan::RunLoop app;
+        auto check = [&](auto ambient, bool inlineRestore)
+        {
+            caravan::RunLoop mpi;
+            caravan::EventSource a;
+            caravan::EventSource m;
+            caravan::EventSource b;
+            caravan::AsyncScope scope;
+            bool mpiStarted = false;
+            bool bStarted = false;
+            std::thread::id mpiThread;
+            std::thread::id bSubmittedOn;
+            std::thread::id bCompletedOn;
+            auto result = scope.spawn(
+                caravan::startsOn(
+                    ambient,
+                    caravan::asSender(a.event())
+                        | caravan::letValue(
+                            [&]
+                            {
+                                return caravan::on(
+                                    mpi.scheduler(),
+                                    StartTrackingSender{&mpiStarted}
+                                        | caravan::letValue([&] { return caravan::asSender(m.event()); }));
+                            })
+                        | caravan::letValue(
+                            [&]
+                            {
+                                bStarted = true;
+                                bSubmittedOn = std::this_thread::get_id();
+                                return caravan::asSender(b.event());
+                            })
+                        | caravan::then([&] { bCompletedOn = std::this_thread::get_id(); })));
+            app.runReady();
+            std::thread aThread([&] { a.setReady(); });
+            aThread.join();
+            assert(!mpiStarted && !bStarted);
+            std::thread mpiDriver(
+                [&]
+                {
+                    mpiThread = std::this_thread::get_id();
+                    mpi.runReady();
+                    assert(mpiStarted);
+                    m.setReady();
+                });
+            mpiDriver.join();
+            assert(bStarted == inlineRestore);
+            app.runReady();
+            assert(bStarted);
+            assert(bSubmittedOn == (inlineRestore ? mpiThread : std::this_thread::get_id()));
+            assert(result.state() == caravan::CompletionState::pending);
+            std::thread bThread(
+                [&]
+                {
+                    b.setReady();
+                    assert(bCompletedOn == std::this_thread::get_id());
+                });
+            bThread.join();
+            result.wait();
+            scope.join().wait();
+        };
+        check(caravan::InlineScheduler{}, true);
+        check(app.scheduler(), false);
+
+        caravan::RunLoop middle;
+        caravan::RunLoop inner;
+        caravan::AsyncScope scope;
+        std::vector<int> order;
+        auto result = scope.spawn(
+            caravan::startsOn(
+                app.scheduler(),
+                caravan::on(
+                    middle.scheduler(),
+                    (caravan::asSender(caravan::readyEvent()) | caravan::then([&] { order.push_back(1); })
+                     | caravan::on(inner.scheduler()))
+                        | caravan::then([&] { order.push_back(2); }))
+                    | caravan::then([&] { order.push_back(3); })));
+        app.runReady();
+        middle.runReady();
+        assert(order.empty());
+        inner.runReady();
+        assert((order == std::vector{1}));
+        middle.runReady();
+        assert((order == std::vector{1, 2}));
+        app.runReady();
+        assert((order == std::vector{1, 2, 3}) && result.isReady());
+        scope.join().wait();
+    }
+
+    void testOnCompletionChannels()
+    {
+        using State = caravan::CompletionState;
+        for(auto state : {State::ready, State::failed, State::stopped})
+        {
+            caravan::RunLoop app;
+            caravan::EventSource native;
+            caravan::AsyncScope scope;
+            auto error = std::make_exception_ptr(std::runtime_error("native"));
+            auto result = scope.spawnFuture<std::unique_ptr<int>>(caravan::startsOn(
+                app.scheduler(),
+                caravan::on(
+                    caravan::InlineScheduler{},
+                    AsyncValueSender<std::unique_ptr<int>>{native.event(), std::make_unique<int>(42)})));
+            app.runReady();
+            if(state == State::ready)
+                native.setReady();
+            else if(state == State::failed)
+                native.setFailed(error);
+            else
+                native.setStopped();
+            assert(result.state() == State::pending);
+            app.runReady();
+            assert(result.state() == state);
+            if(state == State::ready)
+                assert(*std::move(result).takeResult() == 42);
+            else if(state == State::failed)
+                assert(result.event().error() == error);
+            scope.join().wait();
+        }
+
+        for(bool stop : {false, true})
+        {
+            caravan::RunLoop app;
+            caravan::EventSource scheduling;
+            caravan::AsyncScope scope;
+            bool started = false;
+            auto error = std::make_exception_ptr(std::runtime_error("initial scheduling"));
+            auto result = scope.spawn(
+                caravan::startsOn(
+                    app.scheduler(),
+                    caravan::on(EventScheduler{scheduling.event()}, StartTrackingSender{&started})));
+            app.runReady();
+            if(stop)
+                scheduling.setStopped();
+            else
+                scheduling.setFailed(error);
+            assert(!started && result.state() == State::pending);
+            app.runReady();
+            assert(result.state() == (stop ? State::stopped : State::failed));
+            if(!stop)
+                assert(result.error() == error);
+            scope.join().wait();
+        }
+
+        // Explicit receiver environments work without an outer startsOn. A
+        // stopped/failed restoration replaces the original completion.
+        for(bool stop : {false, true})
+        {
+            caravan::EventSource restore;
+            bool value = false;
+            bool stopped = false;
+            std::exception_ptr error;
+            auto operation = caravan::on(caravan::InlineScheduler{}, caravan::asSender(caravan::readyEvent()))
+                                 .connect(
+                                     SchedulerReceiver<EventScheduler>{
+                                         {&value, &error, &stopped},
+                                         EventScheduler{restore.event()}});
+            operation.start();
+            assert(!value && !error && !stopped);
+            auto failure = std::make_exception_ptr(std::runtime_error("restoration"));
+            if(stop)
+                restore.setStopped();
+            else
+                restore.setFailed(failure);
+            assert(!value && stopped == stop);
+            assert(error == (stop ? std::exception_ptr{} : failure));
+        }
+
+        // Failure while storing a value for restoration must also take the return
+        // hop, rather than bypassing the requested scheduler.
+        {
+            caravan::RunLoop app;
+            caravan::AsyncScope scope;
+            auto result = scope.spawn(
+                caravan::startsOn(
+                    app.scheduler(),
+                    caravan::on(
+                        caravan::InlineScheduler{},
+                        caravan::InlineScheduler{}.schedule() | caravan::then([] { return ThrowOnMove{}; }))
+                        | caravan::then([](ThrowOnMove) { assert(false); })));
+            app.runReady();
+            assert(result.state() == State::pending);
+            app.runReady();
+            assert(result.state() == State::failed);
+            try
+            {
+                result.wait();
+                assert(false);
+            }
+            catch(std::runtime_error const& error)
+            {
+                assert(std::string_view{error.what()} == "value storage");
+            }
+            scope.join().wait();
+        }
+
+        // A finished restoration loop replaces the native error, rather than
+        // delivering the original error with a false promise of thread affinity.
+        caravan::RunLoop app;
+        caravan::EventSource native;
+        caravan::AsyncScope scope;
+        auto original = std::make_exception_ptr(std::runtime_error("original"));
+        auto result = scope.spawn(
+            caravan::startsOn(
+                app.scheduler(),
+                caravan::on(caravan::InlineScheduler{}, caravan::asSender(native.event()))));
+        app.runReady();
+        app.finish();
+        native.setFailed(original);
+        assert(result.state() == State::failed && result.error() != original);
+        scope.join().wait();
     }
 
     void testAsyncScope()
@@ -1256,6 +1687,10 @@ int main()
     testContinuesOnRunLoop();
     testControlContext();
     testScheduledCompletionChannels();
+    testStartsOn();
+    testPlacementEnvironment();
+    testOnRestoration();
+    testOnCompletionChannels();
     testAsyncScope();
     testPendingScopeDestructionDiagnosed();
     testExactlyOnceCompletion();
