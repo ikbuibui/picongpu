@@ -25,8 +25,54 @@
 
 namespace caravan::alpaka
 {
+    /** Alpaka view plus the allocation handle retained by an operation. */
+    template<typename T_View, typename T_Allocation>
+    struct OwnedView
+    {
+        T_View view;
+        T_Allocation allocation;
+    };
+
+    /** Kernel argument plus an allocation handle retained only for lifetime. */
+    template<typename T_Argument, typename T_Allocation>
+    struct Retained
+    {
+        T_Argument argument;
+        T_Allocation allocation;
+    };
+
+    template<typename T_Argument, typename T_View, typename T_Allocation>
+    auto retain(T_Argument argument, OwnedView<T_View, T_Allocation> const& owner)
+    {
+        return Retained<T_Argument, T_Allocation>{std::move(argument), owner.allocation};
+    }
+
     namespace detail
     {
+        template<typename T>
+        decltype(auto) nativeHandle(T& value)
+        {
+            return (value);
+        }
+
+        template<typename T_View, typename T_Allocation>
+        T_View& nativeHandle(OwnedView<T_View, T_Allocation>& value)
+        {
+            return value.view;
+        }
+
+        template<typename T>
+        decltype(auto) nativeArgument(T& value)
+        {
+            return (value);
+        }
+
+        template<typename T_Argument, typename T_Allocation>
+        T_Argument& nativeArgument(Retained<T_Argument, T_Allocation>& value)
+        {
+            return value.argument;
+        }
+
         /** A submission-time fence. Query failure does not establish quiescence. */
         template<typename T_Queue>
         class CompletionFence
@@ -409,31 +455,33 @@ namespace caravan::alpaka
         return sequence(std::move(left), std::move(right));
     }
 
-    /** Lazy byte fill. The buffer/view handle is retained by value. */
+    /** Lazy byte fill. The buffer/view and any explicit owner are retained by value. */
     template<typename T_Queue, typename T_Buffer>
     auto fill(T_Queue& queue, T_Buffer buffer, std::uint8_t byte)
     {
         return submit(
             queue,
             [buffer = std::move(buffer), byte](T_Queue& nativeQueue) mutable
-            { ::alpaka::memset(nativeQueue, buffer, byte); });
+            { ::alpaka::memset(nativeQueue, detail::nativeHandle(buffer), byte); });
     }
 
-    /** Lazy copy. Buffer/view handles and the extent are retained by value. */
+    /** Lazy copy. Buffer/views, explicit owners, and the extent are retained by value. */
     template<typename T_Queue, typename T_Destination, typename T_Source, typename T_Extent>
     auto copy(T_Queue& queue, T_Destination destination, T_Source source, T_Extent extent)
     {
         return submit(
             queue,
             [destination = std::move(destination), source = std::move(source), extent](T_Queue& nativeQueue) mutable
-            { ::alpaka::memcpy(nativeQueue, destination, source, extent); });
+            {
+                ::alpaka::memcpy(nativeQueue, detail::nativeHandle(destination), detail::nativeHandle(source), extent);
+            });
     }
 
-    /** Lazy one-element copy for PMacc size values. */
+    /** Lazy one-element copy for size values. */
     template<typename T_Queue, typename T_Destination, typename T_Source>
     auto size(T_Queue& queue, T_Destination destination, T_Source source)
     {
-        using Source = std::remove_cvref_t<T_Source>;
+        using Source = std::remove_cvref_t<decltype(detail::nativeHandle(source))>;
         return copy(
             queue,
             std::move(destination),
@@ -441,7 +489,7 @@ namespace caravan::alpaka
             ::alpaka::Vec<::alpaka::Dim<Source>, ::alpaka::Idx<Source>>::ones());
     }
 
-    /** Lazy kernel launch. Work division, kernel and arguments are retained by value. */
+    /** Lazy kernel launch retaining work division, kernel, arguments, and explicit owners. */
     template<typename T_Acc, typename T_Queue, typename T_WorkDiv, typename T_Kernel, typename... T_Args>
     auto kernel(T_Queue& queue, T_WorkDiv workDiv, T_Kernel kernel, T_Args... args)
     {
@@ -452,7 +500,8 @@ namespace caravan::alpaka
              args = std::tuple<T_Args...>{std::move(args)...}](T_Queue& nativeQueue) mutable
             {
                 std::apply(
-                    [&](auto&... values) { ::alpaka::exec<T_Acc>(nativeQueue, workDiv, kernel, values...); },
+                    [&](auto&... values)
+                    { ::alpaka::exec<T_Acc>(nativeQueue, workDiv, kernel, detail::nativeArgument(values)...); },
                     args);
             });
     }
