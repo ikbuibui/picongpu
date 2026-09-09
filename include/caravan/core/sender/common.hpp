@@ -48,7 +48,7 @@ namespace caravan
      * A sender has exactly one alternative of owned values, an exception_ptr
      * error channel, and a stopped channel. Stopped completion is propagated but
      * does not imply cancellation support. Receiver environments are forwarded
-     * by composition, but Caravan currently defines no environment queries.
+     * by composition; scoped placement queries the logical current scheduler.
      */
     template<typename T_Sender>
     concept Sender = requires { typename CompletionSignaturesOf<T_Sender>; }
