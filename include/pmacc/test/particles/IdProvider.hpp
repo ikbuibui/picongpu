@@ -152,9 +152,8 @@ namespace pmacc
                     HostDeviceBuffer<uint64_t, 1> idBuf(numIds);
                     auto& deviceBuffer = idBuf.getDeviceBuffer();
 
-                    auto generate = PMACC_LOCKSTEP_KERNEL(GenerateIds<numIdsPerBlock>{})
-                                        .template config<numIdsPerBlock>(numBlocks)
-                                        .sender(
+                    auto generate = pmacc::lockstep::exec::kernel(GenerateIds<numIdsPerBlock>{})
+                                        .template config<numIdsPerBlock>(numBlocks)(
                                             queue,
                                             caravan::alpaka::retain(
                                                 deviceBuffer.getDataBox(),

@@ -77,9 +77,8 @@ namespace pmacc
             constexpr uint32_t blockSize = 256;
             uint32_t const gridSize = (m_size.productOfComponents() + blockSize - 1u) / blockSize;
             auto& deviceBuffer = buffer->getDeviceBuffer();
-            return PMACC_LOCKSTEP_KERNEL(kernel::InitRNGProvider<blockSize, RNGMethod>{})
-                .template config<blockSize>(gridSize)
-                .sender(
+            return lockstep::exec::kernel(kernel::InitRNGProvider<blockSize, RNGMethod>{})
+                .template config<blockSize>(gridSize)(
                     queue,
                     caravan::alpaka::retain(deviceBuffer.getDataBox(), deviceBuffer.getOwnedAlpakaView()),
                     seed,

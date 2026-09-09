@@ -115,9 +115,8 @@ namespace pmacc
         auto fillGapsAsync(T_Queue& queue, T_MapperFactory const& mapperFactory)
         {
             auto const mapper = mapperFactory(this->cellDescription);
-            return PMACC_LOCKSTEP_KERNEL(KernelFillGaps{})
-                .config(mapper.getGridDim(), *particlesBuffer)
-                .sender(queue, particlesBuffer->getDeviceParticleBox(), mapper);
+            return lockstep::exec::kernel(KernelFillGaps{})
+                .config(mapper.getGridDim(), *particlesBuffer)(queue, particlesBuffer->getDeviceParticleBox(), mapper);
         }
 
         template<typename T_Queue>
@@ -130,9 +129,8 @@ namespace pmacc
         auto fillBorderGapsAsync(T_Queue& queue)
         {
             auto const mapper = AreaMapperFactory<BORDER>{}(this->cellDescription);
-            return PMACC_LOCKSTEP_KERNEL(KernelFillGaps{})
-                .config(mapper.getGridDim(), *particlesBuffer)
-                .sender(queue, particlesBuffer->getDeviceParticleBox(), mapper);
+            return lockstep::exec::kernel(KernelFillGaps{})
+                .config(mapper.getGridDim(), *particlesBuffer)(queue, particlesBuffer->getDeviceParticleBox(), mapper);
         }
 
         template<typename T_Queue>
@@ -214,7 +212,7 @@ namespace pmacc
                 {
                     do
                     {
-                        PMACC_LOCKSTEP_KERNEL(KernelShiftParticles{})
+                        lockstep::exec::kernel(KernelShiftParticles{})
                             .config(mapper.getGridDim(), pBox)
                             .enqueueNative(
                                 nativeQueue,

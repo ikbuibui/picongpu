@@ -442,9 +442,8 @@ namespace pmacc::particles::algorithm
         T_AreaMapperFactory const& areaMapperFactory)
     {
         auto const mapper = areaMapperFactory(species.getCellDescription());
-        return PMACC_LOCKSTEP_KERNEL(acc::detail::KernelForEachParticle{})
-            .config(mapper.getGridDim(), species)
-            .sender(queue, std::move(functor), mapper, species.getDeviceParticlesBox());
+        return lockstep::exec::kernel(acc::detail::KernelForEachParticle{})
+            .config(mapper.getGridDim(), species)(queue, std::move(functor), mapper, species.getDeviceParticlesBox());
     }
 
     /** Version for a fixed area

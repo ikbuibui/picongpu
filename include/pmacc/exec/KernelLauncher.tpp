@@ -70,7 +70,7 @@ namespace pmacc::exec::detail
 
         /** Lazily describe this kernel on an explicitly borrowed queue. */
         template<typename T_Queue, typename... T_Args>
-        HINLINE auto sender(T_Queue& queue, T_Args... args) const
+        [[nodiscard]] HINLINE auto operator()(T_Queue& queue, T_Args... args) const
         {
             return caravan::alpaka::submit(
                 queue,

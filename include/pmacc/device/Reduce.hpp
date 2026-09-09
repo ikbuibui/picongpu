@@ -181,43 +181,43 @@ namespace pmacc
                 T_Args&&... args)
             {
                 if(threads >= 512u)
-                    PMACC_LOCKSTEP_KERNEL(reduce::Kernel<Type>{})
+                    lockstep::exec::kernel(reduce::Kernel<Type>{})
                         .template configSMem<512u>(blocks, sharedMemSize)
                         .enqueueNative(queue, std::forward<T_Args>(args)...);
                 else if(threads >= 256u)
-                    PMACC_LOCKSTEP_KERNEL(reduce::Kernel<Type>{})
+                    lockstep::exec::kernel(reduce::Kernel<Type>{})
                         .template configSMem<256u>(blocks, sharedMemSize)
                         .enqueueNative(queue, std::forward<T_Args>(args)...);
                 else if(threads >= 128u)
-                    PMACC_LOCKSTEP_KERNEL(reduce::Kernel<Type>{})
+                    lockstep::exec::kernel(reduce::Kernel<Type>{})
                         .template configSMem<128u>(blocks, sharedMemSize)
                         .enqueueNative(queue, std::forward<T_Args>(args)...);
                 else if(threads >= 64u)
-                    PMACC_LOCKSTEP_KERNEL(reduce::Kernel<Type>{})
+                    lockstep::exec::kernel(reduce::Kernel<Type>{})
                         .template configSMem<64u>(blocks, sharedMemSize)
                         .enqueueNative(queue, std::forward<T_Args>(args)...);
                 else if(threads >= 32u)
-                    PMACC_LOCKSTEP_KERNEL(reduce::Kernel<Type>{})
+                    lockstep::exec::kernel(reduce::Kernel<Type>{})
                         .template configSMem<32u>(blocks, sharedMemSize)
                         .enqueueNative(queue, std::forward<T_Args>(args)...);
                 else if(threads >= 16u)
-                    PMACC_LOCKSTEP_KERNEL(reduce::Kernel<Type>{})
+                    lockstep::exec::kernel(reduce::Kernel<Type>{})
                         .template configSMem<16u>(blocks, sharedMemSize)
                         .enqueueNative(queue, std::forward<T_Args>(args)...);
                 else if(threads >= 8u)
-                    PMACC_LOCKSTEP_KERNEL(reduce::Kernel<Type>{})
+                    lockstep::exec::kernel(reduce::Kernel<Type>{})
                         .template configSMem<8u>(blocks, sharedMemSize)
                         .enqueueNative(queue, std::forward<T_Args>(args)...);
                 else if(threads >= 4u)
-                    PMACC_LOCKSTEP_KERNEL(reduce::Kernel<Type>{})
+                    lockstep::exec::kernel(reduce::Kernel<Type>{})
                         .template configSMem<4u>(blocks, sharedMemSize)
                         .enqueueNative(queue, std::forward<T_Args>(args)...);
                 else if(threads >= 2u)
-                    PMACC_LOCKSTEP_KERNEL(reduce::Kernel<Type>{})
+                    lockstep::exec::kernel(reduce::Kernel<Type>{})
                         .template configSMem<2u>(blocks, sharedMemSize)
                         .enqueueNative(queue, std::forward<T_Args>(args)...);
                 else
-                    PMACC_LOCKSTEP_KERNEL(reduce::Kernel<Type>{})
+                    lockstep::exec::kernel(reduce::Kernel<Type>{})
                         .template configSMem<1u>(blocks, sharedMemSize)
                         .enqueueNative(queue, std::forward<T_Args>(args)...);
             }

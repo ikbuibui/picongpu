@@ -90,7 +90,7 @@ namespace pmacc::exec
      * @code{.cpp}
      *   pmacc::exec::kernel([]ALPAKA_FN_ACC(auto const& acc) -> void{
      *       printf("Hello World.\n");
-     *   })(1,1).sender(queue)
+     *   })(1,1)(queue)
      * @endcode
      *
      * @tparam T_KernelFunctor type of the kernel functor
