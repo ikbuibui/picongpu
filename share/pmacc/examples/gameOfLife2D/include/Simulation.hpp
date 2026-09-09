@@ -27,7 +27,6 @@
 #include "types.hpp"
 
 #include <pmacc/Environment.hpp>
-#include <pmacc/async.hpp>
 #include <pmacc/dimensions/DataSpace.hpp>
 #include <pmacc/mappings/kernel/MappingDescription.hpp>
 #include <pmacc/mappings/simulation/SubGrid.hpp>
@@ -39,6 +38,8 @@
 #include <optional>
 #include <string>
 
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 #include <caravan/mpi.hpp>
 
 namespace gol
@@ -63,7 +64,7 @@ namespace gol
         bool isMaster{false};
         std::optional<ComputeDeviceQueue> communicationQueue;
         std::optional<ComputeDeviceQueue> computeQueue;
-        pmacc::async::Context asyncContext;
+        caravan::ControlContext asyncContext;
 
     public:
         Simulation(
@@ -197,11 +198,11 @@ namespace gol
              * white points. World will be written to buffer in first argument    */
             auto initialization = caravan::alpaka::sequence(
                 caravan::alpaka::sequence(
-                    pmacc::async::fill(*computeQueue, buff1->getDeviceBuffer().getOwnedAlpakaView(), 0u),
-                    pmacc::async::fill(*computeQueue, buff2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
+                    caravan::alpaka::fill(*computeQueue, buff1->getDeviceBuffer().getOwnedAlpakaView(), 0u),
+                    caravan::alpaka::fill(*computeQueue, buff2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
                 evo.initEvolution(
                     *computeQueue,
-                    pmacc::async::retain(
+                    caravan::alpaka::retain(
                         buff1->getDeviceBuffer().getDataBox(),
                         buff1->getDeviceBuffer().getOwnedAlpakaView()),
                     0.1));
@@ -223,10 +224,10 @@ namespace gol
             auto communication = read->spawnCommunication(asyncContext, *communicationQueue);
             auto core = evo.runAsync<CORE>(
                 *computeQueue,
-                pmacc::async::retain(
+                caravan::alpaka::retain(
                     read->getDeviceBuffer().getDataBox(),
                     read->getDeviceBuffer().getOwnedAlpakaView()),
-                pmacc::async::retain(
+                caravan::alpaka::retain(
                     write->getDeviceBuffer().getDataBox(),
                     write->getDeviceBuffer().getOwnedAlpakaView()));
 
@@ -238,8 +239,8 @@ namespace gol
                 {
                     return evo.runAsync<BORDER>(
                         *computeQueue,
-                        pmacc::async::retain(read->getDeviceBuffer().getDataBox(), readView),
-                        pmacc::async::retain(write->getDeviceBuffer().getDataBox(), writeView));
+                        caravan::alpaka::retain(read->getDeviceBuffer().getDataBox(), readView),
+                        caravan::alpaka::retain(write->getDeviceBuffer().getDataBox(), writeView));
                 });
             asyncContext.wait(asyncContext.spawn(std::move(step)));
 
@@ -256,7 +257,7 @@ namespace gol
                     bufferLayout.guardSizeND());
                 // create a contiguous buffer required for gathering the data
                 auto dataWithoutGuard = std::make_unique<HostBuffer<uint8_t, DIM2>>(localDataExtents);
-                auto copy = pmacc::async::copy(
+                auto copy = caravan::alpaka::copy(
                     *computeQueue,
                     dataWithoutGuard->getOwnedAlpakaView(),
                     view->getOwnedAlpakaView(),

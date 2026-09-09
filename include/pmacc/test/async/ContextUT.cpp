@@ -2,8 +2,6 @@
  * This file is part of PIConGPU.
  * SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
  */
-#include <pmacc/async/Context.hpp>
-
 #include <chrono>
 #include <thread>
 
@@ -12,7 +10,7 @@
 
 TEST_CASE("PMacc async context owns work and drives host continuations", "[async]")
 {
-    pmacc::async::Context context;
+    caravan::ControlContext context;
     auto const applicationThread = std::this_thread::get_id();
     std::thread::id completionThread;
     bool ran = false;
@@ -70,7 +68,7 @@ TEST_CASE("PMacc async context owns work and drives host continuations", "[async
 
 TEST_CASE("PMacc wait wakes for every terminal channel and survives progress errors", "[async]")
 {
-    pmacc::async::Context context;
+    caravan::ControlContext context;
     for(bool stop : {false, true})
     {
         caravan::EventSource source;

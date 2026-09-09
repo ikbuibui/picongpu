@@ -25,8 +25,6 @@
 
 #include <pmacc/Environment.hpp>
 #include <pmacc/algorithms/TypeCast.hpp>
-#include <pmacc/async/Context.hpp>
-#include <pmacc/async/Operations.hpp>
 #include <pmacc/lockstep.hpp>
 #include <pmacc/math/Vector.hpp>
 #include <pmacc/math/isApprox.hpp>
@@ -39,6 +37,8 @@
 #include <string>
 #include <tuple>
 
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <pmacc/math/vector/compile-time/UInt32.hpp>
@@ -67,10 +67,10 @@ TEST_CASE("vector constructor generator", "[vector]")
     };
     auto const device = manager::Device<ComputeDevice>::get().current();
     ComputeDeviceQueue queue(device);
-    async::Context context;
+    caravan::ControlContext context;
     auto kernel = PMACC_KERNEL(testKernel)(1, 1).sender(
         queue,
-        async::retain(
+        caravan::alpaka::retain(
             hostDeviceBuffer.getDeviceBuffer().data(),
             hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView()));
     auto copy = hostDeviceBuffer.deviceToHost(queue);
@@ -507,17 +507,19 @@ TEST_CASE("vector ops", "[vector]")
     auto numTestsBuffer = HostDeviceBuffer<size_t, DIM1>(DataSpace<DIM1>{1});
     auto const device = manager::Device<ComputeDevice>::get().current();
     ComputeDeviceQueue queue(device);
-    async::Context context;
+    caravan::ControlContext context;
 
     auto initialize = caravan::alpaka::sequence(
-        async::fill(queue, hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u),
-        async::fill(queue, numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u));
+        caravan::alpaka::fill(queue, hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u),
+        caravan::alpaka::fill(queue, numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u));
     auto kernel = PMACC_KERNEL(VectorOpsKernel{})(1, 1).sender(
         queue,
-        async::retain(
+        caravan::alpaka::retain(
             hostDeviceBuffer.getDeviceBuffer().data(),
             hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView()),
-        async::retain(numTestsBuffer.getDeviceBuffer().data(), numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView()));
+        caravan::alpaka::retain(
+            numTestsBuffer.getDeviceBuffer().data(),
+            numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView()));
     auto copyResults
         = caravan::alpaka::sequence(hostDeviceBuffer.deviceToHost(queue), numTestsBuffer.deviceToHost(queue));
     context.wait(context.spawn(
@@ -548,11 +550,11 @@ TEST_CASE("vector generic", "[vector]")
     auto numTestsBuffer = HostDeviceBuffer<size_t, DIM1>(DataSpace<DIM1>{1});
     auto const device = manager::Device<ComputeDevice>::get().current();
     ComputeDeviceQueue queue(device);
-    async::Context context;
+    caravan::ControlContext context;
 
     auto initialize = caravan::alpaka::sequence(
-        async::fill(queue, hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u),
-        async::fill(queue, numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u));
+        caravan::alpaka::fill(queue, hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u),
+        caravan::alpaka::fill(queue, numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u));
     auto compileTime = caravan::alpaka::sequence(
         caravan::alpaka::sequence(
             PMACC_KERNEL(CompileTimeKernel1D{})(1, 1).sender(queue),
@@ -560,10 +562,12 @@ TEST_CASE("vector generic", "[vector]")
         PMACC_KERNEL(CompileTimeKernelCompare2D{})(1, 1).sender(queue));
     auto runTime = PMACC_KERNEL(RunTimeKernel{})(1, 1).sender(
         queue,
-        async::retain(
+        caravan::alpaka::retain(
             hostDeviceBuffer.getDeviceBuffer().data(),
             hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView()),
-        async::retain(numTestsBuffer.getDeviceBuffer().data(), numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView()));
+        caravan::alpaka::retain(
+            numTestsBuffer.getDeviceBuffer().data(),
+            numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView()));
     auto copyResults
         = caravan::alpaka::sequence(hostDeviceBuffer.deviceToHost(queue), numTestsBuffer.deviceToHost(queue));
     context.wait(context.spawn(

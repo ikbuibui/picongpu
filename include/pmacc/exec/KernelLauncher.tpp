@@ -22,11 +22,12 @@
 #pragma once
 
 
-#include "pmacc/async/Operations.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/exec/KernelLauncher.hpp"
 #include "pmacc/traits/GetNComponents.hpp"
 #include "pmacc/types.hpp"
+
+#include <caravan/alpaka.hpp>
 
 namespace pmacc::exec::detail
 {
@@ -64,7 +65,7 @@ namespace pmacc::exec::detail
             auto const elemExtent = math::Vector<IdxType, T_dim>::create(1).toAlpakaKernelVec();
             auto const workDiv
                 = ::alpaka::WorkDivMembers<::alpaka::DimInt<T_dim>, IdxType>(gridExtent, blockExtent, elemExtent);
-            ::alpaka::exec<Acc<T_dim>>(queue, workDiv, m_kernel, pmacc::async::detail::nativeArgument(args)...);
+            ::alpaka::exec<Acc<T_dim>>(queue, workDiv, m_kernel, caravan::alpaka::detail::nativeArgument(args)...);
         }
 
         /** Lazily describe this kernel on an explicitly borrowed queue. */

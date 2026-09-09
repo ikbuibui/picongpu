@@ -23,7 +23,6 @@
 #pragma once
 
 #include "pmacc/assert.hpp"
-#include "pmacc/async/Operations.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/lockstep.hpp"
 #include "pmacc/memory/boxes/DataBox.hpp"
@@ -33,6 +32,8 @@
 #include <optional>
 #include <type_traits>
 #include <utility>
+
+#include <caravan/alpaka.hpp>
 
 namespace pmacc
 {
@@ -137,7 +138,7 @@ namespace pmacc
         /** View retaining the underlying allocation for asynchronous operation state. */
         auto getOwnedAlpakaView() const
         {
-            return async::OwnedView{*view, *devBuffer};
+            return caravan::alpaka::OwnedView{*view, *devBuffer};
         }
 
         /** Lazily fill every current element with a value on the caller-supplied queue. */

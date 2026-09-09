@@ -5,7 +5,6 @@
 #pragma once
 
 #include "pmacc/assert.hpp"
-#include "pmacc/async/Context.hpp"
 #include "pmacc/traits/NumberOfExchanges.hpp"
 #include "pmacc/type/Exchange.hpp"
 
@@ -16,6 +15,8 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#include <caravan/core.hpp>
 
 namespace pmacc::particles
 {
@@ -467,7 +468,7 @@ namespace pmacc::particles
     /** Eager runtime-sized adapter for all particle exchange directions. */
     template<typename T_Particles, typename T_Queue>
     caravan::Event spawnCommunication(
-        async::Context& context,
+        caravan::ControlContext& context,
         T_Queue& queue,
         T_Particles& particles,
         caravan::Event previous = {})

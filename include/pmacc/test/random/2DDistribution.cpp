@@ -23,8 +23,6 @@
 
 #include <pmacc/Environment.hpp>
 #include <pmacc/assert.hpp>
-#include <pmacc/async/Context.hpp>
-#include <pmacc/async/Operations.hpp>
 #include <pmacc/dataManagement/ISimulationData.hpp>
 #include <pmacc/dimensions/DataSpace.hpp>
 #include <pmacc/lockstep.hpp>
@@ -41,6 +39,8 @@
 #include <iostream>
 #include <limits>
 
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 #include <caravan/mpi.hpp>
 
 namespace pmacc
@@ -175,7 +175,7 @@ namespace pmacc
                     .template config<blockSize>(gridSize)
                     .sender(
                         queue,
-                        async::retain(buffer.getDataBox(), buffer.getOwnedAlpakaView()),
+                        caravan::alpaka::retain(buffer.getDataBox(), buffer.getOwnedAlpakaView()),
                         buffer.capacityND(),
                         rand,
                         numSamples);
@@ -201,10 +201,10 @@ namespace pmacc
                 pmacc::Environment<>::get().DataConnector().share(rngProvider);
                 auto const device = manager::Device<ComputeDevice>::get().current();
                 ComputeDeviceQueue queue(device);
-                async::Context context;
+                caravan::ControlContext context;
                 auto initialize = caravan::alpaka::sequence(
                     rngProvider->init(queue, 0x4213'3742),
-                    async::fill(queue, detector.getDeviceBuffer().getOwnedAlpakaView(), 0u));
+                    caravan::alpaka::fill(queue, detector.getDeviceBuffer().getOwnedAlpakaView(), 0u));
                 auto generate = generateRandomNumbers(
                     queue,
                     rngSize,
