@@ -446,6 +446,14 @@ namespace caravan::alpaka
             std::tuple_cat(std::move(left.m_submits), std::move(right.m_submits))};
     }
 
+    /** Pipe adaptor preserving alpaka-native sequencing: previous | sequence(next). */
+    template<typename T_Queue, typename... T_Submits>
+    auto sequence(SubmitSender<T_Queue, T_Submits...> next)
+    {
+        return caravan::detail::SenderAdaptorClosure{[next = std::move(next)](auto previous) mutable
+                                                     { return sequence(std::move(previous), std::move(next)); }};
+    }
+
     /** Compatibility spelling; generic caravan::then transforms values instead. */
     template<typename T_Queue, typename... T_Left, typename... T_Right>
     [[deprecated("use caravan::alpaka::sequence")]] auto then(

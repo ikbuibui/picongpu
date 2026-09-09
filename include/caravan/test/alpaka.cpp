@@ -55,29 +55,35 @@ int main()
     bool submitted = false;
     auto retained = std::make_shared<int>(7);
     std::weak_ptr<int> retainedObserver = retained;
-    auto sender = caravan::alpaka::sequence(
-        caravan::alpaka::sequence(
-            caravan::alpaka::sequence(
-                caravan::alpaka::fill(queue, caravan::alpaka::OwnedView{deviceValue, retained}, 0u),
-                caravan::alpaka::copy(
-                    queue,
-                    caravan::alpaka::OwnedView{deviceValue, retained},
-                    caravan::alpaka::OwnedView{hostValue, retained},
-                    one)),
-            caravan::alpaka::kernel<Acc>(
-                queue,
-                workDiv,
-                Increment{},
-                caravan::alpaka::retain(
-                    alpaka::getPtrNative(deviceValue),
-                    caravan::alpaka::OwnedView{deviceValue, retained}))),
-        caravan::alpaka::sequence(
-            caravan::alpaka::copy(
-                queue,
-                caravan::alpaka::OwnedView{hostValue, retained},
-                caravan::alpaka::OwnedView{deviceValue, retained},
-                one),
-            caravan::alpaka::submit(queue, [&](Queue&) { submitted = true; })));
+    auto sender = caravan::alpaka::fill(queue, caravan::alpaka::OwnedView{deviceValue, retained}, 0u)
+                  | caravan::alpaka::sequence(
+                      caravan::alpaka::copy(
+                          queue,
+                          caravan::alpaka::OwnedView{deviceValue, retained},
+                          caravan::alpaka::OwnedView{hostValue, retained},
+                          one))
+                  | caravan::alpaka::sequence(
+                      caravan::alpaka::kernel<Acc>(
+                          queue,
+                          workDiv,
+                          Increment{},
+                          caravan::alpaka::retain(
+                              alpaka::getPtrNative(deviceValue),
+                              caravan::alpaka::OwnedView{deviceValue, retained})))
+                  | caravan::alpaka::sequence(
+                      caravan::alpaka::copy(
+                          queue,
+                          caravan::alpaka::OwnedView{hostValue, retained},
+                          caravan::alpaka::OwnedView{deviceValue, retained},
+                          one))
+                  | caravan::alpaka::sequence(
+                      caravan::alpaka::submit(
+                          queue,
+                          [&, value = std::make_unique<int>(7)](Queue&)
+                          {
+                              assert(*value == 7);
+                              submitted = true;
+                          }));
 
     static_assert(caravan::Sender<decltype(sender)>);
     retained.reset();
@@ -115,9 +121,8 @@ int main()
     crossOutput[0] = 0;
     scope
         .spawn(
-            caravan::alpaka::sequence(
-                caravan::alpaka::copy(queue, crossDevice, crossInput, one),
-                caravan::alpaka::copy(secondQueue, crossOutput, crossDevice, one)))
+            caravan::alpaka::copy(queue, crossDevice, crossInput, one)
+            | caravan::alpaka::sequence(caravan::alpaka::copy(secondQueue, crossOutput, crossDevice, one)))
         .wait();
     assert(crossOutput[0] == 73);
 
