@@ -26,6 +26,15 @@ namespace
             ++*value;
         }
     };
+
+    struct Add
+    {
+        template<typename T_Acc>
+        ALPAKA_FN_ACC void operator()(T_Acc const&, int* value, int const* other) const
+        {
+            *value += *other;
+        }
+    };
 } // namespace
 
 int main()
@@ -125,6 +134,17 @@ int main()
             | caravan::alpaka::sequence(caravan::alpaka::copy(secondQueue, crossOutput, crossDevice, one)))
         .wait();
     assert(crossOutput[0] == 73);
+
+    // whenAll and sequence remain native across independent queues and join before the final copy.
+    caravan::syncWait(
+        caravan::whenAll(
+            caravan::alpaka::kernel<Acc>(queue, workDiv, Increment{}, alpaka::getPtrNative(deviceValue)),
+            caravan::alpaka::kernel<Acc>(secondQueue, workDiv, Increment{}, alpaka::getPtrNative(crossDevice)))
+        | caravan::alpaka::sequence(
+            caravan::alpaka::kernel<
+                Acc>(queue, workDiv, Add{}, alpaka::getPtrNative(deviceValue), alpaka::getPtrNative(crossDevice)))
+        | caravan::alpaka::sequence(caravan::alpaka::copy(queue, hostValue, deviceValue, one)));
+    assert(hostValue[0] == 117); // (42 + 1) + (73 + 1)
 
     auto deviceSize = alpaka::allocBuf<std::size_t, Idx>(device, one);
     auto hostSize = alpaka::allocBuf<std::size_t, Idx>(host, one);

@@ -228,6 +228,10 @@ namespace caravan
     requires(Sender<T_Senders> && ...)
     auto whenAll(T_Senders... senders)
     {
-        return WhenAllSender<T_Senders...>{std::move(senders)...};
+        auto domain = detail::commonDomain(senders...);
+        if constexpr(requires { domain.transform(WhenAllTag{}, std::move(senders)...); })
+            return domain.transform(WhenAllTag{}, std::move(senders)...);
+        else
+            return WhenAllSender<T_Senders...>{std::move(senders)...};
     }
 } // namespace caravan
