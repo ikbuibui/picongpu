@@ -25,6 +25,29 @@ namespace caravan
 
     inline constexpr GetScheduler getScheduler{};
 
+    struct DefaultDomain
+    {
+    };
+
+    /** Eager customization for explicitly typed backend descriptions, not completion placement. */
+    struct GetDomain
+    {
+        template<typename T>
+        auto operator()(T const& value) const noexcept(noexcept(value.query(*this)))
+            requires requires { value.query(*this); }
+        {
+            return value.query(*this);
+        }
+
+        template<typename T>
+        DefaultDomain operator()(T const&) const noexcept requires(!requires(T const& value) { value.query(*this); })
+        {
+            return {};
+        }
+    };
+
+    inline constexpr GetDomain getDomain{};
+
     namespace detail
     {
         struct EmptyEnvironment

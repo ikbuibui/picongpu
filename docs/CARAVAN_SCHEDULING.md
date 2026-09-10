@@ -43,7 +43,7 @@ backend operation's completion. It does not return to the thread that started
 
 If restoration is not wanted at all, prefer `startsOn(backend.scheduler(),
 makeWork())`. Unlike `on`, its completion placement does not depend on the ambient
-scheduler. Neither algorithm changes the execution semantics of `then` or
+scheduler. Neither algorithm changes the execution semantics of ordinary callable `then` or
 `letValue`: short callbacks run inline on upstream value completion. Transfer
 expensive or thread-affine host work explicitly with `continuesOn`.
 
@@ -69,5 +69,69 @@ expensive or thread-affine host work explicitly with `continuesOn`.
   Borrowed scheduler resources must outlive them. Placement adds no worker,
   queue, or heap allocation of its own; the selected scheduler may allocate.
 
-These are Caravan APIs, not direct standard-execution models. Backend schedulers,
-domains, and stdexec environment-query translation are not part of this change.
+These are Caravan APIs, not direct standard-execution models. stdexec
+scheduler/domain metadata translation is not implemented.
+
+## Alpaka submission domain
+
+Include `<caravan/alpaka.hpp>`. Existing `submit`, `kernel`, `copy`, `fill`, and
+`size` factories return typed native submissions. Chain them with
+`alpaka::sequence` (or its pipe adaptor); `then` accepts callables, not senders:
+
+```cpp
+caravan::alpaka::Scheduler scheduler{queueA}; // borrows queueA
+
+auto work = caravan::whenAll(
+    scheduler.submit([=](auto& queue) {
+        alpaka::exec<Acc>(queue, workDiv, kernelA, argsA);
+    }),
+    caravan::alpaka::kernel<Acc>(queueB, workDiv, kernelB, argsB))
+    | caravan::alpaka::sequence(caravan::alpaka::kernel<Acc>(queueA, workDiv, kernelC, argsC))
+    | caravan::then([] { /* Host callback: all preceding native work is complete. */ });
+
+caravan::syncWait(std::move(work));
+```
+
+The scheduler's `submit(f)` is shorthand for `alpaka::submit(queueA, f)`.
+`schedule()` completes inline on its caller, using the existing inline scheduler;
+that scheduling completion is **not** device completion. `startsOn(scheduler, work)`
+can expose it as the current scheduler, but is not needed for native composition.
+There is no submission worker or public completion-thread scheduler.
+
+- `getDomain` queries explicitly typed descriptions and schedulers. Alpaka uses
+  `SubmissionDomain<Queue>`; runtime queue identity remains separate.
+- `whenAll` customizes only when all children are native submissions of the same
+  queue type. It preserves independent branches, including nested joins. Distinct
+  queues may overlap; work sharing a queue remains FIFO.
+- `alpaka::sequence(nativeSubmission)` connects predecessor tails to continuation roots using
+  FIFO or native event waits. All reachable submissions are issued during `start`,
+  without an intermediate host-observed device completion. Unbranched adjacent
+  same-queue stages retain the existing shared-fence fast path.
+- `then(f)` and `letValue(f)` keep host-completion semantics. After a mixed-backend
+  join, host callback, different queue type, or placement wrapper, use `letValue`
+  with a factory returning the next submission. It starts after successful host
+  completion and can use predecessor values.
+- No fusion crosses explicit `on`, `startsOn`, or `continuesOn` wrappers. Compose
+  native work inside the placement scope when native batching is desired.
+
+There is no regrouping across a host boundary: return
+`a | caravan::alpaka::sequence(b)` from a `letValue` factory to submit A and B as
+one native continuation. Separate `letValue` stages retain separate
+host-completion boundaries.
+
+Submission callables execute on the **host**, not inside a device kernel. They
+must enqueue tracked work on the supplied queue, must not read unfinished results,
+and must not wait for completion. Explicitly retained captures live until all
+submitted work is quiescent; queues and unowned pointees must outlive that work.
+
+A synchronous submission failure skips dependent stages, but independent branches
+are still submitted. An asynchronous execution error cannot retract an already
+queued continuation. Submission errors take precedence over observed execution
+errors; terminal completion waits for all recorded cleanup fences. Error detection
+remains backend-specific. This is native dependency ordering, not device-side
+conditional execution or cancellation.
+
+The implementation uses a fixed-size dependency matrix for explicit expressions
+(O(N²) storage/scans), with no dynamic graph engine, device-value storage model, or
+ambient/late domain rewriting. These are deliberately narrower contracts than
+nvexec's device-callable `then` and stdexec's domain machinery.

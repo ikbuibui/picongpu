@@ -11,6 +11,8 @@
 #include <type_traits>
 #include <utility>
 
+#include <caravan/core/sender/environment.hpp>
+
 namespace caravan
 {
     template<typename... T>
@@ -64,8 +66,26 @@ namespace caravan
         { std::forward<T_Sender>(sender).connect(std::forward<T_Receiver>(receiver)) } -> OperationState;
     };
 
+    struct WhenAllTag
+    {
+    };
+
     namespace detail
     {
+        inline DefaultDomain commonDomain()
+        {
+            return {};
+        }
+
+        template<typename T_First, typename... T_Rest>
+        auto commonDomain(T_First const& first, T_Rest const&... rest)
+        {
+            if constexpr((std::is_same_v<decltype(getDomain(first)), decltype(getDomain(rest))> && ...))
+                return getDomain(first);
+            else
+                return DefaultDomain{};
+        }
+
         template<typename T_Signatures>
         struct ValueTuple;
 
