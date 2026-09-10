@@ -64,35 +64,34 @@ int main()
     bool submitted = false;
     auto retained = std::make_shared<int>(7);
     std::weak_ptr<int> retainedObserver = retained;
-    auto sender = caravan::alpaka::fill(queue, caravan::alpaka::OwnedView{deviceValue, retained}, 0u)
-                  | caravan::alpaka::sequence(
-                      caravan::alpaka::copy(
-                          queue,
-                          caravan::alpaka::OwnedView{deviceValue, retained},
-                          caravan::alpaka::OwnedView{hostValue, retained},
-                          one))
-                  | caravan::alpaka::sequence(
-                      caravan::alpaka::kernel<Acc>(
-                          queue,
-                          workDiv,
-                          Increment{},
-                          caravan::alpaka::retain(
-                              alpaka::getPtrNative(deviceValue),
-                              caravan::alpaka::OwnedView{deviceValue, retained})))
-                  | caravan::alpaka::sequence(
-                      caravan::alpaka::copy(
-                          queue,
-                          caravan::alpaka::OwnedView{hostValue, retained},
-                          caravan::alpaka::OwnedView{deviceValue, retained},
-                          one))
-                  | caravan::alpaka::sequence(
-                      caravan::alpaka::submit(
-                          queue,
-                          [&, value = std::make_unique<int>(7)](Queue&)
-                          {
-                              assert(*value == 7);
-                              submitted = true;
-                          }));
+    auto sender
+        = caravan::alpaka::fill(queue, caravan::Retained{deviceValue, retained}, 0u)
+          | caravan::alpaka::sequence(
+              caravan::alpaka::copy(
+                  queue,
+                  caravan::Retained{deviceValue, retained},
+                  caravan::Retained{hostValue, retained},
+                  one))
+          | caravan::alpaka::sequence(
+              caravan::alpaka::kernel<Acc>(
+                  queue,
+                  workDiv,
+                  Increment{},
+                  caravan::retain(alpaka::getPtrNative(deviceValue), caravan::Retained{deviceValue, retained})))
+          | caravan::alpaka::sequence(
+              caravan::alpaka::copy(
+                  queue,
+                  caravan::Retained{hostValue, retained},
+                  caravan::Retained{deviceValue, retained},
+                  one))
+          | caravan::alpaka::sequence(
+              caravan::alpaka::submit(
+                  queue,
+                  [&, value = std::make_unique<int>(7)](Queue&)
+                  {
+                      assert(*value == 7);
+                      submitted = true;
+                  }));
 
     static_assert(caravan::Sender<decltype(sender)>);
     retained.reset();
@@ -121,6 +120,23 @@ int main()
     assert(hostValue[0] == 42);
     assert(continuationThread == std::this_thread::get_id());
     assert(retainedObserver.expired());
+
+    // A non-owning view and a raw kernel argument survive their original allocation handle's scope.
+    auto localStep = [&]
+    {
+        auto allocation = alpaka::allocBuf<int, Idx>(device, one);
+        auto view = caravan::retain(alpaka::createView(device, alpaka::getPtrNative(allocation), one), allocation);
+        return caravan::alpaka::fill(queue, view, 0u)
+               | caravan::alpaka::sequence(
+                   caravan::alpaka::kernel<Acc>(
+                       queue,
+                       workDiv,
+                       Increment{},
+                       caravan::retain(alpaka::getPtrNative(allocation), view)))
+               | caravan::alpaka::sequence(caravan::alpaka::copy(queue, hostValue, view, one));
+    }();
+    caravan::syncWait(std::move(localStep));
+    assert(hostValue[0] == 1);
 
     // A queue change is lowered to an alpaka event/native wait, not host completion between these copies.
     auto crossInput = alpaka::allocBuf<int, Idx>(host, one);

@@ -8,6 +8,8 @@
 #include <cassert>
 #include <cstddef>
 #include <latch>
+#include <memory>
+#include <span>
 #include <thread>
 #include <utility>
 
@@ -68,7 +70,7 @@ int main(int argc, char** argv)
                                  return caravan::stdexecInterop::adapt(
                                      caravan::mpi::send(
                                          mpi,
-                                         caravan::BufferLease::borrowed(&sent, sizeof(sent)),
+                                         std::as_bytes(std::span{&sent, 1}),
                                          caravan::Peer{mpi.topology().rank},
                                          caravan::MessageTag{952}));
                              })
@@ -101,7 +103,7 @@ int main(int argc, char** argv)
                 caravan::stdexecInterop::adapt(
                     caravan::mpi::receive(
                         mpi,
-                        caravan::BufferLease::borrowed(&received, sizeof(received)),
+                        std::as_writable_bytes(std::span{&received, 1}),
                         caravan::Peer{mpi.topology().rank},
                         caravan::MessageTag{952})));
             auto result = scope.spawn_future(std::move(chain));

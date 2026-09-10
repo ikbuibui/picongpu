@@ -96,7 +96,7 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
                 queue,
                 workDiv,
                 Increment{},
-                caravan::alpaka::retain(device->data(), device->getOwnedAlpakaView()))),
+                caravan::retain(device->data(), device->getOwnedAlpakaView()))),
         caravan::alpaka::sequence(
             caravan::alpaka::size(queue, device->sizeOnDeviceBuffer(), device->sizeHostSideBuffer()),
             caravan::alpaka::copy(queue, output.getOwnedAlpakaView(), device->getOwnedAlpakaView(), extent)));

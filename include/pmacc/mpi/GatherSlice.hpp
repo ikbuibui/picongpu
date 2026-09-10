@@ -26,7 +26,9 @@
 #include "pmacc/memory/buffers/HostBuffer.hpp"
 
 #include <array>
+#include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include <caravan/core.hpp>
@@ -136,14 +138,14 @@ namespace pmacc
                 std::vector<std::array<int, 2>> offsets(numRanksInPlane);
                 caravan::syncWait<caravan::GatherResult>(caravan::mpi::gather(
                     *mpiContext,
-                    caravan::BufferLease::borrowed(localExtent.data(), sizeof(localExtent)),
-                    caravan::BufferLease::borrowed(extents.data(), extents.size() * sizeof(extents[0])),
+                    std::as_bytes(std::span{localExtent}),
+                    std::as_writable_bytes(std::span{extents}),
                     caravan::Peer{0},
                     caravanGatherComm->communicator));
                 caravan::syncWait<caravan::GatherResult>(caravan::mpi::gather(
                     *mpiContext,
-                    caravan::BufferLease::borrowed(localOffset.data(), sizeof(localOffset)),
-                    caravan::BufferLease::borrowed(offsets.data(), offsets.size() * sizeof(offsets[0])),
+                    std::as_bytes(std::span{localOffset}),
+                    std::as_writable_bytes(std::span{offsets}),
                     caravan::Peer{0},
                     caravanGatherComm->communicator));
                 if(isMaster())
@@ -179,10 +181,8 @@ namespace pmacc
                 std::vector<std::size_t> displacements(displs.begin(), displs.end());
                 caravan::syncWait<caravan::GatherResult>(caravan::mpi::gatherV(
                     *mpiContext,
-                    caravan::BufferLease::borrowed(
-                        localInputSlice.data(),
-                        static_cast<std::size_t>(localNumElements) * sizeof(ValueType)),
-                    caravan::BufferLease::borrowed(allData.data(), allData.size() * sizeof(ValueType)),
+                    std::as_bytes(std::span{localInputSlice.data(), static_cast<std::size_t>(localNumElements)}),
+                    std::as_writable_bytes(std::span{allData}),
                     std::move(receiveBytes),
                     std::move(displacements),
                     caravan::Peer{0},

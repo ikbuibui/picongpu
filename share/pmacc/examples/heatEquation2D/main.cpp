@@ -34,6 +34,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <span>
 
 #include <caravan/alpaka.hpp>
 #include <caravan/core.hpp>
@@ -159,9 +160,7 @@ auto run(caravan::MpiContext& mpi) -> int
             std::move(initialValues),
             boundaryKernel(
                 computeQueue,
-                caravan::alpaka::retain(
-                    buff1->getDeviceBuffer().getDataBox(),
-                    buff1->getDeviceBuffer().getOwnedAlpakaView()),
+                caravan::retain(buff1->getDeviceBuffer().getDataBox(), buff1->getDeviceBuffer().getOwnedAlpakaView()),
                 NUM_DEVICES_PER_DIM,
                 gc.getPosition(),
                 subGrid.getLocalDomain().offset,
@@ -169,9 +168,7 @@ auto run(caravan::MpiContext& mpi) -> int
                 borderMapper)),
         boundaryKernel(
             computeQueue,
-            caravan::alpaka::retain(
-                buff2->getDeviceBuffer().getDataBox(),
-                buff2->getDeviceBuffer().getOwnedAlpakaView()),
+            caravan::retain(buff2->getDeviceBuffer().getDataBox(), buff2->getDeviceBuffer().getOwnedAlpakaView()),
             NUM_DEVICES_PER_DIM,
             gc.getPosition(),
             subGrid.getLocalDomain().offset,
@@ -192,13 +189,13 @@ auto run(caravan::MpiContext& mpi) -> int
         auto core = pmacc::lockstep::exec::kernel(StencilFourPoint{})
                         .config(coreMapper.getGridDim(), SuperCell{})(
                             computeQueue,
-                            caravan::alpaka::retain(
+                            caravan::retain(
                                 buff1->getDeviceBuffer().getDataBox(),
                                 buff1->getDeviceBuffer().getOwnedAlpakaView()),
-                            caravan::alpaka::retain(
+                            caravan::retain(
                                 buff2->getDeviceBuffer().getDataBox(),
                                 buff2->getDeviceBuffer().getOwnedAlpakaView()),
-                            caravan::alpaka::retain(
+                            caravan::retain(
                                 residualBuffer->getDeviceBuffer().getDataBox(),
                                 residualBuffer->getDeviceBuffer().getOwnedAlpakaView()),
                             THERMAL_DIFFUSIVITY,
@@ -216,24 +213,23 @@ auto run(caravan::MpiContext& mpi) -> int
                   {
                       auto boundary = boundaryKernel(
                           computeQueue,
-                          caravan::alpaka::retain(buff1->getDeviceBuffer().getDataBox(), readView),
+                          caravan::retain(buff1->getDeviceBuffer().getDataBox(), readView),
                           NUM_DEVICES_PER_DIM,
                           gc.getPosition(),
                           subGrid.getLocalDomain().offset,
                           gridSize,
                           borderMapper);
-                      auto border = pmacc::lockstep::exec::kernel(StencilFourPoint{})
-                                        .config(borderMapper.getGridDim(), SuperCell{})(
-                                            computeQueue,
-                                            caravan::alpaka::retain(buff1->getDeviceBuffer().getDataBox(), readView),
-                                            caravan::alpaka::retain(buff2->getDeviceBuffer().getDataBox(), writeView),
-                                            caravan::alpaka::retain(
-                                                residualBuffer->getDeviceBuffer().getDataBox(),
-                                                residualView),
-                                            THERMAL_DIFFUSIVITY,
-                                            DX,
-                                            DT,
-                                            borderMapper);
+                      auto border
+                          = pmacc::lockstep::exec::kernel(StencilFourPoint{})
+                                .config(borderMapper.getGridDim(), SuperCell{})(
+                                    computeQueue,
+                                    caravan::retain(buff1->getDeviceBuffer().getDataBox(), readView),
+                                    caravan::retain(buff2->getDeviceBuffer().getDataBox(), writeView),
+                                    caravan::retain(residualBuffer->getDeviceBuffer().getDataBox(), residualView),
+                                    THERMAL_DIFFUSIVITY,
+                                    DX,
+                                    DT,
+                                    borderMapper);
                       auto copyResidual = caravan::alpaka::copy(
                           computeQueue,
                           std::move(residualHostView),
@@ -252,8 +248,12 @@ auto run(caravan::MpiContext& mpi) -> int
                         {
                             return caravan::mpi::reduce(
                                 mpi,
-                                caravan::BufferLease::borrowed(residualBuffer->getHostBuffer().data(), sizeof(float)),
-                                caravan::BufferLease::borrowed(&reducedResidual, sizeof(reducedResidual)),
+                                caravan::retain(
+                                    std::as_bytes(std::span{residualBuffer->getHostBuffer().data(), 1}),
+                                    std::shared_ptr<void>{}),
+                                caravan::retain(
+                                    std::as_writable_bytes(std::span{&reducedResidual, 1}),
+                                    std::shared_ptr<void>{}),
                                 caravan::ScalarType::float32,
                                 caravan::ReduceOperation::sum,
                                 caravan::Peer{0});

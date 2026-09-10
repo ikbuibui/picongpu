@@ -161,10 +161,10 @@ namespace pmacc
                     return lockstep::exec::kernel(KernelCopyGuardToExchange{})
                         .config(mapper.getGridDim(), SuperCellSize{})(
                             queue,
-                            caravan::alpaka::retain(
+                            caravan::retain(
                                 srcBuffer.getSendExchange(exchangeType).getDeviceBuffer().getDataBox(),
                                 exchange),
-                            caravan::alpaka::retain(srcBuffer.getDeviceBuffer().getDataBox(), source),
+                            caravan::retain(srcBuffer.getDeviceBuffer().getDataBox(), source),
                             srcBuffer.getSendExchange(exchangeType).getDeviceBuffer().capacityND(),
                             direction,
                             mapper);

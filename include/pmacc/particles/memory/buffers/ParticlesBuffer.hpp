@@ -165,8 +165,8 @@ namespace pmacc
                 queue,
                 [host = std::move(host), device = std::move(device), elements](T_Queue& nativeQueue) mutable
                 {
-                    std::fill_n(alpaka::getPtrNative(host.view), elements, SuperCellType{});
-                    alpaka::memcpy(nativeQueue, device.view, host.view, alpaka::getExtents(host.view));
+                    std::fill_n(alpaka::getPtrNative(host.value), elements, SuperCellType{});
+                    alpaka::memcpy(nativeQueue, device.value, host.value, alpaka::getExtents(host.value));
                 });
         }
 

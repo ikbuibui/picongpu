@@ -37,7 +37,7 @@ namespace caravan::mpi
         {
             using Result = SendResult;
 
-            ConstBufferLease buffer;
+            ConstMpiBuffer buffer;
             Peer peer;
             MessageTag tag;
             CommunicatorId communicator;
@@ -47,7 +47,7 @@ namespace caravan::mpi
         {
             using Result = ReceiveResult;
 
-            BufferLease buffer;
+            MpiBuffer buffer;
             Peer peer;
             MessageTag tag;
             CommunicatorId communicator;
@@ -57,8 +57,8 @@ namespace caravan::mpi
         {
             using Result = AllReduceResult;
 
-            ConstBufferLease input;
-            BufferLease output;
+            ConstMpiBuffer input;
+            MpiBuffer output;
             ScalarType type;
             ReduceOperation operation;
             CommunicatorId communicator;
@@ -68,8 +68,8 @@ namespace caravan::mpi
         {
             using Result = ReduceResult;
 
-            ConstBufferLease input;
-            BufferLease output;
+            ConstMpiBuffer input;
+            MpiBuffer output;
             ScalarType type;
             ReduceOperation operation;
             Peer root;
@@ -80,8 +80,8 @@ namespace caravan::mpi
         {
             using Result = GatherResult;
 
-            ConstBufferLease input;
-            BufferLease output;
+            ConstMpiBuffer input;
+            MpiBuffer output;
             Peer root;
             CommunicatorId communicator;
         };
@@ -90,8 +90,8 @@ namespace caravan::mpi
         {
             using Result = GatherResult;
 
-            ConstBufferLease input;
-            BufferLease output;
+            ConstMpiBuffer input;
+            MpiBuffer output;
             CommunicatorId communicator;
         };
 
@@ -99,8 +99,8 @@ namespace caravan::mpi
         {
             using Result = GatherResult;
 
-            ConstBufferLease input;
-            BufferLease output;
+            ConstMpiBuffer input;
+            MpiBuffer output;
             std::vector<std::size_t> receiveBytes;
             std::vector<std::size_t> displacements;
             Peer root;
@@ -267,30 +267,30 @@ namespace caravan::mpi
 
     OperationSender<operation_detail::Send> send(
         MpiContext& context,
-        ConstBufferLease buffer,
+        ConstMpiBuffer buffer,
         Peer destination,
         MessageTag tag,
         CommunicatorId communicator = worldCommunicator);
 
     OperationSender<operation_detail::Receive> receive(
         MpiContext& context,
-        BufferLease buffer,
+        MpiBuffer buffer,
         Peer source,
         MessageTag tag,
         CommunicatorId communicator = worldCommunicator);
 
     OperationSender<operation_detail::AllReduce> allReduce(
         MpiContext& context,
-        ConstBufferLease input,
-        BufferLease output,
+        ConstMpiBuffer input,
+        MpiBuffer output,
         ScalarType type,
         ReduceOperation operation,
         CommunicatorId communicator = worldCommunicator);
 
     OperationSender<operation_detail::Reduce> reduce(
         MpiContext& context,
-        ConstBufferLease input,
-        BufferLease output,
+        ConstMpiBuffer input,
+        MpiBuffer output,
         ScalarType type,
         ReduceOperation operation,
         Peer root,
@@ -298,21 +298,21 @@ namespace caravan::mpi
 
     OperationSender<operation_detail::Gather> gather(
         MpiContext& context,
-        ConstBufferLease input,
-        BufferLease output,
+        ConstMpiBuffer input,
+        MpiBuffer output,
         Peer root,
         CommunicatorId communicator = worldCommunicator);
 
     OperationSender<operation_detail::AllGather> allGather(
         MpiContext& context,
-        ConstBufferLease input,
-        BufferLease output,
+        ConstMpiBuffer input,
+        MpiBuffer output,
         CommunicatorId communicator = worldCommunicator);
 
     OperationSender<operation_detail::GatherV> gatherV(
         MpiContext& context,
-        ConstBufferLease input,
-        BufferLease output,
+        ConstMpiBuffer input,
+        MpiBuffer output,
         std::vector<std::size_t> receiveBytes,
         std::vector<std::size_t> displacements,
         Peer root,

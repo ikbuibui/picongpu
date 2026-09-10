@@ -50,6 +50,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -521,13 +522,13 @@ namespace picongpu
             int const ySize = subGrid.getLocalDomain().size.y();
             static_cast<void>(caravan::syncWait<caravan::GatherResult>(caravan::mpi::allGather(
                 *mpiContext,
-                caravan::ConstBufferLease::borrowed(&yOffset, sizeof(yOffset)),
-                caravan::BufferLease::borrowed(yOffsets.data(), yOffsets.size() * sizeof(int)),
+                std::as_bytes(std::span{&yOffset, 1}),
+                std::as_writable_bytes(std::span{yOffsets}),
                 communicator)));
             static_cast<void>(caravan::syncWait<caravan::GatherResult>(caravan::mpi::allGather(
                 *mpiContext,
-                caravan::ConstBufferLease::borrowed(&ySize, sizeof(ySize)),
-                caravan::BufferLease::borrowed(ySizes.data(), ySizes.size() * sizeof(int)),
+                std::as_bytes(std::span{&ySize, 1}),
+                std::as_writable_bytes(std::span{ySizes}),
                 communicator)));
 
             int const mpiGlobalSizeY = std::accumulate(ySizes.begin(), ySizes.end(), 0);
@@ -552,8 +553,8 @@ namespace picongpu
             {
                 static_cast<void>(caravan::syncWait<caravan::GatherResult>(caravan::mpi::gatherV(
                     *mpiContext,
-                    caravan::ConstBufferLease::borrowed(source.data(), source.size() * sizeof(float_64)),
-                    caravan::BufferLease::borrowed(destination.data(), destination.size() * sizeof(float_64)),
+                    std::as_bytes(std::span{source.data(), source.size()}),
+                    std::as_writable_bytes(std::span{destination.data(), destination.size()}),
                     receiveBytes,
                     displacements,
                     caravan::Peer{0},

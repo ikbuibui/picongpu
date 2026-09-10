@@ -148,7 +148,7 @@ namespace pmacc
                              .config(mapper.getGridDim(), buffer)(
                                  queue,
                                  buffer.getDeviceParticlesBox(),
-                                 caravan::alpaka::retain(
+                                 caravan::retain(
                                      counter->getDeviceBuffer().data(),
                                      counter->getDeviceBuffer().getOwnedAlpakaView()),
                                  filter,

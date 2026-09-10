@@ -241,14 +241,14 @@ namespace caravan
     {
         NativeRequestBatch startSend(
             NativeMpiContext& context,
-            ConstBufferLease const& buffer,
+            ConstMpiBuffer const& buffer,
             Peer destination,
             MessageTag tag,
             CommunicatorId communicator);
 
         NativeRequestBatch startReceive(
             NativeMpiContext& context,
-            BufferLease const& buffer,
+            MpiBuffer const& buffer,
             Peer source,
             MessageTag tag,
             CommunicatorId communicator);
@@ -257,8 +257,8 @@ namespace caravan
 
         NativeRequestBatch startAllReduce(
             NativeMpiContext& context,
-            ConstBufferLease const& input,
-            BufferLease const& output,
+            ConstMpiBuffer const& input,
+            MpiBuffer const& output,
             ScalarType type,
             ReduceOperation operation,
             CommunicatorId communicator,
@@ -266,8 +266,8 @@ namespace caravan
 
         NativeRequestBatch startReduce(
             NativeMpiContext& context,
-            ConstBufferLease const& input,
-            BufferLease const& output,
+            ConstMpiBuffer const& input,
+            MpiBuffer const& output,
             ScalarType type,
             ReduceOperation operation,
             Peer root,
@@ -276,23 +276,23 @@ namespace caravan
 
         NativeRequestBatch startGather(
             NativeMpiContext& context,
-            ConstBufferLease const& input,
-            BufferLease const& output,
+            ConstMpiBuffer const& input,
+            MpiBuffer const& output,
             Peer root,
             CommunicatorId communicator,
             std::shared_ptr<std::size_t> const& resultBytes);
 
         NativeRequestBatch startAllGather(
             NativeMpiContext& context,
-            ConstBufferLease const& input,
-            BufferLease const& output,
+            ConstMpiBuffer const& input,
+            MpiBuffer const& output,
             CommunicatorId communicator,
             std::shared_ptr<std::size_t> const& resultBytes);
 
         NativeRequestBatch startGatherV(
             NativeMpiContext& context,
-            ConstBufferLease const& input,
-            BufferLease const& output,
+            ConstMpiBuffer const& input,
+            MpiBuffer const& output,
             std::vector<std::size_t> const& receiveBytes,
             std::vector<std::size_t> const& displacements,
             Peer root,

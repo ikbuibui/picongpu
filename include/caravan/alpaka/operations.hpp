@@ -12,58 +12,10 @@
 #include <utility>
 
 #include <caravan/alpaka/submission.hpp>
+#include <caravan/core/retained.hpp>
 
 namespace caravan::alpaka
 {
-    /** Alpaka view plus the allocation handle retained by an operation. */
-    template<typename T_View, typename T_Allocation>
-    struct OwnedView
-    {
-        T_View view;
-        T_Allocation allocation;
-    };
-
-    /** Kernel argument plus an allocation handle retained only for lifetime. */
-    template<typename T_Argument, typename T_Allocation>
-    struct Retained
-    {
-        T_Argument argument;
-        T_Allocation allocation;
-    };
-
-    template<typename T_Argument, typename T_View, typename T_Allocation>
-    auto retain(T_Argument argument, OwnedView<T_View, T_Allocation> const& owner)
-    {
-        return Retained<T_Argument, T_Allocation>{std::move(argument), owner.allocation};
-    }
-
-    namespace detail
-    {
-        template<typename T>
-        decltype(auto) nativeHandle(T& value)
-        {
-            return (value);
-        }
-
-        template<typename T_View, typename T_Allocation>
-        T_View& nativeHandle(OwnedView<T_View, T_Allocation>& value)
-        {
-            return value.view;
-        }
-
-        template<typename T>
-        decltype(auto) nativeArgument(T& value)
-        {
-            return (value);
-        }
-
-        template<typename T_Argument, typename T_Allocation>
-        T_Argument& nativeArgument(Retained<T_Argument, T_Allocation>& value)
-        {
-            return value.argument;
-        }
-    } // namespace detail
-
     /** Lazy byte fill. The buffer/view and any explicit owner are retained by value. */
     template<typename T_Queue, typename T_Buffer>
     auto fill(T_Queue& queue, T_Buffer buffer, std::uint8_t byte)
@@ -71,7 +23,7 @@ namespace caravan::alpaka
         return submit(
             queue,
             [buffer = std::move(buffer), byte](T_Queue& nativeQueue) mutable
-            { ::alpaka::memset(nativeQueue, detail::nativeHandle(buffer), byte); });
+            { ::alpaka::memset(nativeQueue, caravan::unwrap(buffer), byte); });
     }
 
     /** Lazy copy. Buffer/views, explicit owners, and the extent are retained by value. */
@@ -81,16 +33,14 @@ namespace caravan::alpaka
         return submit(
             queue,
             [destination = std::move(destination), source = std::move(source), extent](T_Queue& nativeQueue) mutable
-            {
-                ::alpaka::memcpy(nativeQueue, detail::nativeHandle(destination), detail::nativeHandle(source), extent);
-            });
+            { ::alpaka::memcpy(nativeQueue, caravan::unwrap(destination), caravan::unwrap(source), extent); });
     }
 
     /** Lazy one-element copy for size values. */
     template<typename T_Queue, typename T_Destination, typename T_Source>
     auto size(T_Queue& queue, T_Destination destination, T_Source source)
     {
-        using Source = std::remove_cvref_t<decltype(detail::nativeHandle(source))>;
+        using Source = std::remove_cvref_t<decltype(caravan::unwrap(source))>;
         return copy(
             queue,
             std::move(destination),
@@ -110,7 +60,7 @@ namespace caravan::alpaka
             {
                 std::apply(
                     [&](auto&... values)
-                    { ::alpaka::exec<T_Acc>(nativeQueue, workDiv, kernel, detail::nativeArgument(values)...); },
+                    { ::alpaka::exec<T_Acc>(nativeQueue, workDiv, kernel, caravan::unwrap(values)...); },
                     args);
             });
     }
