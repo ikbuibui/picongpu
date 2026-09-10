@@ -7,6 +7,8 @@
 
 #include <cassert>
 #include <cstddef>
+#include <memory>
+#include <span>
 #include <thread>
 #include <utility>
 
@@ -75,12 +77,12 @@ int main(int argc, char** argv)
                                  return caravan::whenAll(
                                      caravan::mpi::send(
                                          mpi,
-                                         caravan::BufferLease::borrowed(&hostValue[0], sizeof(int)),
+                                         std::as_bytes(std::span{&hostValue[0], 1}),
                                          caravan::Peer{mpi.topology().rank},
                                          caravan::MessageTag{951}),
                                      caravan::mpi::receive(
                                          mpi,
-                                         caravan::BufferLease::borrowed(&received, sizeof(received)),
+                                         std::as_writable_bytes(std::span{&received, 1}),
                                          caravan::Peer{mpi.topology().rank},
                                          caravan::MessageTag{951}));
                              });

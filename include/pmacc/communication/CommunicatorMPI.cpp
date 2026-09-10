@@ -24,6 +24,10 @@
 
 #include "pmacc/dimensions/Definition.hpp"
 
+#include <cstddef>
+#include <memory>
+#include <span>
+
 #include <caravan/core.hpp>
 #include <caravan/mpi/native.hpp>
 
@@ -105,7 +109,7 @@ namespace pmacc
     {
         return caravan::mpi::send(
             *mpiContext,
-            caravan::ConstBufferLease::borrowed(sendData, sendBytes),
+            std::span<std::byte const>{reinterpret_cast<std::byte const*>(sendData), sendBytes},
             caravan::Peer{ExchangeTypeToRank(ex)},
             caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
             communicatorId);
@@ -120,7 +124,7 @@ namespace pmacc
     {
         return caravan::mpi::receive(
             *mpiContext,
-            caravan::BufferLease::borrowed(receiveData, receiveBytes),
+            std::span<std::byte>{reinterpret_cast<std::byte*>(receiveData), receiveBytes},
             caravan::Peer{ExchangeTypeToRank(ex)},
             caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
             communicatorId);
@@ -136,8 +140,8 @@ namespace pmacc
     {
         return caravan::mpi::allReduce(
             *mpiContext,
-            caravan::ConstBufferLease::borrowed(input, bytes),
-            caravan::BufferLease::borrowed(output, bytes),
+            std::span<std::byte const>{static_cast<std::byte const*>(input), bytes},
+            std::span<std::byte>{static_cast<std::byte*>(output), bytes},
             type,
             operation,
             signalCommunicatorId);

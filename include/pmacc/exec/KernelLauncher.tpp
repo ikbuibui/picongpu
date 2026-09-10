@@ -65,7 +65,7 @@ namespace pmacc::exec::detail
             auto const elemExtent = math::Vector<IdxType, T_dim>::create(1).toAlpakaKernelVec();
             auto const workDiv
                 = ::alpaka::WorkDivMembers<::alpaka::DimInt<T_dim>, IdxType>(gridExtent, blockExtent, elemExtent);
-            ::alpaka::exec<Acc<T_dim>>(queue, workDiv, m_kernel, caravan::alpaka::detail::nativeArgument(args)...);
+            ::alpaka::exec<Acc<T_dim>>(queue, workDiv, m_kernel, caravan::unwrap(args)...);
         }
 
         /** Lazily describe this kernel on an explicitly borrowed queue. */

@@ -84,8 +84,8 @@ namespace pmacc
                     updateSize(nativeQueue, destinationSize);
                     if(contiguous)
                     {
-                        using DestinationView = std::remove_cvref_t<decltype(destination.view)>;
-                        using SourceView = std::remove_cvref_t<decltype(source.view)>;
+                        using DestinationView = std::remove_cvref_t<decltype(destination.value)>;
+                        using SourceView = std::remove_cvref_t<decltype(source.value)>;
                         using DestinationFlatView = ::alpaka::ViewPlainPtr<
                             ::alpaka::Dev<DestinationView>,
                             ::alpaka::Elem<DestinationView>,
@@ -98,19 +98,19 @@ namespace pmacc
                             MemIdxType>;
                         auto const extent = MemSpace<DIM1>{size}.toAlpakaMemVec();
                         DestinationFlatView destinationView(
-                            ::alpaka::getPtrNative(destination.view),
-                            ::alpaka::getDev(destination.view),
+                            ::alpaka::getPtrNative(destination.value),
+                            ::alpaka::getDev(destination.value),
                             extent);
                         SourceFlatView sourceView(
-                            ::alpaka::getPtrNative(source.view),
-                            ::alpaka::getDev(source.view),
+                            ::alpaka::getPtrNative(source.value),
+                            ::alpaka::getDev(source.value),
                             extent);
                         ::alpaka::memcpy(nativeQueue, destinationView, sourceView, extent);
                     }
                     else
                     {
                         auto const extent = copyExtent<T_dim>(size, capacity).toAlpakaMemVec();
-                        ::alpaka::memcpy(nativeQueue, destination.view, source.view, extent);
+                        ::alpaka::memcpy(nativeQueue, destination.value, source.value, extent);
                     }
                 });
         }

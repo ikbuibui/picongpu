@@ -29,6 +29,8 @@
 #include <pmacc/mpi/reduceMethods/Reduce.hpp>
 
 #include <array>
+#include <memory>
+#include <span>
 #include <stdexcept>
 
 namespace picongpu
@@ -138,8 +140,8 @@ namespace picongpu
             std::vector<int> mpiPositions(numMpiRanks);
             caravan::syncWait<caravan::GatherResult>(caravan::mpi::allGather(
                 mpi,
-                caravan::ConstBufferLease::borrowed(&mpiPos, sizeof(mpiPos)),
-                caravan::BufferLease::borrowed(mpiPositions.data(), mpiPositions.size() * sizeof(mpiPositions[0])),
+                std::as_bytes(std::span{&mpiPos, 1}),
+                std::as_writable_bytes(std::span{mpiPositions}),
                 communicator));
 
             // gather local sizes in the direction we are checking
@@ -147,8 +149,8 @@ namespace picongpu
             auto lSize = static_cast<uint64_t>(m_localDomainSize[dim]);
             caravan::syncWait<caravan::GatherResult>(caravan::mpi::allGather(
                 mpi,
-                caravan::ConstBufferLease::borrowed(&lSize, sizeof(lSize)),
-                caravan::BufferLease::borrowed(allLocalSizes.data(), allLocalSizes.size() * sizeof(allLocalSizes[0])),
+                std::as_bytes(std::span{&lSize, 1}),
+                std::as_writable_bytes(std::span{allLocalSizes}),
                 communicator));
 
             uint64_t offset = 0u;

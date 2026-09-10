@@ -11,6 +11,7 @@
 #include <exception>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -342,8 +343,10 @@ int main(int argc, char** argv)
                 {
                     return caravan::mpi::allReduce(
                         mpi,
-                        caravan::BufferLease{firstCollectiveInput, firstCollectiveInput.get(), sizeof(std::int32_t)},
-                        caravan::BufferLease{firstCollectiveOutput, firstCollectiveOutput.get(), sizeof(std::int32_t)},
+                        caravan::retain(std::as_bytes(std::span{firstCollectiveInput.get(), 1}), firstCollectiveInput),
+                        caravan::retain(
+                            std::as_writable_bytes(std::span{firstCollectiveOutput.get(), 1}),
+                            firstCollectiveOutput),
                         caravan::ScalarType::int32,
                         caravan::ReduceOperation::sum,
                         communicator);
@@ -354,11 +357,12 @@ int main(int argc, char** argv)
                 {
                     return caravan::mpi::allReduce(
                         mpi,
-                        caravan::BufferLease{secondCollectiveInput, secondCollectiveInput.get(), sizeof(std::int32_t)},
-                        caravan::BufferLease{
-                            secondCollectiveOutput,
-                            secondCollectiveOutput.get(),
-                            sizeof(std::int32_t)},
+                        caravan::retain(
+                            std::as_bytes(std::span{secondCollectiveInput.get(), 1}),
+                            secondCollectiveInput),
+                        caravan::retain(
+                            std::as_writable_bytes(std::span{secondCollectiveOutput.get(), 1}),
+                            secondCollectiveOutput),
                         caravan::ScalarType::int32,
                         caravan::ReduceOperation::sum,
                         communicator);
@@ -374,13 +378,13 @@ int main(int argc, char** argv)
             caravan::AsyncScope laneScope;
             auto laneReceive = laneScope.spawnFuture<caravan::ReceiveResult>(caravan::mpi::receive(
                 mpi,
-                caravan::BufferLease{laneReceiveBuffer, laneReceiveBuffer.get(), sizeof(int)},
+                caravan::retain(std::as_writable_bytes(std::span{laneReceiveBuffer.get(), 1}), laneReceiveBuffer),
                 caravan::Peer{topology.rank},
                 caravan::MessageTag{916},
                 cartesian.communicator));
             auto laneSend = laneScope.spawnFuture<caravan::SendResult>(caravan::mpi::send(
                 mpi,
-                caravan::BufferLease{laneSendBuffer, laneSendBuffer.get(), sizeof(int)},
+                caravan::retain(std::as_bytes(std::span{laneSendBuffer.get(), 1}), laneSendBuffer),
                 caravan::Peer{topology.rank},
                 caravan::MessageTag{916},
                 cartesian.communicator));
@@ -460,13 +464,13 @@ int main(int argc, char** argv)
             caravan::AsyncScope transferScope;
             auto received = transferScope.spawnFuture<caravan::ReceiveResult>(caravan::mpi::receive(
                 mpi,
-                caravan::BufferLease{receivedValues, receivedValues->data(), sizeof(*receivedValues)},
+                caravan::retain(std::as_writable_bytes(std::span{*receivedValues}), receivedValues),
                 caravan::anyPeer,
                 caravan::anyMessageTag,
                 cartesian.communicator));
             auto sent = transferScope.spawnFuture<caravan::SendResult>(caravan::mpi::send(
                 mpi,
-                caravan::BufferLease{sentValue, sentValue.get(), sizeof(int)},
+                caravan::retain(std::as_bytes(std::span{sentValue.get(), 1}), sentValue),
                 caravan::Peer{destination},
                 caravan::MessageTag{17},
                 cartesian.communicator));
@@ -486,13 +490,13 @@ int main(int argc, char** argv)
             caravan::AsyncScope largeTransferScope;
             auto largeReceive = largeTransferScope.spawnFuture<caravan::ReceiveResult>(caravan::mpi::receive(
                 mpi,
-                caravan::BufferLease{largeReceiveBuffer, largeReceiveBuffer->data(), largeReceiveBuffer->size()},
+                caravan::retain(std::span{*largeReceiveBuffer}, largeReceiveBuffer),
                 caravan::Peer{source},
                 caravan::MessageTag{18},
                 cartesian.communicator));
             auto largeSend = largeTransferScope.spawnFuture<caravan::SendResult>(caravan::mpi::send(
                 mpi,
-                caravan::BufferLease{largeSendBuffer, largeSendBuffer->data(), largeSendBuffer->size()},
+                caravan::retain(std::span{*largeSendBuffer}, largeSendBuffer),
                 caravan::Peer{destination},
                 caravan::MessageTag{18},
                 cartesian.communicator));
@@ -509,8 +513,8 @@ int main(int argc, char** argv)
                 = std::make_shared<std::array<std::int32_t, 3>>(std::array<std::int32_t, 3>{-1, -1, -1});
             auto reductionSender = caravan::mpi::allReduce(
                 mpi,
-                caravan::BufferLease{reductionInput, reductionInput->data(), sizeof(*reductionInput)},
-                caravan::BufferLease{reductionOutput, reductionOutput->data(), sizeof(*reductionOutput)},
+                caravan::retain(std::as_bytes(std::span{*reductionInput}), reductionInput),
+                caravan::retain(std::as_writable_bytes(std::span{*reductionOutput}), reductionOutput),
                 caravan::ScalarType::int32,
                 caravan::ReduceOperation::sum,
                 cartesian.communicator);
@@ -529,8 +533,8 @@ int main(int argc, char** argv)
             auto reduceOutput = std::make_shared<std::int32_t>(-1);
             auto reduceSender = caravan::mpi::reduce(
                 mpi,
-                caravan::BufferLease{reduceInput, reduceInput.get(), sizeof(*reduceInput)},
-                caravan::BufferLease{reduceOutput, reduceOutput.get(), sizeof(*reduceOutput)},
+                caravan::retain(std::as_bytes(std::span{reduceInput.get(), 1}), reduceInput),
+                caravan::retain(std::as_writable_bytes(std::span{reduceOutput.get(), 1}), reduceOutput),
                 caravan::ScalarType::int32,
                 caravan::ReduceOperation::sum,
                 caravan::Peer{0},
@@ -548,8 +552,8 @@ int main(int argc, char** argv)
             auto gatherOutput = std::make_shared<std::vector<int>>(topology.size, -1);
             auto gatherSender = caravan::mpi::gather(
                 mpi,
-                caravan::BufferLease{gatherInput, gatherInput.get(), sizeof(*gatherInput)},
-                caravan::BufferLease{gatherOutput, gatherOutput->data(), gatherOutput->size() * sizeof(int)},
+                caravan::retain(std::as_bytes(std::span{gatherInput.get(), 1}), gatherInput),
+                caravan::retain(std::as_writable_bytes(std::span{*gatherOutput}), gatherOutput),
                 caravan::Peer{0},
                 cartesian.communicator);
             caravan::Promise<caravan::GatherResult> gatherOutputPromise;
@@ -565,26 +569,36 @@ int main(int argc, char** argv)
             std::fill(gatherOutput->begin(), gatherOutput->end(), -1);
             auto const allGatherResult = caravan::syncWait<caravan::GatherResult>(caravan::mpi::allGather(
                 mpi,
-                caravan::BufferLease{gatherInput, gatherInput.get(), sizeof(*gatherInput)},
-                caravan::BufferLease{gatherOutput, gatherOutput->data(), gatherOutput->size() * sizeof(int)},
+                caravan::retain(std::as_bytes(std::span{gatherInput.get(), 1}), gatherInput),
+                caravan::retain(std::as_writable_bytes(std::span{*gatherOutput}), gatherOutput),
                 cartesian.communicator));
             assert(allGatherResult.bytes == gatherOutput->size() * sizeof(int));
             for(int rank = 0; rank < topology.size; ++rank)
                 assert((*gatherOutput)[rank] == rank);
+
+            // Borrowed spans remain valid until syncWait completes; no shared owner is needed.
+            int const borrowedRank = topology.rank;
+            std::vector<int> borrowedRanks(topology.size, -1);
+            auto const borrowedGatherResult = caravan::syncWait<caravan::GatherResult>(caravan::mpi::allGather(
+                mpi,
+                std::as_bytes(std::span<int const, 1>{&borrowedRank, 1}),
+                std::as_writable_bytes(std::span{borrowedRanks}),
+                cartesian.communicator));
+            assert(borrowedGatherResult.bytes == borrowedRanks.size() * sizeof(int));
+            for(int rank = 0; rank < topology.size; ++rank)
+                assert(borrowedRanks[rank] == rank);
 
             auto overlappingGatherBuffer = std::make_shared<std::vector<int>>(topology.size + 1, topology.rank);
             try
             {
                 caravan::syncWait<caravan::GatherResult>(caravan::mpi::gather(
                     mpi,
-                    caravan::ConstBufferLease{
-                        overlappingGatherBuffer,
-                        overlappingGatherBuffer->data() + 1,
-                        sizeof(int)},
-                    caravan::BufferLease{
-                        overlappingGatherBuffer,
-                        overlappingGatherBuffer->data(),
-                        overlappingGatherBuffer->size() * sizeof(int)},
+                    caravan::retain(
+                        std::as_bytes(std::span{overlappingGatherBuffer->data() + 1, 1}),
+                        overlappingGatherBuffer),
+                    caravan::retain(
+                        std::as_writable_bytes(std::span{*overlappingGatherBuffer}),
+                        overlappingGatherBuffer),
                     caravan::Peer{0},
                     cartesian.communicator));
                 assert(false);
@@ -606,8 +620,8 @@ int main(int argc, char** argv)
             auto gatherVOutput = std::make_shared<std::vector<int>>(gatherVElements, -1);
             auto gatherVSender = caravan::mpi::gatherV(
                 mpi,
-                caravan::BufferLease{gatherVInput, gatherVInput->data(), gatherVInput->size() * sizeof(int)},
-                caravan::BufferLease{gatherVOutput, gatherVOutput->data(), gatherVOutput->size() * sizeof(int)},
+                caravan::retain(std::as_bytes(std::span{*gatherVInput}), gatherVInput),
+                caravan::retain(std::as_writable_bytes(std::span{*gatherVOutput}), gatherVOutput),
                 gatherVCounts,
                 gatherVOffsets,
                 caravan::Peer{0},
@@ -627,14 +641,12 @@ int main(int argc, char** argv)
             {
                 caravan::syncWait<caravan::GatherResult>(caravan::mpi::gatherV(
                     mpi,
-                    caravan::ConstBufferLease{
-                        overlappingGatherBuffer,
-                        overlappingGatherBuffer->data() + 1,
-                        sizeof(int)},
-                    caravan::BufferLease{
-                        overlappingGatherBuffer,
-                        overlappingGatherBuffer->data(),
-                        overlappingGatherBuffer->size() * sizeof(int)},
+                    caravan::retain(
+                        std::as_bytes(std::span{overlappingGatherBuffer->data() + 1, 1}),
+                        overlappingGatherBuffer),
+                    caravan::retain(
+                        std::as_writable_bytes(std::span{*overlappingGatherBuffer}),
+                        overlappingGatherBuffer),
                     std::vector<std::size_t>(topology.size, sizeof(int)),
                     gatherVOffsets,
                     caravan::Peer{0},
@@ -729,7 +741,9 @@ int main(int argc, char** argv)
             constexpr int blockingTestTag = 919;
             auto pendingReceive = caravan::mpi::receive(
                 mpi,
-                caravan::BufferLease{receivedAfterBlocking, receivedAfterBlocking.get(), sizeof(int)},
+                caravan::retain(
+                    std::as_writable_bytes(std::span{receivedAfterBlocking.get(), 1}),
+                    receivedAfterBlocking),
                 caravan::Peer{cartesian.rank},
                 caravan::MessageTag{blockingTestTag},
                 cartesian.communicator);
@@ -755,7 +769,7 @@ int main(int argc, char** argv)
 
             auto matchingSend = caravan::mpi::send(
                 mpi,
-                caravan::BufferLease{sentAfterBlocking, sentAfterBlocking.get(), sizeof(int)},
+                caravan::retain(std::as_bytes(std::span{sentAfterBlocking.get(), 1}), sentAfterBlocking),
                 caravan::Peer{cartesian.rank},
                 caravan::MessageTag{blockingTestTag},
                 cartesian.communicator);
@@ -781,13 +795,13 @@ int main(int argc, char** argv)
             std::weak_ptr<int> retainedSendLifetime = retainedSend;
             auto borrowedReceiveSender = caravan::mpi::receive(
                 mpi,
-                caravan::BufferLease::borrowed(&borrowedReceive, sizeof(borrowedReceive)),
+                std::as_writable_bytes(std::span{&borrowedReceive, 1}),
                 caravan::Peer{cartesian.rank},
                 caravan::MessageTag{920},
                 cartesian.communicator);
             auto retainedSendSender = caravan::mpi::send(
                 mpi,
-                caravan::BufferLease{retainedSend, retainedSend.get(), sizeof(*retainedSend)},
+                caravan::retain(std::as_bytes(std::span{retainedSend.get(), 1}), retainedSend),
                 caravan::Peer{cartesian.rank},
                 caravan::MessageTag{920},
                 cartesian.communicator);
@@ -880,7 +894,7 @@ int main(int argc, char** argv)
             std::array<int, 2> oversizedMessage{1, 2};
             static_cast<void>(caravan::syncWait<caravan::SendResult>(caravan::mpi::send(
                 mpi,
-                caravan::BufferLease::borrowed(oversizedMessage.data(), sizeof(oversizedMessage)),
+                std::as_bytes(std::span{oversizedMessage}),
                 caravan::Peer{cartesian.rank},
                 caravan::MessageTag{mixedErrorTag},
                 cartesian.communicator)));
@@ -889,7 +903,7 @@ int main(int argc, char** argv)
             int pendingMessage = 3;
             static_cast<void>(caravan::syncWait<caravan::SendResult>(caravan::mpi::send(
                 mpi,
-                caravan::BufferLease::borrowed(&pendingMessage, sizeof(pendingMessage)),
+                std::as_bytes(std::span{&pendingMessage, 1}),
                 caravan::Peer{cartesian.rank},
                 caravan::MessageTag{mixedPendingTag},
                 cartesian.communicator)));
@@ -964,7 +978,7 @@ int main(int argc, char** argv)
             auto partialSend = partialStartScope.spawn(
                 caravan::mpi::send(
                     mpi,
-                    caravan::BufferLease::borrowed(&partialSendValue, sizeof(partialSendValue)),
+                    std::as_bytes(std::span{&partialSendValue, 1}),
                     caravan::Peer{cartesian.rank},
                     caravan::MessageTag{partialStartTag},
                     cartesian.communicator));
@@ -1021,20 +1035,6 @@ int main(int argc, char** argv)
                 | caravan::letValue([&mpi, communicator = cartesian.communicator]
                                     { return caravan::mpi::barrier(mpi, communicator); }));
 
-            auto invalid = caravan::mpi::send(
-                mpi,
-                caravan::BufferLease{std::shared_ptr<void>{}, nullptr, 1u},
-                caravan::Peer{destination},
-                caravan::MessageTag{19});
-            try
-            {
-                static_cast<void>(caravan::syncWait<caravan::SendResult>(std::move(invalid)));
-                assert(false);
-            }
-            catch(std::invalid_argument const&)
-            {
-            }
-
             caravan::EventSource failedDependency;
             caravan::AsyncScope failedDependencyScope;
             auto failed = failedDependencyScope.spawn(
@@ -1059,7 +1059,7 @@ int main(int argc, char** argv)
             static_cast<void>(shutdownScope.spawn(
                 caravan::mpi::receive(
                     mpi,
-                    caravan::BufferLease::borrowed(&shutdownReceived, sizeof(shutdownReceived)),
+                    std::as_writable_bytes(std::span{&shutdownReceived, 1}),
                     caravan::Peer{topology.rank},
                     caravan::MessageTag{shutdownTag})));
             static_cast<void>(shutdownScope.spawn(
@@ -1077,7 +1077,7 @@ int main(int argc, char** argv)
             static_cast<void>(shutdownScope.spawn(
                 caravan::mpi::send(
                     mpi,
-                    caravan::BufferLease::borrowed(&shutdownSent, sizeof(shutdownSent)),
+                    std::as_bytes(std::span{&shutdownSent, 1}),
                     caravan::Peer{topology.rank},
                     caravan::MessageTag{shutdownTag})));
             shutdownReleaser = std::jthread(

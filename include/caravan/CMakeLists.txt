@@ -45,6 +45,10 @@ if(CARAVAN_BUILD_TESTING)
     target_link_libraries(caravan-core-test PRIVATE caravan::core Threads::Threads)
     add_test(NAME caravan-core COMMAND caravan-core-test)
 
+    add_executable(caravan-retained-test test/retained.cpp)
+    target_link_libraries(caravan-retained-test PRIVATE caravan::core)
+    add_test(NAME caravan-retained COMMAND caravan-retained-test)
+
     if(TARGET caravan::alpaka)
         alpaka_add_executable(caravan-alpaka-test test/alpaka.cpp)
         target_link_libraries(caravan-alpaka-test PRIVATE caravan::alpaka)

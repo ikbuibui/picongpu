@@ -104,7 +104,7 @@ namespace pmacc
             auto fetch = lockstep::exec::kernel(FetchId{}).template config<1>(1)(
                 queue,
                 getDeviceGenerator(),
-                caravan::alpaka::retain(deviceBuffer.data(), deviceBuffer.getOwnedAlpakaView()));
+                caravan::retain(deviceBuffer.data(), deviceBuffer.getOwnedAlpakaView()));
             auto copy = newIdBuffer->deviceToHost(queue);
             return caravan::alpaka::sequence(std::move(fetch), std::move(copy))
                    | caravan::then([newIdBuffer] { return *newIdBuffer->getHostBuffer().data(); });

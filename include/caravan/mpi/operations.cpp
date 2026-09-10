@@ -24,20 +24,20 @@ namespace caravan
 
     namespace
     {
-        template<typename T_Data>
-        bool validBuffer(BasicBufferLease<T_Data> const& buffer)
+        template<typename T_Buffer>
+        bool validBuffer(T_Buffer const& buffer)
         {
-            return buffer.valid() && buffer.bytes() <= static_cast<std::size_t>(INT_MAX);
+            return buffer.value.size_bytes() <= static_cast<std::size_t>(INT_MAX);
         }
 
-        bool buffersOverlap(ConstBufferLease const& input, BufferLease const& output) noexcept
+        bool buffersOverlap(ConstMpiBuffer const& input, MpiBuffer const& output) noexcept
         {
-            if(input.bytes() == 0u || output.bytes() == 0u)
+            if(input.value.size_bytes() == 0u || output.value.size_bytes() == 0u)
                 return false;
-            auto const inputAddress = reinterpret_cast<std::uintptr_t>(input.data());
-            auto const outputAddress = reinterpret_cast<std::uintptr_t>(output.data());
-            return inputAddress <= outputAddress ? outputAddress - inputAddress < input.bytes()
-                                                 : inputAddress - outputAddress < output.bytes();
+            auto const inputAddress = reinterpret_cast<std::uintptr_t>(input.value.data());
+            auto const outputAddress = reinterpret_cast<std::uintptr_t>(output.value.data());
+            return inputAddress <= outputAddress ? outputAddress - inputAddress < input.value.size_bytes()
+                                                 : inputAddress - outputAddress < output.value.size_bytes();
         }
 
         std::size_t scalarSize(ScalarType type)
@@ -156,7 +156,7 @@ namespace caravan
 
     NativeRequestBatch detail::startSend(
         NativeMpiContext& context,
-        ConstBufferLease const& buffer,
+        ConstMpiBuffer const& buffer,
         Peer destination,
         MessageTag tag,
         CommunicatorId communicator)
@@ -164,10 +164,10 @@ namespace caravan
         if(!validBuffer(buffer) || destination.any || destination.value < 0 || tag.any || tag.value < 0)
             throw std::invalid_argument("Invalid Caravan MPI send");
 
-        NativeRequestBatch batch({MPI_REQUEST_NULL}, {buffer.lifetime()});
+        NativeRequestBatch batch({MPI_REQUEST_NULL}, {buffer.owner});
         int const error = MPI_Isend(
-            buffer.data(),
-            static_cast<int>(buffer.bytes()),
+            buffer.value.data(),
+            static_cast<int>(buffer.value.size_bytes()),
             MPI_BYTE,
             destination.value,
             tag.value,
@@ -180,7 +180,7 @@ namespace caravan
 
     NativeRequestBatch detail::startReceive(
         NativeMpiContext& context,
-        BufferLease const& buffer,
+        MpiBuffer const& buffer,
         Peer source,
         MessageTag tag,
         CommunicatorId communicator)
@@ -188,10 +188,10 @@ namespace caravan
         if(!validBuffer(buffer) || (!source.any && source.value < 0) || (!tag.any && tag.value < 0))
             throw std::invalid_argument("Invalid Caravan MPI receive");
 
-        NativeRequestBatch batch({MPI_REQUEST_NULL}, {buffer.lifetime()});
+        NativeRequestBatch batch({MPI_REQUEST_NULL}, {buffer.owner});
         int const error = MPI_Irecv(
-            buffer.data(),
-            static_cast<int>(buffer.bytes()),
+            buffer.value.data(),
+            static_cast<int>(buffer.value.size_bytes()),
             MPI_BYTE,
             source.any ? MPI_ANY_SOURCE : source.value,
             tag.any ? MPI_ANY_TAG : tag.value,
@@ -218,24 +218,24 @@ namespace caravan
 
     NativeRequestBatch detail::startAllReduce(
         NativeMpiContext& context,
-        ConstBufferLease const& input,
-        BufferLease const& output,
+        ConstMpiBuffer const& input,
+        MpiBuffer const& output,
         ScalarType type,
         ReduceOperation operation,
         CommunicatorId communicator,
         std::shared_ptr<std::size_t> const& elements)
     {
         auto const elementBytes = scalarSize(type);
-        if(elementBytes == 0u || !validBuffer(input) || !validBuffer(output) || input.bytes() % elementBytes != 0u
-           || output.bytes() < input.bytes())
+        if(elementBytes == 0u || !validBuffer(input) || !validBuffer(output)
+           || input.value.size_bytes() % elementBytes != 0u || output.value.size_bytes() < input.value.size_bytes())
             throw std::invalid_argument("Invalid Caravan MPI all-reduce");
-        *elements = input.bytes() / elementBytes;
+        *elements = input.value.size_bytes() / elementBytes;
 
-        NativeRequestBatch batch({MPI_REQUEST_NULL}, {input.lifetime(), output.lifetime(), elements});
-        void const* const sendBuffer = input.data() == output.data() ? MPI_IN_PLACE : input.data();
+        NativeRequestBatch batch({MPI_REQUEST_NULL}, {input.owner, output.owner, elements});
+        void const* const sendBuffer = input.value.data() == output.value.data() ? MPI_IN_PLACE : input.value.data();
         int const error = MPI_Iallreduce(
             sendBuffer,
-            output.data(),
+            output.value.data(),
             static_cast<int>(*elements),
             nativeType(type),
             nativeOperation(operation),
@@ -248,8 +248,8 @@ namespace caravan
 
     NativeRequestBatch detail::startReduce(
         NativeMpiContext& context,
-        ConstBufferLease const& input,
-        BufferLease const& output,
+        ConstMpiBuffer const& input,
+        MpiBuffer const& output,
         ScalarType type,
         ReduceOperation operation,
         Peer root,
@@ -257,15 +257,16 @@ namespace caravan
         std::shared_ptr<std::size_t> const& elements)
     {
         auto const elementBytes = scalarSize(type);
-        if(elementBytes == 0u || !validBuffer(input) || !validBuffer(output) || input.bytes() % elementBytes != 0u
-           || output.bytes() < input.bytes() || input.data() == output.data() || root.any || root.value < 0)
+        if(elementBytes == 0u || !validBuffer(input) || !validBuffer(output)
+           || input.value.size_bytes() % elementBytes != 0u || output.value.size_bytes() < input.value.size_bytes()
+           || input.value.data() == output.value.data() || root.any || root.value < 0)
             throw std::invalid_argument("Invalid Caravan MPI reduce");
-        *elements = input.bytes() / elementBytes;
+        *elements = input.value.size_bytes() / elementBytes;
 
-        NativeRequestBatch batch({MPI_REQUEST_NULL}, {input.lifetime(), output.lifetime(), elements});
+        NativeRequestBatch batch({MPI_REQUEST_NULL}, {input.owner, output.owner, elements});
         int const error = MPI_Ireduce(
-            input.data(),
-            output.data(),
+            input.value.data(),
+            output.value.data(),
             static_cast<int>(*elements),
             nativeType(type),
             nativeOperation(operation),
@@ -279,8 +280,8 @@ namespace caravan
 
     NativeRequestBatch detail::startGather(
         NativeMpiContext& context,
-        ConstBufferLease const& input,
-        BufferLease const& output,
+        ConstMpiBuffer const& input,
+        MpiBuffer const& output,
         Peer root,
         CommunicatorId communicator,
         std::shared_ptr<std::size_t> const& resultBytes)
@@ -298,18 +299,18 @@ namespace caravan
             throw mpiError("MPI gather communicator query", error);
         if(rank == root.value)
         {
-            if(size <= 0 || input.bytes() > output.bytes() / static_cast<std::size_t>(size))
+            if(size <= 0 || input.value.size_bytes() > output.value.size_bytes() / static_cast<std::size_t>(size))
                 throw std::invalid_argument("Caravan MPI gather output is too small");
-            *resultBytes = input.bytes() * static_cast<std::size_t>(size);
+            *resultBytes = input.value.size_bytes() * static_cast<std::size_t>(size);
         }
 
-        NativeRequestBatch batch({MPI_REQUEST_NULL}, {input.lifetime(), output.lifetime(), resultBytes});
+        NativeRequestBatch batch({MPI_REQUEST_NULL}, {input.owner, output.owner, resultBytes});
         error = MPI_Igather(
-            input.data(),
-            static_cast<int>(input.bytes()),
+            input.value.data(),
+            static_cast<int>(input.value.size_bytes()),
             MPI_BYTE,
-            output.data(),
-            static_cast<int>(input.bytes()),
+            output.value.data(),
+            static_cast<int>(input.value.size_bytes()),
             MPI_BYTE,
             root.value,
             native,
@@ -321,8 +322,8 @@ namespace caravan
 
     NativeRequestBatch detail::startAllGather(
         NativeMpiContext& context,
-        ConstBufferLease const& input,
-        BufferLease const& output,
+        ConstMpiBuffer const& input,
+        MpiBuffer const& output,
         CommunicatorId communicator,
         std::shared_ptr<std::size_t> const& resultBytes)
     {
@@ -334,17 +335,17 @@ namespace caravan
         int error = MPI_Comm_size(native, &size);
         if(error != MPI_SUCCESS)
             throw mpiError("MPI all-gather communicator query", error);
-        if(size <= 0 || input.bytes() > output.bytes() / static_cast<std::size_t>(size))
+        if(size <= 0 || input.value.size_bytes() > output.value.size_bytes() / static_cast<std::size_t>(size))
             throw std::invalid_argument("Caravan MPI all-gather output is too small");
-        *resultBytes = input.bytes() * static_cast<std::size_t>(size);
+        *resultBytes = input.value.size_bytes() * static_cast<std::size_t>(size);
 
-        NativeRequestBatch batch({MPI_REQUEST_NULL}, {input.lifetime(), output.lifetime(), resultBytes});
+        NativeRequestBatch batch({MPI_REQUEST_NULL}, {input.owner, output.owner, resultBytes});
         error = MPI_Iallgather(
-            input.data(),
-            static_cast<int>(input.bytes()),
+            input.value.data(),
+            static_cast<int>(input.value.size_bytes()),
             MPI_BYTE,
-            output.data(),
-            static_cast<int>(input.bytes()),
+            output.value.data(),
+            static_cast<int>(input.value.size_bytes()),
             MPI_BYTE,
             native,
             &batch.requests[0]);
@@ -355,8 +356,8 @@ namespace caravan
 
     NativeRequestBatch detail::startGatherV(
         NativeMpiContext& context,
-        ConstBufferLease const& input,
-        BufferLease const& output,
+        ConstMpiBuffer const& input,
+        MpiBuffer const& output,
         std::vector<std::size_t> const& receiveBytes,
         std::vector<std::size_t> const& displacements,
         Peer root,
@@ -395,20 +396,18 @@ namespace caravan
             for(std::size_t i = 0u; i < counts->size(); ++i)
             {
                 auto const end = static_cast<std::size_t>((*offsets)[i]) + static_cast<std::size_t>((*counts)[i]);
-                if(end > output.bytes())
+                if(end > output.value.size_bytes())
                     throw std::invalid_argument("Caravan MPI variable gather output is too small");
                 *resultBytes += static_cast<std::size_t>((*counts)[i]);
             }
         }
 
-        NativeRequestBatch batch(
-            {MPI_REQUEST_NULL},
-            {input.lifetime(), output.lifetime(), counts, offsets, resultBytes});
+        NativeRequestBatch batch({MPI_REQUEST_NULL}, {input.owner, output.owner, counts, offsets, resultBytes});
         error = MPI_Igatherv(
-            input.data(),
-            static_cast<int>(input.bytes()),
+            input.value.data(),
+            static_cast<int>(input.value.size_bytes()),
             MPI_BYTE,
-            output.data(),
+            output.value.data(),
             counts->data(),
             offsets->data(),
             MPI_BYTE,
@@ -431,7 +430,7 @@ namespace caravan
 
     mpi::OperationSender<mpi::operation_detail::Send> mpi::send(
         MpiContext& context,
-        ConstBufferLease buffer,
+        ConstMpiBuffer buffer,
         Peer destination,
         MessageTag tag,
         CommunicatorId communicator)
@@ -441,7 +440,7 @@ namespace caravan
 
     mpi::OperationSender<mpi::operation_detail::Receive> mpi::receive(
         MpiContext& context,
-        BufferLease buffer,
+        MpiBuffer buffer,
         Peer source,
         MessageTag tag,
         CommunicatorId communicator)
@@ -451,8 +450,8 @@ namespace caravan
 
     mpi::OperationSender<mpi::operation_detail::AllReduce> mpi::allReduce(
         MpiContext& context,
-        ConstBufferLease input,
-        BufferLease output,
+        ConstMpiBuffer input,
+        MpiBuffer output,
         ScalarType type,
         ReduceOperation operation,
         CommunicatorId communicator)
@@ -464,8 +463,8 @@ namespace caravan
 
     mpi::OperationSender<mpi::operation_detail::Reduce> mpi::reduce(
         MpiContext& context,
-        ConstBufferLease input,
-        BufferLease output,
+        ConstMpiBuffer input,
+        MpiBuffer output,
         ScalarType type,
         ReduceOperation operation,
         Peer root,
@@ -478,8 +477,8 @@ namespace caravan
 
     mpi::OperationSender<mpi::operation_detail::Gather> mpi::gather(
         MpiContext& context,
-        ConstBufferLease input,
-        BufferLease output,
+        ConstMpiBuffer input,
+        MpiBuffer output,
         Peer root,
         CommunicatorId communicator)
     {
@@ -488,8 +487,8 @@ namespace caravan
 
     mpi::OperationSender<mpi::operation_detail::AllGather> mpi::allGather(
         MpiContext& context,
-        ConstBufferLease input,
-        BufferLease output,
+        ConstMpiBuffer input,
+        MpiBuffer output,
         CommunicatorId communicator)
     {
         return {context, operation_detail::AllGather{std::move(input), std::move(output), communicator}};
@@ -497,8 +496,8 @@ namespace caravan
 
     mpi::OperationSender<mpi::operation_detail::GatherV> mpi::gatherV(
         MpiContext& context,
-        ConstBufferLease input,
-        BufferLease output,
+        ConstMpiBuffer input,
+        MpiBuffer output,
         std::vector<std::size_t> receiveBytes,
         std::vector<std::size_t> displacements,
         Peer root,
@@ -564,7 +563,7 @@ namespace caravan
         ValueCallback<SendResult>::type value,
         ErrorCallback error)
     {
-        auto const bytes = operation.buffer.bytes();
+        auto const bytes = operation.buffer.value.size_bytes();
         submitRequest<SendResult>(
             context,
             [operation = std::move(operation)](NativeMpiContext& native)
