@@ -202,7 +202,7 @@ namespace pmacc::particles
             size_t maxSize = 0u;
             size_t lastSize = 0u;
             size_t retries = 0u;
-            // ponytail: retain stage states for synchronous completion; reuse slots if P1 shows this allocation
+            // retain stage states for synchronous completion; reuse slots if P1 shows this allocation
             // matters.
             std::list<PackOperation> packs;
             std::list<SendOperation> sends;
