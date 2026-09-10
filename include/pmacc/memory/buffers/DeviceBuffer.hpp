@@ -138,7 +138,7 @@ namespace pmacc
         /** View retaining the underlying allocation for asynchronous operation state. */
         auto getOwnedAlpakaView() const
         {
-            return caravan::alpaka::OwnedView{*view, *devBuffer};
+            return caravan::Retained{*view, *devBuffer};
         }
 
         /** Lazily fill every current element with a value on the caller-supplied queue. */

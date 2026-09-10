@@ -202,7 +202,7 @@ namespace gol
                     caravan::alpaka::fill(*computeQueue, buff2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
                 evo.initEvolution(
                     *computeQueue,
-                    caravan::alpaka::retain(
+                    caravan::retain(
                         buff1->getDeviceBuffer().getDataBox(),
                         buff1->getDeviceBuffer().getOwnedAlpakaView()),
                     0.1));
@@ -224,12 +224,8 @@ namespace gol
             auto communication = read->spawnCommunication(asyncContext, *communicationQueue);
             auto core = evo.runAsync<CORE>(
                 *computeQueue,
-                caravan::alpaka::retain(
-                    read->getDeviceBuffer().getDataBox(),
-                    read->getDeviceBuffer().getOwnedAlpakaView()),
-                caravan::alpaka::retain(
-                    write->getDeviceBuffer().getDataBox(),
-                    write->getDeviceBuffer().getOwnedAlpakaView()));
+                caravan::retain(read->getDeviceBuffer().getDataBox(), read->getDeviceBuffer().getOwnedAlpakaView()),
+                caravan::retain(write->getDeviceBuffer().getDataBox(), write->getDeviceBuffer().getOwnedAlpakaView()));
 
             auto step = caravan::whenAll(std::move(core), caravan::asSender(std::move(communication)))
                         | caravan::letValue(
@@ -239,8 +235,8 @@ namespace gol
                             {
                                 return evo.runAsync<BORDER>(
                                     *computeQueue,
-                                    caravan::alpaka::retain(read->getDeviceBuffer().getDataBox(), readView),
-                                    caravan::alpaka::retain(write->getDeviceBuffer().getDataBox(), writeView));
+                                    caravan::retain(read->getDeviceBuffer().getDataBox(), readView),
+                                    caravan::retain(write->getDeviceBuffer().getDataBox(), writeView));
                             });
             asyncContext.wait(asyncContext.spawn(std::move(step)));
 

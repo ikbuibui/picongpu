@@ -70,7 +70,7 @@ TEST_CASE("vector constructor generator", "[vector]")
     caravan::ControlContext context;
     auto kernel = PMACC_KERNEL(testKernel)(1, 1)(
         queue,
-        caravan::alpaka::retain(
+        caravan::retain(
             hostDeviceBuffer.getDeviceBuffer().data(),
             hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView()));
     auto copy = hostDeviceBuffer.deviceToHost(queue);
@@ -514,10 +514,10 @@ TEST_CASE("vector ops", "[vector]")
         caravan::alpaka::fill(queue, numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u));
     auto kernel = PMACC_KERNEL(VectorOpsKernel{})(1, 1)(
         queue,
-        caravan::alpaka::retain(
+        caravan::retain(
             hostDeviceBuffer.getDeviceBuffer().data(),
             hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView()),
-        caravan::alpaka::retain(
+        caravan::retain(
             numTestsBuffer.getDeviceBuffer().data(),
             numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView()));
     auto copyResults
@@ -562,10 +562,10 @@ TEST_CASE("vector generic", "[vector]")
         PMACC_KERNEL(CompileTimeKernelCompare2D{})(1, 1)(queue));
     auto runTime = PMACC_KERNEL(RunTimeKernel{})(1, 1)(
         queue,
-        caravan::alpaka::retain(
+        caravan::retain(
             hostDeviceBuffer.getDeviceBuffer().data(),
             hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView()),
-        caravan::alpaka::retain(
+        caravan::retain(
             numTestsBuffer.getDeviceBuffer().data(),
             numTestsBuffer.getDeviceBuffer().getOwnedAlpakaView()));
     auto copyResults

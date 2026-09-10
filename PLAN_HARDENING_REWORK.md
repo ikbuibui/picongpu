@@ -452,8 +452,8 @@ previous-send dependency that protects its exchange-buffer write; the generic
 `RunLoop::runReady` executes a bounded snapshot, deferring self-reposted work to the
 next call, and alpaka `SubmitSender` rejects empty stage packs at compile time.
 
-MPI read inputs now use `ConstBufferLease` while mutable receive/output storage uses
-`BufferLease`, removing PMacc send/reduction `const_cast`s. Gather and variable
+MPI read inputs now use retained const-byte spans while mutable receive/output storage uses
+retained writable-byte spans, removing PMacc send/reduction `const_cast`s. Gather and variable
 gather reject all overlapping input/output ranges rather than exposing incomplete
 root in-place semantics. The stale managed-communicator argument at the final
 native reduction request caller was removed. Legacy factories, task states,

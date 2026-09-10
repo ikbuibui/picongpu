@@ -77,7 +77,7 @@ namespace pmacc
         /** View retaining the underlying allocation for asynchronous operation state. */
         auto getOwnedAlpakaView() const
         {
-            return caravan::alpaka::OwnedView{*view, *hostBuffer};
+            return caravan::Retained{*view, *hostBuffer};
         }
 
         /** Allocate uninitialized data accessible from the host.

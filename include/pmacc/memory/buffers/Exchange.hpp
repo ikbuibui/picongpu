@@ -286,12 +286,12 @@ namespace pmacc
                     if(hostStaging)
                         getHostBuffer().setSizeHostSide(elements);
                     if(deviceStaging)
-                        ::alpaka::memcpy(nativeQueue, deviceStaging->view, source.view, extent);
+                        ::alpaka::memcpy(nativeQueue, deviceStaging->value, source.value, extent);
                     if(hostStaging)
                         ::alpaka::memcpy(
                             nativeQueue,
-                            hostStaging->view,
-                            deviceStaging ? deviceStaging->view : source.view,
+                            hostStaging->value,
+                            deviceStaging ? deviceStaging->value : source.value,
                             extent);
                 });
             return std::move(queueTail)
@@ -357,27 +357,27 @@ namespace pmacc
                                        {
                                            ::alpaka::memcpy(
                                                nativeQueue,
-                                               deviceStaging->view,
-                                               hostStaging->view,
+                                               deviceStaging->value,
+                                               hostStaging->value,
                                                dataExtent);
                                            ::alpaka::memcpy(
                                                nativeQueue,
-                                               destination.view,
-                                               deviceStaging->view,
+                                               destination.value,
+                                               deviceStaging->value,
                                                dataExtent);
                                        }
                                        else
                                            ::alpaka::memcpy(
                                                nativeQueue,
-                                               destination.view,
-                                               hostStaging->view,
+                                               destination.value,
+                                               hostStaging->value,
                                                dataExtent);
                                    }
                                    else if(deviceStaging)
                                        ::alpaka::memcpy(
                                            nativeQueue,
-                                           destination.view,
-                                           deviceStaging->view,
+                                           destination.value,
+                                           deviceStaging->value,
                                            dataExtent);
                                });
                            return std::move(copy) | caravan::then([metadata] { return metadata; });

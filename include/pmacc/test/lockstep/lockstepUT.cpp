@@ -79,10 +79,8 @@ inline auto iotaGerneric(T_DeviceBuffer& devBuffer, T_Queue& queue)
     // use only half of the blocks needed to process the full data
     uint32_t const numBlocks = bufferSize / T_chunkSize / 2u;
     return pmacc::lockstep::exec::kernel(IotaGenericKernel{})
-        .config<T_chunkSize>(numBlocks)(
-            queue,
-            caravan::alpaka::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()),
-            bufferSize);
+        .config<T_chunkSize>(
+            numBlocks)(queue, caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
 
 // doc-include-end: lockstep generic kernel
@@ -104,10 +102,9 @@ inline auto iotaGernericBufferDerivedChunksize(T_DeviceBuffer& devBuffer, T_Queu
     auto bufferSize = devBuffer.size();
     constexpr uint32_t numBlocks = 9;
     return pmacc::lockstep::exec::kernel(IotaGenericKernel{})
-        .config(numBlocks, devBuffer)(
-            queue,
-            caravan::alpaka::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()),
-            bufferSize);
+        .config(
+            numBlocks,
+            devBuffer)(queue, caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
 
 // doc-include-end: lockstep generic kernel buffer selected domain size
@@ -150,10 +147,7 @@ inline auto iotaFixedChunkSize(T_DeviceBuffer& devBuffer, T_Queue& queue)
     auto bufferSize = devBuffer.size();
     constexpr uint32_t numBlocks = 10;
     return pmacc::lockstep::exec::kernel(IotaFixedChunkSizeKernel{})
-        .config(numBlocks)(
-            queue,
-            caravan::alpaka::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()),
-            bufferSize);
+        .config(numBlocks)(queue, caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
 
 // doc-include-end: lockstep generic kernel hard coded domain size
@@ -198,10 +192,7 @@ inline auto iotaFixedChunkSizeND(T_DeviceBuffer& devBuffer, T_Queue& queue)
     auto bufferSize = devBuffer.size();
     constexpr uint32_t numBlocks = 11;
     return pmacc::lockstep::exec::kernel(IotaFixedChunkSizeKernelND{})
-        .config(numBlocks)(
-            queue,
-            caravan::alpaka::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()),
-            bufferSize);
+        .config(numBlocks)(queue, caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
 
 // doc-include-end: lockstep generic kernel hard coded N dimensional domain size
@@ -248,7 +239,7 @@ inline auto iotaGernericWithDynSharedMem(T_DeviceBuffer& devBuffer, T_Queue& que
     return pmacc::lockstep::exec::kernel(IotaGenericKernelWithDynSharedMem{})
         .configSMem<T_chunkSize>(numBlocks, requiredSharedMemBytes)(
             queue,
-            caravan::alpaka::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()),
+            caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()),
             bufferSize);
 }
 

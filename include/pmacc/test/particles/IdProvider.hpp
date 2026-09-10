@@ -152,15 +152,14 @@ namespace pmacc
                     HostDeviceBuffer<uint64_t, 1> idBuf(numIds);
                     auto& deviceBuffer = idBuf.getDeviceBuffer();
 
-                    auto generate = pmacc::lockstep::exec::kernel(GenerateIds<numIdsPerBlock>{})
-                                        .template config<numIdsPerBlock>(numBlocks)(
-                                            queue,
-                                            caravan::alpaka::retain(
-                                                deviceBuffer.getDataBox(),
-                                                deviceBuffer.getOwnedAlpakaView()),
-                                            idProvider.getDeviceGenerator(),
-                                            numThreads,
-                                            numIdsPerThread);
+                    auto generate
+                        = pmacc::lockstep::exec::kernel(GenerateIds<numIdsPerBlock>{})
+                              .template config<numIdsPerBlock>(numBlocks)(
+                                  queue,
+                                  caravan::retain(deviceBuffer.getDataBox(), deviceBuffer.getOwnedAlpakaView()),
+                                  idProvider.getDeviceGenerator(),
+                                  numThreads,
+                                  numIdsPerThread);
                     auto copy = idBuf.deviceToHost(queue);
                     context.wait(context.spawn(caravan::alpaka::sequence(std::move(generate), std::move(copy))));
                     REQUIRE(numIds == ids.size());

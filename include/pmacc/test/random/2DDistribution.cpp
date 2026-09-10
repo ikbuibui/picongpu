@@ -174,7 +174,7 @@ namespace pmacc
                 return pmacc::lockstep::exec::kernel(RandomFiller<blockSize>{})
                     .template config<blockSize>(gridSize)(
                         queue,
-                        caravan::alpaka::retain(buffer.getDataBox(), buffer.getOwnedAlpakaView()),
+                        caravan::retain(buffer.getDataBox(), buffer.getOwnedAlpakaView()),
                         buffer.capacityND(),
                         rand,
                         numSamples);

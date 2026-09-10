@@ -80,7 +80,7 @@ namespace pmacc
             return lockstep::exec::kernel(kernel::InitRNGProvider<blockSize, RNGMethod>{})
                 .template config<blockSize>(gridSize)(
                     queue,
-                    caravan::alpaka::retain(deviceBuffer.getDataBox(), deviceBuffer.getOwnedAlpakaView()),
+                    caravan::retain(deviceBuffer.getDataBox(), deviceBuffer.getOwnedAlpakaView()),
                     seed,
                     m_size);
         }
