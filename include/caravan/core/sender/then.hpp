@@ -123,6 +123,6 @@ namespace caravan
     auto then(T_Function function)
     {
         return detail::SenderAdaptorClosure{[function = std::move(function)](auto sender) mutable
-                                            { return then(std::move(sender), std::move(function)); }};
+                                            { return caravan::then(std::move(sender), std::move(function)); }};
     }
 } // namespace caravan
