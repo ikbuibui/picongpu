@@ -166,7 +166,7 @@ namespace pmacc
                     auto destination = destBuffer.getDeviceBuffer().getOwnedAlpakaView();
                     auto exchange = destBuffer.getReceiveExchange(exchangeType).getDeviceBuffer().getOwnedAlpakaView();
 
-                    return lockstep::exec::kernel(KernelAddExchangeToBorder{})
+                    return PMACC_LOCKSTEP_KERNEL(KernelAddExchangeToBorder{})
                         .config(mapper.getGridDim(), SuperCellSize{})(
                             queue,
                             caravan::retain(destBuffer.getDeviceBuffer().getDataBox(), destination),

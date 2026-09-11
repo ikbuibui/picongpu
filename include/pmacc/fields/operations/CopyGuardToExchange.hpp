@@ -158,7 +158,7 @@ namespace pmacc
                     auto source = srcBuffer.getDeviceBuffer().getOwnedAlpakaView();
                     auto exchange = srcBuffer.getSendExchange(exchangeType).getDeviceBuffer().getOwnedAlpakaView();
 
-                    return lockstep::exec::kernel(KernelCopyGuardToExchange{})
+                    return PMACC_LOCKSTEP_KERNEL(KernelCopyGuardToExchange{})
                         .config(mapper.getGridDim(), SuperCellSize{})(
                             queue,
                             caravan::retain(

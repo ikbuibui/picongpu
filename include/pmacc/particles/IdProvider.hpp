@@ -101,7 +101,7 @@ namespace pmacc
         {
             auto newIdBuffer = std::make_shared<HostDeviceBuffer<uint64_t, 1>>(DataSpace<1>{1});
             auto& deviceBuffer = newIdBuffer->getDeviceBuffer();
-            auto fetch = lockstep::exec::kernel(FetchId{}).template config<1>(1)(
+            auto fetch = PMACC_LOCKSTEP_KERNEL(FetchId{}).template config<1>(1)(
                 queue,
                 getDeviceGenerator(),
                 caravan::retain(deviceBuffer.data(), deviceBuffer.getOwnedAlpakaView()));

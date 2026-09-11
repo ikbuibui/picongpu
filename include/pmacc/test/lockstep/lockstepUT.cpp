@@ -28,6 +28,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <tuple>
 
@@ -78,7 +79,7 @@ inline auto iotaGerneric(T_DeviceBuffer& devBuffer, T_Queue& queue)
     auto bufferSize = devBuffer.size();
     // use only half of the blocks needed to process the full data
     uint32_t const numBlocks = bufferSize / T_chunkSize / 2u;
-    return pmacc::lockstep::exec::kernel(IotaGenericKernel{})
+    return PMACC_LOCKSTEP_KERNEL(IotaGenericKernel{})
         .config<T_chunkSize>(
             numBlocks)(queue, caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
@@ -101,7 +102,7 @@ inline auto iotaGernericBufferDerivedChunksize(T_DeviceBuffer& devBuffer, T_Queu
 {
     auto bufferSize = devBuffer.size();
     constexpr uint32_t numBlocks = 9;
-    return pmacc::lockstep::exec::kernel(IotaGenericKernel{})
+    return PMACC_LOCKSTEP_KERNEL(IotaGenericKernel{})
         .config(
             numBlocks,
             devBuffer)(queue, caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
@@ -146,7 +147,7 @@ inline auto iotaFixedChunkSize(T_DeviceBuffer& devBuffer, T_Queue& queue)
 {
     auto bufferSize = devBuffer.size();
     constexpr uint32_t numBlocks = 10;
-    return pmacc::lockstep::exec::kernel(IotaFixedChunkSizeKernel{})
+    return PMACC_LOCKSTEP_KERNEL(IotaFixedChunkSizeKernel{})
         .config(numBlocks)(queue, caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
 
@@ -191,7 +192,7 @@ inline auto iotaFixedChunkSizeND(T_DeviceBuffer& devBuffer, T_Queue& queue)
 {
     auto bufferSize = devBuffer.size();
     constexpr uint32_t numBlocks = 11;
-    return pmacc::lockstep::exec::kernel(IotaFixedChunkSizeKernelND{})
+    return PMACC_LOCKSTEP_KERNEL(IotaFixedChunkSizeKernelND{})
         .config(numBlocks)(queue, caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
 
@@ -236,7 +237,7 @@ inline auto iotaGernericWithDynSharedMem(T_DeviceBuffer& devBuffer, T_Queue& que
     // use only half of the blocks needed to process the full data
     uint32_t const numBlocks = bufferSize / T_chunkSize / 2u;
     constexpr size_t requiredSharedMemBytes = T_chunkSize * sizeof(uint32_t);
-    return pmacc::lockstep::exec::kernel(IotaGenericKernelWithDynSharedMem{})
+    return PMACC_LOCKSTEP_KERNEL(IotaGenericKernelWithDynSharedMem{})
         .configSMem<T_chunkSize>(numBlocks, requiredSharedMemBytes)(
             queue,
             caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()),
@@ -260,6 +261,33 @@ void validate(T_HostBuffer& results, T_HostBuffer& reference)
         REQUIRE(refPtr[i] == resultPtr[i]);
     }
 }
+
+#if defined(PMACC_SYNC_KERNEL) && PMACC_SYNC_KERNEL == 1 && defined(ALPAKA_ACC_CPU_B_SEQ_T_SEQ_ENABLED)
+struct ThrowingKernel
+{
+    template<typename T_Worker>
+    HDINLINE void operator()(T_Worker const&) const
+    {
+        ALPAKA_THROW_ACC("blocking kernel diagnostic test");
+    }
+};
+
+TEST_CASE("blocking kernel diagnostics", "[lockstep]")
+{
+    using namespace pmacc;
+
+    auto const device = manager::Device<ComputeDevice>::get().current();
+    ComputeDeviceQueue queue(device);
+    std::ostringstream diagnostics;
+    auto* const previousBuffer = std::cerr.rdbuf(diagnostics.rdbuf());
+    auto const sourceLine = __LINE__ + 1u;
+    PMACC_LOCKSTEP_KERNEL(ThrowingKernel{}).config<1>(1u).enqueueNative(queue);
+    std::cerr.rdbuf(previousBuffer);
+
+    CHECK(diagnostics.str().find("Crash after kernel call") != std::string::npos);
+    CHECK(diagnostics.str().find(std::string(__FILE__) + ":" + std::to_string(sourceLine)) != std::string::npos);
+}
+#endif
 
 TEST_CASE("lockstep kernel", "[iota]")
 {

@@ -192,7 +192,7 @@ namespace gol
             GridController<DIM2>& gc = Environment<DIM2>::get().GridController();
             uint32_t seed = gc.getGlobalSize() + gc.getGlobalRank();
 
-            return pmacc::lockstep::exec::kernel(kernel::RandomInit{})
+            return PMACC_LOCKSTEP_KERNEL(kernel::RandomInit{})
                 .config(
                     mapper.getGridDim(),
                     typename T_MappingDesc::SuperCellSize{})(queue, std::move(write), seed, fraction, mapper);
@@ -202,7 +202,7 @@ namespace gol
         auto runAsync(T_Queue& queue, T_Read read, T_Write write)
         {
             AreaMapping<Area, T_MappingDesc> mapper(*mapping);
-            return pmacc::lockstep::exec::kernel(kernel::Evolution{})
+            return PMACC_LOCKSTEP_KERNEL(kernel::Evolution{})
                 .config(
                     mapper.getGridDim(),
                     typename T_MappingDesc::SuperCellSize{})(queue, std::move(read), std::move(write), rule, mapper);
