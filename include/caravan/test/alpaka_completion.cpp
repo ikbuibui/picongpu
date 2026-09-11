@@ -104,19 +104,20 @@ int main(int argc, char** argv)
     // Native fork/join submits the join before host completion, without serializing branches.
     // The fork follows a seed on queue A; branch B must start even while branch A is blocked.
     {
-        caravan::alpaka::Scheduler scheduler{queue};
-        static_assert(
-            std::is_same_v<decltype(caravan::getDomain(scheduler)), caravan::alpaka::SubmissionDomain<Queue>>);
         std::promise<void> release, branchStarted;
         auto gate = release.get_future().share();
         auto started = branchStarted.get_future();
         int seed = 0, left = 0, right = 0;
         bool joinSubmitted = false;
         std::atomic<bool> hostCompleted = false;
-        auto work = scheduler.submit([&](Queue& q) { alpaka::enqueue(q, [&] { seed = 42; }); })
+        auto seedWork = caravan::alpaka::submit(queue, [&](Queue& q) { alpaka::enqueue(q, [&] { seed = 42; }); });
+        static_assert(
+            std::is_same_v<decltype(caravan::getDomain(seedWork)), caravan::alpaka::SubmissionDomain<Queue>>);
+        auto work = std::move(seedWork)
                     | caravan::alpaka::sequence(
                         caravan::whenAll(
-                            scheduler.submit(
+                            caravan::alpaka::submit(
+                                queue,
                                 [&](Queue& q)
                                 {
                                     alpaka::enqueue(
@@ -142,19 +143,21 @@ int main(int argc, char** argv)
                                             });
                                     }),
                                 caravan::alpaka::submit(blockerQueue, [](Queue&) {}))))
-                    | caravan::alpaka::sequence(scheduler.submit(
-                        [&, owner = std::make_unique<int>(42)](Queue& q)
-                        {
-                            joinSubmitted = true;
-                            alpaka::enqueue(q, [&, raw = owner.get()] { assert(left == *raw && right == *raw); });
-                        }))
+                    | caravan::alpaka::sequence(
+                        caravan::alpaka::submit(
+                            queue,
+                            [&, owner = std::make_unique<int>(42)](Queue& q)
+                            {
+                                joinSubmitted = true;
+                                alpaka::enqueue(q, [&, raw = owner.get()] { assert(left == *raw && right == *raw); });
+                            }))
                     | caravan::then(
                         [&]
                         {
                             assert(left == 42 && right == 42);
                             hostCompleted = true;
                         });
-        auto done = scope.spawn(caravan::startsOn(scheduler, std::move(work)));
+        auto done = scope.spawn(std::move(work));
         assert(joinSubmitted);
         assert(!hostCompleted);
         assert(done.state() == caravan::CompletionState::pending);

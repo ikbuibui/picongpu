@@ -139,7 +139,8 @@ namespace caravan
 
     /** MPI backend authority owning lifecycle, progress, and native resources.
      *
-     * This context is not a scheduler for application continuations.
+     * This context is not a scheduler for application continuations. Unexpected
+     * progress-engine failures abort MPI before releasing outstanding storage.
      */
     class MpiContext
     {
