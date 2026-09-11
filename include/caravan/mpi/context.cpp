@@ -161,12 +161,6 @@ namespace caravan
             abortMpi();
         }
 
-        bool shutdownComplete() const noexcept
-        {
-            std::lock_guard lock(m_queueMutex);
-            return m_finished;
-        }
-
         void requestShutdown()
         {
             {
@@ -696,20 +690,9 @@ namespace caravan
         m_implementation->run();
     }
 
-    bool MpiContext::progress()
-    {
-        ExecutorThreadGuard guard;
-        return m_implementation->progress();
-    }
-
     void MpiContext::requestShutdown()
     {
         m_implementation->requestShutdown();
-    }
-
-    bool MpiContext::shutdownComplete() const noexcept
-    {
-        return m_implementation->shutdownComplete();
     }
 
     void MpiContext::submitNative(detail::NativeSubmission submission)
