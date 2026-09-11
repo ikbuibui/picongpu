@@ -26,6 +26,10 @@
 #include "pmacc/particles/memory/boxes/ExchangePopDataBox.hpp"
 #include "pmacc/particles/memory/boxes/ExchangePushDataBox.hpp"
 
+#include <utility>
+
+#include <caravan/alpaka.hpp>
+
 namespace pmacc
 {
     /**
@@ -92,28 +96,34 @@ namespace pmacc
                 stackIndexer.getDeviceBuffer().getDataBox());
         }
 
-        void setSize(size_t const size)
+        template<typename T_Queue>
+        auto resetAsync(T_Queue& queue)
         {
-            // do host and device setSize parallel
-            EventTask split = eventSystem::getTransactionEvent();
-            EventTask e1;
+            stack.getDeviceBuffer().setSizeHostSide(0u);
+            stackIndexer.getDeviceBuffer().setSizeHostSide(0u);
+            auto stackSize = caravan::alpaka::size(
+                queue,
+                stack.getDeviceBuffer().sizeOnDeviceBuffer(),
+                stack.getDeviceBuffer().sizeHostSideBuffer());
+            auto indexSize = caravan::alpaka::size(
+                queue,
+                stackIndexer.getDeviceBuffer().sizeOnDeviceBuffer(),
+                stackIndexer.getDeviceBuffer().sizeHostSideBuffer());
+            return caravan::alpaka::sequence(std::move(stackSize), std::move(indexSize));
+        }
 
-            if(!Environment<>::get().isMpiDirectEnabled())
-            {
-                eventSystem::startTransaction(split);
-                stackIndexer.getHostBuffer().setSize(size);
-                stack.getHostBuffer().setSize(size);
-                e1 = eventSystem::endTransaction();
-            }
-
-            eventSystem::startTransaction(split);
-            stackIndexer.getDeviceBuffer().setSize(size);
-            EventTask e2 = eventSystem::endTransaction();
-            eventSystem::startTransaction(split);
-            stack.getDeviceBuffer().setSize(size);
-            EventTask e3 = eventSystem::endTransaction();
-
-            eventSystem::setTransactionEvent(e1 + e2 + e3);
+        template<typename T_Queue>
+        auto publishDeviceSizes(T_Queue& queue)
+        {
+            auto stackSize = caravan::alpaka::size(
+                queue,
+                stack.getDeviceBuffer().sizeHostSideBuffer(),
+                stack.getDeviceBuffer().sizeOnDeviceBuffer());
+            auto indexSize = caravan::alpaka::size(
+                queue,
+                stackIndexer.getDeviceBuffer().sizeHostSideBuffer(),
+                stackIndexer.getDeviceBuffer().sizeOnDeviceBuffer());
+            return caravan::alpaka::sequence(std::move(stackSize), std::move(indexSize));
         }
 
         size_t getHostCurrentSize()

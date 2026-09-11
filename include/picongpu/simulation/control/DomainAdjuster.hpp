@@ -29,6 +29,8 @@
 #include <pmacc/mpi/reduceMethods/Reduce.hpp>
 
 #include <array>
+#include <memory>
+#include <span>
 #include <stdexcept>
 
 namespace picongpu
@@ -131,28 +133,25 @@ namespace picongpu
             int mpiPos(gc.getPosition()[dim]);
             int numMpiRanks = gc.getGlobalSize();
 
+            auto& mpi = pmacc::Environment<>::get().getMpiContext();
+            auto const communicator = gc.getCommunicator().getCommunicatorId();
+
             // gather mpi position in the direction we are checking
             std::vector<int> mpiPositions(numMpiRanks);
-            MPI_CHECK(MPI_Allgather(
-                &mpiPos,
-                1,
-                MPI_INT,
-                mpiPositions.data(),
-                1,
-                MPI_INT,
-                gc.getCommunicator().getMPIComm()));
+            caravan::syncWait<caravan::GatherResult>(caravan::mpi::allGather(
+                mpi,
+                std::as_bytes(std::span{&mpiPos, 1}),
+                std::as_writable_bytes(std::span{mpiPositions}),
+                communicator));
 
             // gather local sizes in the direction we are checking
             std::vector<uint64_t> allLocalSizes(numMpiRanks);
             auto lSize = static_cast<uint64_t>(m_localDomainSize[dim]);
-            MPI_CHECK(MPI_Allgather(
-                &lSize,
-                1,
-                MPI_UINT64_T,
-                allLocalSizes.data(),
-                1,
-                MPI_UINT64_T,
-                gc.getCommunicator().getMPIComm()));
+            caravan::syncWait<caravan::GatherResult>(caravan::mpi::allGather(
+                mpi,
+                std::as_bytes(std::span{&lSize, 1}),
+                std::as_writable_bytes(std::span{allLocalSizes}),
+                communicator));
 
             uint64_t offset = 0u;
             for(size_t i = 0u; i < mpiPositions.size(); ++i)
@@ -284,20 +283,20 @@ namespace picongpu
                 pmacc::mpi::MPIReduce mpiReduce;
 
                 int globalMax;
-                mpiReduce(
+                caravan::syncWait(mpiReduce.reduce(
                     pmacc::math::operation::Max(),
                     &globalMax,
                     &m_localDomainSize[dim],
                     1,
-                    pmacc::mpi::reduceMethods::AllReduce());
+                    pmacc::mpi::reduceMethods::AllReduce()));
 
                 int globalMin;
-                mpiReduce(
+                caravan::syncWait(mpiReduce.reduce(
                     pmacc::math::operation::Min(),
                     &globalMin,
                     &m_localDomainSize[dim],
                     1,
-                    pmacc::mpi::reduceMethods::AllReduce());
+                    pmacc::mpi::reduceMethods::AllReduce()));
 
                 // local size must be equal for all devices in y direction
                 if(m_isMaster && globalMax != globalMin)
@@ -334,12 +333,12 @@ namespace picongpu
             {
                 auto localDomainSize = static_cast<uint64_t>(m_localDomainSize[dim]);
                 pmacc::mpi::MPIReduce mpiReduce;
-                mpiReduce(
+                caravan::syncWait(mpiReduce.reduce(
                     pmacc::math::operation::Add(),
                     &validGlobalGridSize,
                     &localDomainSize,
                     1,
-                    pmacc::mpi::reduceMethods::AllReduce());
+                    pmacc::mpi::reduceMethods::AllReduce()));
                 /* since we are not doing independent reduces per slice we need
                  * to adjust the reduce result by dividing the sizes of all other dimensions
                  * we are not check within the method call

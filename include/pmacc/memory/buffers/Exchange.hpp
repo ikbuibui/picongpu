@@ -23,8 +23,6 @@
 
 #include "pmacc/assert.hpp"
 #include "pmacc/dimensions/GridLayout.hpp"
-#include "pmacc/eventSystem/tasks/Factory.hpp"
-#include "pmacc/eventSystem/tasks/TaskReceive.hpp"
 #include "pmacc/mappings/simulation/GridController.hpp"
 #include "pmacc/memory/buffers/DeviceBuffer.hpp"
 #include "pmacc/memory/buffers/HostBuffer.hpp"
@@ -32,6 +30,12 @@
 #include "pmacc/types.hpp"
 
 #include <memory>
+#include <optional>
+#include <stdexcept>
+
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
+#include <caravan/mpi.hpp>
 
 namespace pmacc
 {
@@ -248,14 +252,136 @@ namespace pmacc
             return *deviceDoubleBuffer;
         }
 
-        EventTask startSend()
+        struct ReceiveMetadata
         {
-            return Environment<>::get().Factory().createTaskSend(*this);
+            size_t const elements;
+            caravan::ReceiveResult const mpi;
+        };
+
+        /** Describe one lazy send. The exchange, queue, and borrowed buffers must outlive it. */
+        template<typename T_Queue>
+        auto send(T_Queue& queue)
+        {
+            auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
+            auto source = getDeviceBuffer().getOwnedAlpakaView();
+            std::optional<decltype(source)> deviceStaging;
+            if(hasDeviceDoubleBuffer())
+                deviceStaging.emplace(getDeviceDoubleBuffer().getOwnedAlpakaView());
+            using HostView = decltype(getHostBuffer().getOwnedAlpakaView());
+            std::optional<HostView> hostStaging;
+            if(!Environment<>::get().isMpiDirectEnabled())
+                hostStaging.emplace(getHostBuffer().getOwnedAlpakaView());
+
+            auto queueTail = caravan::alpaka::submit(
+                queue,
+                [this,
+                 source = std::move(source),
+                 deviceStaging = std::move(deviceStaging),
+                 hostStaging = std::move(hostStaging)](T_Queue& nativeQueue) mutable
+                {
+                    auto const elements = getDeviceBuffer().size();
+                    auto const extent = getDeviceBuffer().sizeND(elements).toAlpakaMemVec();
+                    if(deviceStaging)
+                        getDeviceDoubleBuffer().setSizeHostSide(elements);
+                    if(hostStaging)
+                        getHostBuffer().setSizeHostSide(elements);
+                    if(deviceStaging)
+                        ::alpaka::memcpy(nativeQueue, deviceStaging->value, source.value, extent);
+                    if(hostStaging)
+                        ::alpaka::memcpy(
+                            nativeQueue,
+                            hostStaging->value,
+                            deviceStaging ? deviceStaging->value : source.value,
+                            extent);
+                });
+            return std::move(queueTail)
+                   | caravan::letValue(
+                       [this, &communicator]
+                       {
+                           auto const buffer = getCPtrCurrentSize();
+                           return communicator
+                               .send(exchange, buffer.asCharPtr(), buffer.sizeInBytes(), communicationTag);
+                       });
         }
 
-        EventTask startReceive()
+        /** Describe one lazy receive followed by size publication and device copies. */
+        template<typename T_Queue>
+        auto receive(T_Queue& queue)
         {
-            return Environment<>::get().Factory().createTaskReceive(*this);
+            auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
+            auto destination = getDeviceBuffer().getOwnedAlpakaView();
+            std::optional<decltype(destination)> deviceStaging;
+            if(hasDeviceDoubleBuffer())
+                deviceStaging.emplace(getDeviceDoubleBuffer().getOwnedAlpakaView());
+            using HostView = decltype(getHostBuffer().getOwnedAlpakaView());
+            std::optional<HostView> hostStaging;
+            if(!Environment<>::get().isMpiDirectEnabled())
+                hostStaging.emplace(getHostBuffer().getOwnedAlpakaView());
+
+            auto const buffer = getCPtrCapacity();
+            auto receive = communicator.receive(exchange, buffer.asCharPtr(), buffer.sizeInBytes(), communicationTag);
+            return std::move(receive)
+                   | caravan::letValue(
+                       [this,
+                        &queue,
+                        destination = std::move(destination),
+                        deviceStaging = std::move(deviceStaging),
+                        hostStaging = std::move(hostStaging)](caravan::ReceiveResult result) mutable
+                       {
+                           auto const metadata = receiveMetadata(result);
+                           getDeviceBuffer().setSizeHostSide(metadata.elements);
+                           if(deviceStaging)
+                               getDeviceDoubleBuffer().setSizeHostSide(metadata.elements);
+                           if(hostStaging)
+                               getHostBuffer().setSizeHostSide(metadata.elements);
+
+                           auto deviceSize = getDeviceBuffer().currentSizeBufferDevice;
+                           auto hostSize = getDeviceBuffer().sizeHostSideBuffer();
+                           auto const sizeExtent = MemSpace<DIM1>(1).toAlpakaMemVec();
+                           auto const dataExtent = getDeviceBuffer().sizeND(metadata.elements).toAlpakaMemVec();
+                           auto copy = caravan::alpaka::submit(
+                               queue,
+                               [destination = std::move(destination),
+                                deviceStaging = std::move(deviceStaging),
+                                hostStaging = std::move(hostStaging),
+                                deviceSize = std::move(deviceSize),
+                                hostSize = std::move(hostSize),
+                                sizeExtent,
+                                dataExtent](T_Queue& nativeQueue) mutable
+                               {
+                                   if(deviceSize)
+                                       ::alpaka::memcpy(nativeQueue, *deviceSize, hostSize, sizeExtent);
+                                   if(hostStaging)
+                                   {
+                                       if(deviceStaging)
+                                       {
+                                           ::alpaka::memcpy(
+                                               nativeQueue,
+                                               deviceStaging->value,
+                                               hostStaging->value,
+                                               dataExtent);
+                                           ::alpaka::memcpy(
+                                               nativeQueue,
+                                               destination.value,
+                                               deviceStaging->value,
+                                               dataExtent);
+                                       }
+                                       else
+                                           ::alpaka::memcpy(
+                                               nativeQueue,
+                                               destination.value,
+                                               hostStaging->value,
+                                               dataExtent);
+                                   }
+                                   else if(deviceStaging)
+                                       ::alpaka::memcpy(
+                                           nativeQueue,
+                                           destination.value,
+                                           deviceStaging->value,
+                                           dataExtent);
+                               });
+                           return std::move(copy) | caravan::then([metadata] { return metadata; });
+                       });
         }
 
         /**
@@ -307,6 +433,17 @@ namespace pmacc
             }
 
             return getHostBuffer().getCPtrCurrentSize();
+        }
+
+    private:
+        ReceiveMetadata receiveMetadata(caravan::ReceiveResult const& result) const
+        {
+            if(result.bytes % sizeof(TYPE) != 0u)
+                throw std::runtime_error("Received exchange byte count is not an element count");
+            auto const elements = result.bytes / sizeof(TYPE);
+            if(elements > static_cast<size_t>(deviceBuffer->capacityND().productOfComponents()))
+                throw std::runtime_error("Received exchange exceeds its device buffer");
+            return {elements, result};
         }
 
     protected:

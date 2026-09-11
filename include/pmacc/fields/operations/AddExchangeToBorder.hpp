@@ -22,7 +22,6 @@
 
 #pragma once
 
-#include "pmacc/fields/tasks/FieldFactory.hpp"
 #include "pmacc/lockstep.hpp"
 #include "pmacc/mappings/kernel/ExchangeMapping.hpp"
 #include "pmacc/mappings/kernel/MappingDescription.hpp"
@@ -31,6 +30,8 @@
 #include "pmacc/types.hpp"
 
 #include <boost/core/ignore_unused.hpp>
+
+#include <caravan/alpaka.hpp>
 
 namespace pmacc
 {
@@ -146,37 +147,32 @@ namespace pmacc
                  * @param superCellSize compile time supercell size
                  * @param exchangeType the exchange direction which needs to be copied
                  */
-                template<typename T_DestBuffer, typename T_SuperCellSize>
-                void operator()(
+                template<typename T_Queue, typename T_DestBuffer, typename T_SuperCellSize>
+                auto sender(
+                    T_Queue& queue,
                     T_DestBuffer& destBuffer,
                     T_SuperCellSize const& superCellSize,
                     uint32_t const exchangeType) const
                 {
                     boost::ignore_unused(superCellSize);
-
                     using SuperCellSize = T_SuperCellSize;
-
                     constexpr uint32_t dim = T_SuperCellSize::dim;
-
                     using MappingDesc = MappingDescription<dim, SuperCellSize>;
 
-                    /* use only the x dimension to determine the number of supercells in the GUARD
-                     *
-                     * @warning pmacc restriction: all dimension must have the some number of guarding
-                     * supercells
-                     */
                     auto const numGuardSuperCells = destBuffer.getGridLayout().guardSizeND() / SuperCellSize::toRT();
-
                     MappingDesc const mappingDesc(destBuffer.getGridLayout().sizeND(), numGuardSuperCells);
-
                     ExchangeMapping<GUARD, MappingDesc> mapper(mappingDesc, exchangeType);
-
                     DataSpace<dim> const direction = Mask::getRelativeDirections<dim>(mapper.getExchangeType());
+                    auto destination = destBuffer.getDeviceBuffer().getOwnedAlpakaView();
+                    auto exchange = destBuffer.getReceiveExchange(exchangeType).getDeviceBuffer().getOwnedAlpakaView();
 
-                    PMACC_LOCKSTEP_KERNEL(KernelAddExchangeToBorder{})
+                    return PMACC_LOCKSTEP_KERNEL(KernelAddExchangeToBorder{})
                         .config(mapper.getGridDim(), SuperCellSize{})(
-                            destBuffer.getDeviceBuffer().getDataBox(),
-                            destBuffer.getReceiveExchange(exchangeType).getDeviceBuffer().getDataBox(),
+                            queue,
+                            caravan::retain(destBuffer.getDeviceBuffer().getDataBox(), destination),
+                            caravan::retain(
+                                destBuffer.getReceiveExchange(exchangeType).getDeviceBuffer().getDataBox(),
+                                exchange),
                             destBuffer.getReceiveExchange(exchangeType).getDeviceBuffer().capacityND(),
                             direction,
                             mapper);

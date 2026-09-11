@@ -28,9 +28,11 @@
 #include "pmacc/memory/dataTypes/Mask.hpp"
 
 #include <algorithm>
+#include <array>
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 namespace pmacc
 {
@@ -99,7 +101,6 @@ namespace pmacc
             , gridLayout(gridLayout)
             , maxExchange(0)
         {
-            init();
         }
 
         /**
@@ -118,7 +119,6 @@ namespace pmacc
             , gridLayout(dataSpace)
             , maxExchange(0)
         {
-            init();
         }
 
         /**
@@ -141,7 +141,6 @@ namespace pmacc
             , gridLayout(gridLayout)
             , maxExchange(0)
         {
-            init();
         }
 
         GridBuffer(
@@ -156,7 +155,6 @@ namespace pmacc
             , gridLayout(gridLayout)
             , maxExchange(0)
         {
-            init();
         }
 
         /**
@@ -434,7 +432,7 @@ namespace pmacc
          */
         Mask getSendMask() const
         {
-            return (Environment<DIM>::get().EnvironmentController().getCommunicationMask() & sendMask);
+            return (Environment<DIM>::get().GridController().getCommunicationMask() & sendMask);
         }
 
         /**
@@ -444,7 +442,7 @@ namespace pmacc
          */
         Mask getReceiveMask() const
         {
-            return (Environment<DIM>::get().EnvironmentController().getCommunicationMask() & receiveMask);
+            return (Environment<DIM>::get().GridController().getCommunicationMask() & receiveMask);
         }
 
         /**
@@ -455,57 +453,66 @@ namespace pmacc
          * This operation runs sequential to other code but intern asynchronous
          *
          */
-        EventTask communication()
+        caravan::Event sendCompletion(uint32_t exchange) const
         {
-            EventTask ev = this->asyncCommunication(eventSystem::getTransactionEvent());
-            eventSystem::setTransactionEvent(ev);
-            return ev;
+            return sendCompletions[exchange];
         }
 
-        /**
-         * Starts sync data from own device buffer to neighbor device buffer.
-         *
-         * Asynchronously starts synchronization data from internal DeviceBuffer using added
-         * Exchange buffers.
-         *
-         */
-        EventTask asyncCommunication(EventTask serialEvent)
+        caravan::Event receiveCompletion(uint32_t exchange) const
         {
-            EventTask evR;
+            return receiveCompletions[exchange];
+        }
+
+        void setSendCompletion(uint32_t exchange, caravan::Event completion)
+        {
+            sendCompletions[exchange] = std::move(completion);
+        }
+
+        void setReceiveCompletion(uint32_t exchange, caravan::Event completion)
+        {
+            receiveCompletions[exchange] = std::move(completion);
+        }
+
+        /** Describe one lazy send for an active exchange direction. */
+        template<typename T_Queue>
+        auto send(T_Queue& queue, uint32_t exchange)
+        {
+            return sendExchanges[exchange]->send(queue);
+        }
+
+        /** Describe one lazy receive for an active exchange direction. */
+        template<typename T_Queue>
+        auto receive(T_Queue& queue, uint32_t exchange)
+        {
+            return receiveExchanges[exchange]->receive(queue);
+        }
+
+        /** Eager runtime-sized boundary for dynamically selected exchange directions. */
+        template<typename T_Queue>
+        caravan::Event spawnCommunication(caravan::ControlContext& context, T_Queue& queue)
+        {
+            std::vector<caravan::Event> branches;
+            branches.reserve(maxExchange * 2u);
             for(uint32_t i = 0; i < maxExchange; ++i)
             {
-                evR += asyncReceive(serialEvent, i);
+                if(hasReceiveExchange(i))
+                {
+                    auto completion = context.spawnFuture<typename Exchange<BORDERTYPE, DIM>::ReceiveMetadata>(
+                        caravan::asSender(receiveCompletions[i])
+                        | caravan::letValue([this, &queue, i] { return receive(queue, i); }));
+                    receiveCompletions[i] = completion.event();
+                    branches.push_back(completion.event());
+                }
 
-                ExchangeType sendEx = Mask::getMirroredExchangeType(i);
-
-                evR += asyncSend(serialEvent, sendEx);
+                auto const sendEx = Mask::getMirroredExchangeType(i);
+                if(hasSendExchange(sendEx))
+                {
+                    auto completion = context.spawn(send(queue, sendEx));
+                    sendCompletions[sendEx] = completion;
+                    branches.push_back(std::move(completion));
+                }
             }
-            return evR;
-        }
-
-        EventTask asyncSend(EventTask serialEvent, uint32_t sendEx)
-        {
-            if(hasSendExchange(sendEx))
-            {
-                eventSystem::startTransaction(serialEvent + sendEvents[sendEx]);
-                sendEvents[sendEx] = sendExchanges[sendEx]->startSend();
-                eventSystem::endTransaction();
-                return sendEvents[sendEx];
-            }
-            return EventTask();
-        }
-
-        EventTask asyncReceive(EventTask serialEvent, uint32_t recvEx)
-        {
-            if(hasReceiveExchange(recvEx))
-            {
-                eventSystem::startTransaction(serialEvent + receiveEvents[recvEx]);
-                receiveEvents[recvEx] = receiveExchanges[recvEx]->startReceive();
-
-                eventSystem::endTransaction();
-                return receiveEvents[recvEx];
-            }
-            return EventTask();
+            return caravan::whenAll(branches);
         }
 
         /**
@@ -516,20 +523,6 @@ namespace pmacc
         GridLayout<DIM> getGridLayout()
         {
             return gridLayout;
-        }
-
-    private:
-        friend class Environment<DIM>;
-
-        void init()
-        {
-            for(uint32_t i = 0; i < 27; ++i)
-            {
-                /* fill array with valid empty events to avoid side effects if
-                 * array is accessed without calling hasExchange() before usage */
-                receiveEvents[i] = EventTask();
-                sendEvents[i] = EventTask();
-            }
         }
 
     protected:
@@ -543,8 +536,8 @@ namespace pmacc
 
         std::unique_ptr<Exchange<BORDERTYPE, DIM>> sendExchanges[27];
         std::unique_ptr<Exchange<BORDERTYPE, DIM>> receiveExchanges[27];
-        EventTask receiveEvents[27];
-        EventTask sendEvents[27];
+        caravan::Event receiveCompletions[27];
+        caravan::Event sendCompletions[27];
 
         uint32_t maxExchange; // use max exchanges and run over the array is faster as use set from stl
     };

@@ -22,28 +22,19 @@
 #pragma once
 
 
-#include "pmacc/Environment.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
 #include "pmacc/exec/KernelLauncher.hpp"
 #include "pmacc/traits/GetNComponents.hpp"
 #include "pmacc/types.hpp"
 
-#include <string>
-#include <typeinfo>
+#if defined(PMACC_SYNC_KERNEL) && PMACC_SYNC_KERNEL == 1
+#    include "pmacc/alpakaHelper/ValidateCall.hpp"
 
-
-/* No namespace in this file since we only declare macro defines */
-
-/*if this flag is defined all kernel calls would be checked and synchronize
- * this flag must set by the compiler or inside of the Makefile
- */
-#if (PMACC_SYNC_KERNEL == 1)
-#    define PMACC_CHECK_KERNEL_MSG(...) PMACC_CHECK_ALPAKA_CALL_MSG(__VA_ARGS__)
-#else
-/*no synchronize and check of kernel calls*/
-#    define PMACC_CHECK_KERNEL_MSG(...) ;
+#    include <string>
+#    include <typeinfo>
 #endif
 
+#include <caravan/alpaka.hpp>
 
 namespace pmacc::exec::detail
 {
@@ -52,8 +43,10 @@ namespace pmacc::exec::detail
     {
         //! kernel functor
         T_Kernel const m_kernel;
-        std::string const m_file;
+#if defined(PMACC_SYNC_KERNEL) && PMACC_SYNC_KERNEL == 1
+        char const* const m_file;
         size_t const m_line;
+#endif
         //! grid extents for the kernel
         math::Vector<IdxType, T_dim> const m_gridExtent;
         //! block extents for the kernel
@@ -66,58 +59,52 @@ namespace pmacc::exec::detail
         template<typename T_VectorGrid, typename T_VectorBlock>
         HINLINE KernelLauncher(
             T_Kernel const& kernel,
-            std::string const& file,
+            char const* const file,
             size_t const line,
             T_VectorGrid const& gridExtent,
             T_VectorBlock const& blockExtent)
             : m_kernel(kernel)
+#if defined(PMACC_SYNC_KERNEL) && PMACC_SYNC_KERNEL == 1
             , m_file(file)
             , m_line(line)
+#endif
             , m_gridExtent(gridExtent)
             , m_blockExtent(blockExtent)
         {
+#if !defined(PMACC_SYNC_KERNEL) || PMACC_SYNC_KERNEL != 1
+            static_cast<void>(file);
+            static_cast<void>(line);
+#endif
         }
 
-        /** Enqueue the kernel functor with the given arguments for execution.
-         *
-         * The stream into which the kernel is enqueued is automatically chosen by PMacc's event system.
-         *
-         * @tparam T_Args types of the arguments
-         * @param args arguments for the kernel functor
-         */
-        template<typename... T_Args>
-        HINLINE void operator()(T_Args&&... args) const
+        /** Enqueue this kernel from a submission state that retains all arguments through completion. */
+        template<typename T_Queue, typename... T_Args>
+        HINLINE void enqueueNative(T_Queue& queue, T_Args&&... args) const
         {
-            std::string const kernelName = typeid(m_kernel).name();
-            std::string const kernelInfo = kernelName + std::string(" [") + m_file + std::string(":")
-                                           + std::to_string(m_line) + std::string(" ]");
-
-            PMACC_CHECK_KERNEL_MSG(
-                alpaka::wait(manager::Device<ComputeDevice>::get().current());
-                , std::string("Crash before kernel call ") + kernelInfo);
-
-            pmacc::TaskKernel* taskKernel = pmacc::Environment<>::get().Factory().createTaskKernel(kernelName);
-
-            auto gridExtent = m_gridExtent.toAlpakaKernelVec();
-            auto blockExtent = m_blockExtent.toAlpakaKernelVec();
-            auto elemExtent = math::Vector<IdxType, T_dim>::create(1).toAlpakaKernelVec();
-            auto workDiv
+#if defined(PMACC_SYNC_KERNEL) && PMACC_SYNC_KERNEL == 1
+            std::string const kernelInfo
+                = std::string(typeid(m_kernel).name()) + " [" + m_file + ":" + std::to_string(m_line) + " ]";
+            PMACC_CHECK_ALPAKA_CALL_MSG(::alpaka::wait(queue), "Crash before kernel call " + kernelInfo);
+#endif
+            auto const gridExtent = m_gridExtent.toAlpakaKernelVec();
+            auto const blockExtent = m_blockExtent.toAlpakaKernelVec();
+            auto const elemExtent = math::Vector<IdxType, T_dim>::create(1).toAlpakaKernelVec();
+            auto const workDiv
                 = ::alpaka::WorkDivMembers<::alpaka::DimInt<T_dim>, IdxType>(gridExtent, blockExtent, elemExtent);
+            ::alpaka::exec<Acc<T_dim>>(queue, workDiv, m_kernel, caravan::unwrap(args)...);
+#if defined(PMACC_SYNC_KERNEL) && PMACC_SYNC_KERNEL == 1
+            PMACC_CHECK_ALPAKA_CALL_MSG(::alpaka::wait(queue), "Crash after kernel call " + kernelInfo);
+#endif
+        }
 
-            auto const kernelTask
-                = ::alpaka::createTaskKernel<Acc<T_dim>>(workDiv, m_kernel, std::forward<T_Args>(args)...);
-
-            auto queue = taskKernel->getAlpakaQueue();
-
-            ::alpaka::enqueue(queue, kernelTask);
-
-            PMACC_CHECK_KERNEL_MSG(
-                alpaka::wait(manager::Device<ComputeDevice>::get().current());
-                , std::string("Crash after kernel launch ") + kernelInfo);
-            taskKernel->activateChecks();
-            PMACC_CHECK_KERNEL_MSG(
-                alpaka::wait(manager::Device<ComputeDevice>::get().current());
-                , std::string("Crash after kernel activation") + kernelInfo);
+        /** Lazily describe this kernel on an explicitly borrowed queue. */
+        template<typename T_Queue, typename... T_Args>
+        [[nodiscard]] HINLINE auto operator()(T_Queue& queue, T_Args... args) const
+        {
+            return caravan::alpaka::submit(
+                queue,
+                [launcher = *this, args = std::tuple<T_Args...>{std::move(args)...}](T_Queue& nativeQueue) mutable
+                { std::apply([&](auto&... values) { launcher.enqueueNative(nativeQueue, values...); }, args); });
         }
     };
 

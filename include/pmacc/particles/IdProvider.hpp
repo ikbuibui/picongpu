@@ -29,6 +29,8 @@
 
 #include <bit>
 
+#include <caravan/alpaka.hpp>
+
 namespace pmacc
 {
     struct IdGenerator
@@ -50,6 +52,15 @@ namespace pmacc
 
     class IdProvider : public ISimulationData
     {
+        struct FetchId
+        {
+            template<typename T_Worker>
+            DINLINE void operator()(T_Worker const& worker, IdGenerator idGenerator, uint64_t* nextId) const
+            {
+                *nextId = idGenerator.fetchInc(worker);
+            }
+        };
+
     public:
         struct State
         {
@@ -61,10 +72,12 @@ namespace pmacc
             uint64_t maxNumProc;
         };
 
-        void synchronize() override
+        /** Return a lazy copy of the current device state to the host. */
+        template<typename T_Queue>
+        auto synchronize(T_Queue& queue)
         {
-            idBuffer.deviceToHost();
-        };
+            return idBuffer.deviceToHost(queue);
+        }
 
         SimulationDataId getUniqueId() override
         {
@@ -76,32 +89,31 @@ namespace pmacc
             return IdGenerator{idBuffer.getDeviceBuffer().data()};
         }
 
-        /** Returns the state (e.g. for saving)
-         *  Result is the same as the parameter to @ref setState
-         */
-        State getState()
+        /** Read state previously synchronized to the host. */
+        State getStateHost() const
         {
-            idBuffer.deviceToHost();
             return State{*idBuffer.getHostBuffer().data(), m_startId, m_maxNumProc};
         }
 
-        uint64_t getNewIdHost()
+        /** Lazily allocate and fetch one id on an explicit queue. */
+        template<typename T_Queue>
+        auto getNewIdHost(T_Queue& queue)
         {
-            HostDeviceBuffer<uint64_t, 1> newIdBuf(DataSpace<1>(1));
-
-            auto kernel = [] ALPAKA_FN_ACC(auto const& worker, auto idGenerator, uint64_t* nextId) -> void
-            { *nextId = idGenerator.fetchInc(worker); };
-            PMACC_LOCKSTEP_KERNEL(kernel).config<1>(1)(getDeviceGenerator(), newIdBuf.getDeviceBuffer().data());
-            newIdBuf.deviceToHost();
-            return *newIdBuf.getHostBuffer().data();
+            auto newIdBuffer = std::make_shared<HostDeviceBuffer<uint64_t, 1>>(DataSpace<1>{1});
+            auto& deviceBuffer = newIdBuffer->getDeviceBuffer();
+            auto fetch = PMACC_LOCKSTEP_KERNEL(FetchId{}).template config<1>(1)(
+                queue,
+                getDeviceGenerator(),
+                caravan::retain(deviceBuffer.data(), deviceBuffer.getOwnedAlpakaView()));
+            auto copy = newIdBuffer->deviceToHost(queue);
+            return caravan::alpaka::sequence(std::move(fetch), std::move(copy))
+                   | caravan::then([newIdBuffer] { return *newIdBuffer->getHostBuffer().data(); });
         }
 
-        /** Sets the internal state (e.g. after a restart)
-         */
-        void setState(State const& state)
+        /** Set host state; call initialize() before device use. */
+        void setStateHost(State const& state)
         {
             *idBuffer.getHostBuffer().data() = state.nextId;
-            idBuffer.hostToDevice();
             m_startId = state.startId;
             if(m_maxNumProc < state.maxNumProc)
                 m_maxNumProc = state.maxNumProc;
@@ -109,27 +121,26 @@ namespace pmacc
                 % state.startId % state.maxNumProc % m_maxNumProc;
         }
 
-        // Reset the idProvider to initial state for testing
-        void reset()
+        /** Return a lazy copy of the host state to the device. */
+        template<typename T_Queue>
+        auto initialize(T_Queue& queue)
         {
-            setState(State{.nextId = m_startId, .startId = m_startId, .maxNumProc = m_maxNumProc});
+            return idBuffer.hostToDevice(queue);
         }
 
+        /** Construct host state; initialize() must complete before the first device use. */
         IdProvider(SimulationDataId providerName, uint64_t mpiRank, uint64_t numMpiRanks)
             : name(providerName)
             , idBuffer(DataSpace<1>{1})
         {
             auto startId = reverseBits(mpiRank);
             State state{startId, startId, numMpiRanks};
-            setState(state);
+            setStateHost(state);
         }
 
-        /**
-         * Return true, if an overflow of the counter is detected and hence there might be duplicate ids
-         */
-        bool isOverflown()
+        /** Check an already synchronized state for overflow. */
+        static bool isOverflown(State const& curState)
         {
-            State curState = getState();
             /* Overflow happens, when an id puts bits into the bits used for ensuring uniqueness.
              * This are the n upper bits with n = highest bit set in the maximum id (which is maxNumProc_ - 1)
              * when counting the bits from 1 = right most bit

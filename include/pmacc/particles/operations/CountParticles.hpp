@@ -33,6 +33,11 @@
 #include "pmacc/traits/GetNumWorkers.hpp"
 #include "pmacc/types.hpp"
 
+#include <memory>
+#include <utility>
+
+#include <caravan/alpaka.hpp>
+
 namespace pmacc
 {
     /* count particles
@@ -120,29 +125,40 @@ namespace pmacc
          * @param filter filter instance which must inharid from PositionFilter
          * @param parFilter particle filter method, must fulfill the interface of pmacc::filter::Interface
          *                  The working domain for the filter is supercells.
-         * @return number of particles in defined area
+         * @return lazy sender yielding the number of particles in the defined area
          */
-        template<uint32_t AREA, class PBuffer, class Filter, class CellDesc, typename T_ParticleFilter>
-        static uint64_cu countOnDevice(
+        template<
+            uint32_t AREA,
+            typename T_Queue,
+            class PBuffer,
+            class Filter,
+            class CellDesc,
+            typename T_ParticleFilter>
+        static auto countAsync(
+            T_Queue& queue,
             PBuffer& buffer,
             CellDesc cellDescription,
             Filter filter,
             T_ParticleFilter& parFilter)
         {
-            GridBuffer<uint64_cu, DIM1> counter(DataSpace<DIM1>(1));
-
+            auto counter = std::make_shared<GridBuffer<uint64_cu, DIM1>>(DataSpace<DIM1>(1));
             auto const mapper = makeAreaMapper<AREA>(cellDescription);
-
-            PMACC_LOCKSTEP_KERNEL(KernelCountParticles{})
-                .config(mapper.getGridDim(), buffer)(
-                    buffer.getDeviceParticlesBox(),
-                    counter.getDeviceBuffer().data(),
-                    filter,
-                    mapper,
-                    parFilter);
-
-            counter.deviceToHost();
-            return *(counter.getHostBuffer().getDataBox());
+            auto initialize = caravan::alpaka::fill(queue, counter->getDeviceBuffer().getOwnedAlpakaView(), 0u);
+            auto count = PMACC_LOCKSTEP_KERNEL(KernelCountParticles{})
+                             .config(mapper.getGridDim(), buffer)(
+                                 queue,
+                                 buffer.getDeviceParticlesBox(),
+                                 caravan::retain(
+                                     counter->getDeviceBuffer().data(),
+                                     counter->getDeviceBuffer().getOwnedAlpakaView()),
+                                 filter,
+                                 mapper,
+                                 parFilter);
+            auto copy = counter->deviceToHost(queue);
+            return caravan::alpaka::sequence(
+                       caravan::alpaka::sequence(std::move(initialize), std::move(count)),
+                       std::move(copy))
+                   | caravan::then([counter] { return *(counter->getHostBuffer().getDataBox()); });
         }
 
         /** Get particle count
@@ -152,16 +168,18 @@ namespace pmacc
          * @param filter filter instance which must inharid from PositionFilter
          * @param parFilter particle filter method, must fulfill the interface of pmacc::filter::Interface
          *                  The working domain for the filter is supercells.
-         * @return number of particles in defined area
+         * @return lazy sender yielding the number of particles in the defined area
          */
-        template<class PBuffer, class Filter, class CellDesc, typename T_ParticleFilter>
-        static uint64_cu countOnDevice(
+        template<typename T_Queue, class PBuffer, class Filter, class CellDesc, typename T_ParticleFilter>
+        static auto countAsync(
+            T_Queue& queue,
             PBuffer& buffer,
             CellDesc cellDescription,
             Filter filter,
             T_ParticleFilter& parFilter)
         {
-            return pmacc::CountParticles::countOnDevice<CORE + BORDER + GUARD>(
+            return pmacc::CountParticles::countAsync<CORE + BORDER + GUARD>(
+                queue,
                 buffer,
                 cellDescription,
                 filter,
@@ -178,10 +196,17 @@ namespace pmacc
          * @param size local size in cells for checked volume
          * @param parFilter particle filter method, must fulfill the interface of pmacc::filter::Interface
          *                  The working domain for the filter is supercells.
-         * @return number of particles in defined area
+         * @return lazy sender yielding the number of particles in the defined area
          */
-        template<uint32_t AREA, class PBuffer, class CellDesc, class Space, typename T_ParticleFilter>
-        static uint64_cu countOnDevice(
+        template<
+            uint32_t AREA,
+            typename T_Queue,
+            class PBuffer,
+            class CellDesc,
+            class Space,
+            typename T_ParticleFilter>
+        static auto countAsync(
+            T_Queue& queue,
             PBuffer& buffer,
             CellDesc cellDescription,
             Space const& origin,
@@ -192,7 +217,7 @@ namespace pmacc
             using MyParticleFilter = typename FilterFactory<usedFilters>::FilterType;
             MyParticleFilter filter;
             filter.setWindowPosition(origin, size);
-            return pmacc::CountParticles::countOnDevice<AREA>(buffer, cellDescription, filter, parFilter);
+            return pmacc::CountParticles::countAsync<AREA>(queue, buffer, cellDescription, filter, parFilter);
         }
 
         /** Get particle count
@@ -203,17 +228,19 @@ namespace pmacc
          * @param size local size in cells for checked volume
          * @param parFilter particle filter method, must fulfill the interface of pmacc::filter::Interface
          *                  The working domain for the filter is supercells.
-         * @return number of particles in defined area
+         * @return lazy sender yielding the number of particles in the defined area
          */
-        template<class PBuffer, class Filter, class CellDesc, class Space, typename T_ParticleFilter>
-        static uint64_cu countOnDevice(
+        template<typename T_Queue, class PBuffer, class Filter, class CellDesc, class Space, typename T_ParticleFilter>
+        static auto countAsync(
+            T_Queue& queue,
             PBuffer& buffer,
             CellDesc cellDescription,
             Space const& origin,
             Space const& size,
             T_ParticleFilter& parFilter)
         {
-            return pmacc::CountParticles::countOnDevice<CORE + BORDER + GUARD>(
+            return pmacc::CountParticles::countAsync<CORE + BORDER + GUARD>(
+                queue,
                 buffer,
                 cellDescription,
                 origin,

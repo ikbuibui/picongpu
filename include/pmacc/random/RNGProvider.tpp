@@ -27,6 +27,8 @@
 
 #include <memory>
 
+#include <caravan/alpaka.hpp>
+
 namespace pmacc
 {
     namespace random
@@ -69,16 +71,18 @@ namespace pmacc
         }
 
         template<uint32_t T_dim, class T_RNGMethod>
-        void RNGProvider<T_dim, T_RNGMethod>::init(uint32_t seed)
+        template<typename T_Queue>
+        auto RNGProvider<T_dim, T_RNGMethod>::init(T_Queue& queue, uint32_t seed)
         {
             constexpr uint32_t blockSize = 256;
-
-            uint32_t const gridSize = (m_size.productOfComponents() + blockSize - 1u) / blockSize; // Round up
-
-            auto bufferBox = buffer->getDeviceBuffer().getDataBox();
-
-            PMACC_LOCKSTEP_KERNEL(kernel::InitRNGProvider<blockSize, RNGMethod>{})
-                .template config<blockSize>(gridSize)(bufferBox, seed, m_size);
+            uint32_t const gridSize = (m_size.productOfComponents() + blockSize - 1u) / blockSize;
+            auto& deviceBuffer = buffer->getDeviceBuffer();
+            return PMACC_LOCKSTEP_KERNEL(kernel::InitRNGProvider<blockSize, RNGMethod>{})
+                .template config<blockSize>(gridSize)(
+                    queue,
+                    caravan::retain(deviceBuffer.getDataBox(), deviceBuffer.getOwnedAlpakaView()),
+                    seed,
+                    m_size);
         }
 
         template<uint32_t T_dim, class T_RNGMethod>
@@ -133,15 +137,17 @@ namespace pmacc
         }
 
         template<uint32_t T_dim, class T_RNGMethod>
-        void RNGProvider<T_dim, T_RNGMethod>::synchronize()
+        template<typename T_Queue>
+        auto RNGProvider<T_dim, T_RNGMethod>::synchronize(T_Queue& queue)
         {
-            buffer->deviceToHost();
+            return buffer->deviceToHost(queue);
         }
 
         template<uint32_t T_dim, class T_RNGMethod>
-        void RNGProvider<T_dim, T_RNGMethod>::syncToDevice()
+        template<typename T_Queue>
+        auto RNGProvider<T_dim, T_RNGMethod>::syncToDevice(T_Queue& queue)
         {
-            buffer->hostToDevice();
+            return buffer->hostToDevice(queue);
         }
 
     } // namespace random

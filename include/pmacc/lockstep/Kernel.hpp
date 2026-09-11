@@ -22,7 +22,7 @@
 #pragma once
 
 
-#include "pmacc/eventSystem/events/kernelEvents.hpp"
+#include "pmacc/exec/Kernel.hpp"
 #include "pmacc/exec/KernelLauncher.hpp"
 #include "pmacc/exec/KernelWithDynSharedMem.hpp"
 #include "pmacc/lockstep/BlockCfg.hpp"
@@ -59,12 +59,7 @@ namespace pmacc::lockstep
                 }
             };
 
-            /** Wraps a user kernel functor to prepare the execution on the device.
-             *
-             * This objects contains the kernel functor, kernel meta information.
-             * Object is used to apply the grid and block extents and optionally the amount of dynamic shared memory to
-             * the kernel.
-             */
+            /** Wrap a user kernel functor and apply launch extents and dynamic shared memory. */
             template<typename T_UserKernelFunctor>
             struct KernelPreperationWrapper
             {
@@ -72,17 +67,28 @@ namespace pmacc::lockstep
                 using KernelFunctor = detail::LockStepKernel<T_UserKernelFunctor, T_BlockCfg>;
 
                 T_UserKernelFunctor const m_UserKernelFunctor;
-                std::string const m_file;
+#if defined(PMACC_SYNC_KERNEL) && PMACC_SYNC_KERNEL == 1
+                char const* const m_file;
                 size_t const m_line;
+#else
+                static constexpr char const* m_file = "";
+                static constexpr size_t m_line = 0u;
+#endif
 
                 HINLINE KernelPreperationWrapper(
                     T_UserKernelFunctor const& kernelFunctor,
-                    std::string const& file = std::string(),
-                    size_t const line = 0)
+                    char const* const file = "",
+                    size_t const line = 0u)
                     : m_UserKernelFunctor(kernelFunctor)
+#if defined(PMACC_SYNC_KERNEL) && PMACC_SYNC_KERNEL == 1
                     , m_file(file)
                     , m_line(line)
+#endif
                 {
+#if !defined(PMACC_SYNC_KERNEL) || PMACC_SYNC_KERNEL != 1
+                    static_cast<void>(file);
+                    static_cast<void>(line);
+#endif
                 }
 
                 /** Configured kernel object.
@@ -261,35 +267,28 @@ namespace pmacc::lockstep
          * example for lambda usage:
          *
          * @code{.cpp}
-         *   pmacc::lockstep::exec::kernel([]ALPAKA_FN_ACC(auto const& acc) -> void{
+         *   PMACC_LOCKSTEP_KERNEL([]ALPAKA_FN_ACC(auto const& acc) -> void{
          *       printf("Hello World.\n");
-         *   }).config<1>(1)()
+         *   }).config<1>(1)(queue)
          * @endcode
          *
          * @tparam T_KernelFunctor type of the kernel functor
          * @param kernelFunctor instance of the functor, lambda are supported
-         * @param file file name (for debug)
-         * @param line line number in the file (for debug)
+         * @param file kernel call-site file used by blocking-kernel diagnostics
+         * @param line kernel call-site line used by blocking-kernel diagnostics
          */
         template<typename T_KernelFunctor>
-        inline auto kernel(
+        [[nodiscard]] inline auto kernel(
             T_KernelFunctor const& kernelFunctor,
-            std::string const& file = std::string(),
-            size_t const line = 0) -> detail::KernelPreperationWrapper<T_KernelFunctor>
+            char const* const file = "",
+            size_t const line = 0u) -> detail::KernelPreperationWrapper<T_KernelFunctor>
         {
             return detail::KernelPreperationWrapper<T_KernelFunctor>(kernelFunctor, file, line);
         }
 
-
     } // namespace exec
 } // namespace pmacc::lockstep
 
-/** Create a kernel object out of a functor instance.
- *
- * This macro add the current filename and line number to the kernel object.
- * @see ::pmacc::lockstep::exec::kernel
- *
- * @param ... instance of kernel functor
- */
+/** Create a lockstep kernel object and retain its call site for blocking-kernel diagnostics. */
 #define PMACC_LOCKSTEP_KERNEL(...)                                                                                    \
     ::pmacc::lockstep::exec::kernel(__VA_ARGS__, __FILE__, static_cast<size_t>(__LINE__))

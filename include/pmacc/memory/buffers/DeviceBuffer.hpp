@@ -24,23 +24,64 @@
 
 #include "pmacc/assert.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"
-#include "pmacc/eventSystem/tasks/Factory.hpp"
-#include "pmacc/memory/Array.hpp"
+#include "pmacc/lockstep.hpp"
 #include "pmacc/memory/boxes/DataBox.hpp"
 #include "pmacc/memory/buffers/Buffer.hpp"
 #include "pmacc/types.hpp"
 
-#include <memory>
+#include <optional>
+#include <type_traits>
+#include <utility>
+
+#include <caravan/alpaka.hpp>
 
 namespace pmacc
 {
-    class EventTask;
+    namespace detail
+    {
+        template<typename T_Value>
+        struct IndirectValue
+        {
+            T_Value const* ptr;
+        };
 
-    template<class T_Type, unsigned T_dim>
-    class HostBuffer;
+        template<typename T_Value>
+        constexpr bool isIndirectValue = false;
 
-    template<class T_Type, unsigned T_dim>
-    class Buffer;
+        template<typename T_Value>
+        constexpr bool isIndirectValue<IndirectValue<T_Value>> = true;
+
+        template<uint32_t T_xChunkSize>
+        struct KernelSetValue
+        {
+            template<typename T_DataBox, typename T_Value, typename T_Size, typename T_Acc, typename T_BlockCfg>
+            DINLINE void operator()(
+                T_Acc const& acc,
+                T_DataBox memBox,
+                T_Value const& value,
+                T_Size const& size,
+                T_BlockCfg const& blockCfg) const
+            {
+                auto const blockIndex = T_Size(device::getBlockIdx(acc));
+                auto blockSize = T_Size::create(1);
+                blockSize.x() = T_xChunkSize;
+                lockstep::makeForEach<T_xChunkSize>(blockCfg.getWorker(acc))(
+                    [&](uint32_t const linearIdx)
+                    {
+                        auto virtualWorkerIdx = T_Size::create(0);
+                        virtualWorkerIdx.x() = linearIdx;
+                        auto const idx = blockSize * blockIndex + virtualWorkerIdx;
+                        if(idx.x() < size.x())
+                        {
+                            if constexpr(isIndirectValue<T_Value>)
+                                memBox(idx) = *value.ptr;
+                            else
+                                memBox(idx) = value;
+                        }
+                    });
+            }
+        };
+    } // namespace detail
 
     /** N-dimensional device buffer
      *
@@ -73,7 +114,6 @@ namespace pmacc
         BufferType1D as1DBuffer()
         {
             auto numElements = this->size();
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             return BufferType1D(
                 alpaka::getPtrNative(*view),
                 alpaka::getDev(*devBuffer),
@@ -83,23 +123,98 @@ namespace pmacc
         BufferType1D as1DBufferNElem(size_t const numElements)
         {
             PMACC_ASSERT(numElements < this->size());
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             return BufferType1D(
                 alpaka::getPtrNative(*view),
                 alpaka::getDev(*devBuffer),
                 MemSpace<DIM1>(numElements).toAlpakaMemVec());
         }
 
+        /** Borrowed view; the DeviceBuffer must outlive all native use. */
         ViewType getAlpakaView() const
         {
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             return *view;
         }
 
-        /** allocate data accessible from the device
+        /** View retaining the underlying allocation for asynchronous operation state. */
+        auto getOwnedAlpakaView() const
+        {
+            return caravan::Retained{*view, *devBuffer};
+        }
+
+        /** Lazily fill every current element with a value on the caller-supplied queue. */
+        template<typename T_Queue>
+        auto setValueAsync(T_Queue& queue, T_Type const& value)
+        {
+            auto const areaSize = MemSpace<T_dim>(this->sizeND(this->size()));
+            auto gridSize = areaSize;
+            constexpr uint32_t xChunkSize = 256u;
+            gridSize.x() = alpaka::core::divCeil(gridSize.x(), static_cast<size_t>(xChunkSize));
+            auto const blockCfg = lockstep::makeBlockCfg<xChunkSize>();
+            auto blockSize = DataSpace<T_dim>::create(1);
+            blockSize.x() = blockCfg.numWorkers();
+            auto const workDiv = alpaka::WorkDivMembers<AlpakaDim<T_dim>, IdxType>{
+                gridSize.toAlpakaKernelVec(),
+                blockSize.toAlpakaKernelVec(),
+                DataSpace<T_dim>::create(1).toAlpakaKernelVec()};
+            auto destination = getOwnedAlpakaView();
+            auto const destinationBox = getDataBox();
+
+            if constexpr(sizeof(T_Type) <= 128u && std::is_trivially_copyable_v<T_Type>)
+                return caravan::alpaka::submit(
+                    queue,
+                    [destination = std::move(destination), destinationBox, value, areaSize, workDiv, blockCfg](
+                        T_Queue& nativeQueue) mutable
+                    {
+                        if(areaSize.productOfComponents() != 0u)
+                            alpaka::exec<Acc<T_dim>>(
+                                nativeQueue,
+                                workDiv,
+                                detail::KernelSetValue<xChunkSize>{},
+                                destinationBox,
+                                value,
+                                areaSize,
+                                blockCfg);
+                    });
+            else
+            {
+                auto hostValue = alpaka::allocMappedBufIfSupported<T_Type, MemIdxType>(
+                    manager::Device<HostDevice>::get().current(),
+                    manager::Device<ComputeDevice>::get().getPlatform(),
+                    MemSpace<DIM1>(1).toAlpakaMemVec());
+                alpaka::getPtrNative(hostValue)[0] = value;
+                auto deviceValue = alpaka::allocBuf<T_Type, MemIdxType>(
+                    manager::Device<ComputeDevice>::get().current(),
+                    MemSpace<DIM1>(1).toAlpakaMemVec());
+                return caravan::alpaka::submit(
+                    queue,
+                    [destination = std::move(destination),
+                     destinationBox,
+                     hostValue = std::move(hostValue),
+                     deviceValue = std::move(deviceValue),
+                     areaSize,
+                     workDiv,
+                     blockCfg](T_Queue& nativeQueue) mutable
+                    {
+                        if(areaSize.productOfComponents() == 0u)
+                            return;
+                        alpaka::memcpy(nativeQueue, deviceValue, hostValue, MemSpace<DIM1>(1).toAlpakaMemVec());
+                        alpaka::exec<Acc<T_dim>>(
+                            nativeQueue,
+                            workDiv,
+                            detail::KernelSetValue<xChunkSize>{},
+                            destinationBox,
+                            detail::IndirectValue<T_Type>{alpaka::getPtrNative(deviceValue)},
+                            areaSize,
+                            blockCfg);
+                    });
+            }
+        }
+
+        /** Allocate uninitialized data accessible from the device.
          *
          * @param size extent for each dimension (in elements)
-         * @param sizeOnDevice memory with the current size of the grid is stored on device
+         * @param sizeOnDevice allocate device-side size storage; its value must be initialized through an explicit
+         *                      queue operation before device use
          *
          * @attention offset + size must be less or equal to the size of the source buffer
          */
@@ -121,12 +236,8 @@ namespace pmacc
                 pitchInBytes.toAlpakaMemVec()));
 
             if(sizeOnDevice)
-            {
                 createSizeOnDeviceBuffers();
-            }
-            this->setSize(size.productOfComponents());
             this->isMemoryContiguous = true;
-            reset(false);
         }
 
         /** create a shallow view into an existing buffer
@@ -134,7 +245,8 @@ namespace pmacc
          * @param source buffer to create the view on
          * @param size extent for each dimension (in elements)
          * @param offset offset within the source (in elements)
-         * @param sizeOnDevice memory with the current size of the grid is stored on device
+         * @param sizeOnDevice allocate device-side size storage; its value must be initialized through an explicit
+         *                      queue operation before device use
          *
          * @attention offset + size must be less or equal to the size of the source buffer
          */
@@ -153,37 +265,14 @@ namespace pmacc
                 alpaka::getExtents(subView),
                 alpaka::getPitchesInBytes(subView)));
             if(sizeOnDevice)
-            {
                 createSizeOnDeviceBuffers();
-            }
-            this->setSize(size.productOfComponents());
             this->isMemoryContiguous = T_dim == DIM1;
-            reset(true);
         }
 
-        ~DeviceBuffer() override
-        {
-            eventSystem::startOperation(ITask::TASK_DEVICE);
-            eventSystem::startOperation(ITask::TASK_HOST);
-        }
-
-        void reset(bool preserveData = true) override
-        {
-            this->setSize(Buffer<T_Type, T_dim>::capacityND().productOfComponents());
-
-            eventSystem::startOperation(ITask::TASK_DEVICE);
-            if(!preserveData)
-            {
-                // Using Array is a workaround for types without default constructor
-                memory::Array<uint8_t, sizeof(T_Type)> tmp(uint8_t{0});
-                // use first element to avoid issue because Array is aligned (sizeof can be larger than component type)
-                setValue(*reinterpret_cast<T_Type*>(tmp.data()));
-            }
-        }
+        ~DeviceBuffer() override = default;
 
         T_Type* data() override
         {
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
             return alpaka::getPtrNative(*view);
         }
@@ -191,7 +280,6 @@ namespace pmacc
         DataBoxType getDataBox() override
         {
             auto pitchBytes = MemSpace<T_dim>(getPitchesInBytes(*view));
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             return DataBoxType(PitchedBox<T_Type, T_dim>(alpaka::getPtrNative(*view), pitchBytes));
         }
 
@@ -210,7 +298,6 @@ namespace pmacc
          */
         CurrentSizeBufferDevice sizeOnDeviceBuffer()
         {
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             if(!hasCurrentSizeOnDevice())
             {
                 throw std::runtime_error("Buffer has no size on device!, currentSize is only stored on host side.");
@@ -224,58 +311,17 @@ namespace pmacc
          */
         typename Buffer<T_Type, T_dim>::CurrentSizeBufferHost sizeHostSideBuffer()
         {
-            eventSystem::startOperation(ITask::TASK_HOST);
             return this->currentSizeBufferHost;
         }
 
+        /** Host-side cached size. Synchronize sizeOnDeviceBuffer() explicitly when required. */
         size_t size() override
         {
-            if(hasCurrentSizeOnDevice())
-            {
-                eventSystem::startTransaction(eventSystem::getTransactionEvent());
-                Environment<>::get().Factory().createTaskGetCurrentSizeFromDevice(*this);
-                eventSystem::endTransaction().waitForFinished();
-            }
-
             return Buffer<T_Type, T_dim>::size();
         }
 
-        void setSize(size_t const newSize) override
-        {
-            Buffer<T_Type, T_dim>::setSize(newSize);
-
-            if(hasCurrentSizeOnDevice())
-            {
-                Environment<>::get().Factory().createTaskSetCurrentSizeOnDevice(*this, newSize);
-            }
-        }
-
-        /** Copies data from the given HostBuffer to this DeviceBuffer.
-         *
-         * @param other the HostBuffer to copy from
-         */
-        void copyFrom(HostBuffer<T_Type, T_dim>& other)
-        {
-            Environment<>::get().Factory().createTaskCopy(other, *this);
-        }
-
-        /** Copies data from the given DeviceBuffer to this DeviceBuffer.
-         *
-         * @param other the DeviceBuffer to copy from
-         */
-        void copyFrom(DeviceBuffer<T_Type, T_dim>& other)
-        {
-            Environment<>::get().Factory().createTaskCopy(other, *this);
-        }
-
-        void setValue(T_Type const& value) override
-        {
-            Environment<>::get().Factory().createTaskSetValue(*this, value);
-        };
-
         auto sizeDeviceSideBuffer()
         {
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             return currentSizeBufferDevice.value();
         }
 
@@ -283,36 +329,15 @@ namespace pmacc
         {
             PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
             size_t const size = this->size();
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             return {alpaka::getPtrNative(*view), size};
         }
 
         typename Buffer<T_Type, T_dim>::CPtr getCPtrCapacity() final
         {
             PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
-            eventSystem::startOperation(ITask::TASK_DEVICE);
             size_t const size = this->capacityND().productOfComponents();
             return {alpaka::getPtrNative(*view), size};
         }
     };
-
-    /** Factory for a new heap-allocated DeviceBuffer buffer object that is a deep copy of the given device
-     * buffer
-     *
-     * @tparam T_Type value type
-     * @tparam T_dim index dimensionality
-     *
-     * @param source source device buffer
-     */
-    template<class T_Type, unsigned T_dim>
-    HINLINE std::unique_ptr<DeviceBuffer<T_Type, T_dim>> makeDeepCopy(DeviceBuffer<T_Type, T_dim>& source)
-    {
-        // We have to call this constructor to allocate a new data storage and not shallow-copy the source
-        auto result = std::make_unique<DeviceBuffer<T_Type, T_dim>>(source.capacityND());
-        result->copyFrom(source);
-        // Wait for copy to finish, so that the resulting object is safe to use after return
-        eventSystem::getTransactionEvent().waitForFinished();
-        return result;
-    }
 
 } // namespace pmacc

@@ -31,6 +31,10 @@
 #include <pmacc/mpi/MPIReduce.hpp>
 #include <pmacc/mpi/reduceMethods/AllReduce.hpp>
 
+#include <utility>
+
+#include <caravan/alpaka.hpp>
+
 namespace picongpu
 {
     namespace particles
@@ -56,17 +60,22 @@ namespace picongpu
 
                 auto hostDeviceBuffer = pmacc::HostDeviceBuffer<Estimate, 1>{1u};
                 auto hostBox = hostDeviceBuffer.getHostBuffer().getDataBox();
-                hostDeviceBuffer.hostToDevice();
-                auto kernel = DebyeLengthEstimateKernel{};
-                PMACC_LOCKSTEP_KERNEL(kernel).config(mapper.getGridDim(), electrons)(
-                    electrons.getDeviceParticlesBox(),
-                    mapper,
-                    minMacroparticlesPerSupercell,
-                    hostDeviceBuffer.getDeviceBuffer().getDataBox());
-                hostDeviceBuffer.deviceToHost();
-
-                // Copy is asynchronous, need to wait for it to finish
-                eventSystem::getTransactionEvent().waitForFinished();
+                hostBox(0) = Estimate{};
+                auto& queue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+                auto initialize = hostDeviceBuffer.hostToDevice(queue);
+                auto kernel = PMACC_LOCKSTEP_KERNEL(DebyeLengthEstimateKernel{})
+                                  .config(mapper.getGridDim(), electrons)
+                                  .sender(
+                                      queue,
+                                      electrons.getDeviceParticlesBox(),
+                                      mapper,
+                                      minMacroparticlesPerSupercell,
+                                      hostDeviceBuffer.getDeviceBuffer().getDataBox());
+                auto copy = hostDeviceBuffer.deviceToHost(queue);
+                caravan::syncWait(
+                    caravan::alpaka::sequence(
+                        caravan::alpaka::sequence(std::move(initialize), std::move(kernel)),
+                        std::move(copy)));
                 return hostBox(0);
             }
 
@@ -88,36 +97,38 @@ namespace picongpu
                     = estimateLocalDebyeLength<T_ElectronSpecies>(cellDescription, minMacroparticlesPerSupercell);
                 auto globalEstimate = Estimate{};
                 pmacc::mpi::MPIReduce reduce;
-                reduce(
-                    pmacc::math::operation::Add(),
-                    &globalEstimate.numUsedSupercells,
-                    &localEstimate.numUsedSupercells,
-                    1,
-                    pmacc::mpi::reduceMethods::AllReduce());
-                reduce(
-                    pmacc::math::operation::Add(),
-                    &globalEstimate.numFailingSupercells,
-                    &localEstimate.numFailingSupercells,
-                    1,
-                    pmacc::mpi::reduceMethods::AllReduce());
-                reduce(
-                    pmacc::math::operation::Add(),
-                    &globalEstimate.sumWeighting,
-                    &localEstimate.sumWeighting,
-                    1,
-                    pmacc::mpi::reduceMethods::AllReduce());
-                reduce(
-                    pmacc::math::operation::Add(),
-                    &globalEstimate.sumTemperatureKeV,
-                    &localEstimate.sumTemperatureKeV,
-                    1,
-                    pmacc::mpi::reduceMethods::AllReduce());
-                reduce(
-                    pmacc::math::operation::Add(),
-                    &globalEstimate.sumDebyeLength,
-                    &localEstimate.sumDebyeLength,
-                    1,
-                    pmacc::mpi::reduceMethods::AllReduce());
+                caravan::syncWait(
+                    caravan::whenAll(
+                        reduce.reduce(
+                            pmacc::math::operation::Add(),
+                            &globalEstimate.numUsedSupercells,
+                            &localEstimate.numUsedSupercells,
+                            1,
+                            pmacc::mpi::reduceMethods::AllReduce()),
+                        reduce.reduce(
+                            pmacc::math::operation::Add(),
+                            &globalEstimate.numFailingSupercells,
+                            &localEstimate.numFailingSupercells,
+                            1,
+                            pmacc::mpi::reduceMethods::AllReduce()),
+                        reduce.reduce(
+                            pmacc::math::operation::Add(),
+                            &globalEstimate.sumWeighting,
+                            &localEstimate.sumWeighting,
+                            1,
+                            pmacc::mpi::reduceMethods::AllReduce()),
+                        reduce.reduce(
+                            pmacc::math::operation::Add(),
+                            &globalEstimate.sumTemperatureKeV,
+                            &localEstimate.sumTemperatureKeV,
+                            1,
+                            pmacc::mpi::reduceMethods::AllReduce()),
+                        reduce.reduce(
+                            pmacc::math::operation::Add(),
+                            &globalEstimate.sumDebyeLength,
+                            &localEstimate.sumDebyeLength,
+                            1,
+                            pmacc::mpi::reduceMethods::AllReduce())));
                 return globalEstimate;
             }
 
