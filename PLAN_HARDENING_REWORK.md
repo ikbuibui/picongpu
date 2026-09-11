@@ -404,27 +404,11 @@ registry are removed. Grid topology remains owned by `GridController` and
 Caravan `MpiContext`. The eager communicator methods, compatibility-owned async
 context, and legacy MPI tasks are removed.
 
-Ordinary `OperationSender<T>` now stores concrete, MPI-free operation descriptors
-instead of an allocating `std::function` start closure. Native types and the
-remaining queue callback erasure stay behind the normal/native header boundary. An
-executable-local allocation check with GCC/libstdc++ records zero allocations for
-borrowed-send construction and connect; P1 remains responsible for the full,
-portable start/completion and callback-size baseline.
-
-- Audit whether `ICommunicator` still needs runtime polymorphism after legacy task
-  removal.
-- Separate topology/domain configuration from async send/receive execution.
-- Remove eager `startSendAsync`, `startReceiveAsync`, and `progressAsync` from the
-  normal interface after their callers migrate.
-- Avoid an additional PMacc async context owned only for compatibility methods.
-- Measure whether `OperationSender<T>`'s `std::function` start and three callback
-  objects allocate for representative operations.
-- If material, replace callback type erasure with a concrete operation descriptor,
-  small-buffer move-only erasure, or direct templated native sender while preserving
-  the normal/native header split.
-
-Do not expose native MPI types to ordinary PMacc or PIConGPU code merely to remove
-one abstraction layer.
+Ordinary operations are thin wrappers over the templated native `request` and
+`invoke` senders. The redundant descriptor and callback-adaptation layer is gone;
+construction and connection remain allocation-free. `<caravan/mpi.hpp>` exposes
+native MPI declarations, while core and Alpaka headers remain MPI-independent.
+The owner queue retains the only submission type erasure.
 
 ## S5: Simplify collective ordering state
 

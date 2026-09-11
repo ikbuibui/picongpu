@@ -5,9 +5,13 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include <atomic>
 #include <cassert>
 #include <cstddef>
+#include <cstdlib>
+#include <exception>
 #include <memory>
+#include <new>
 #include <span>
 #include <thread>
 #include <utility>
@@ -18,15 +22,59 @@
 
 namespace
 {
-    struct Preserve
+    thread_local bool countAllocations = false;
+    thread_local std::size_t allocationCount = 0u;
+
+    struct Increment
     {
         template<typename T_Acc>
         ALPAKA_FN_ACC void operator()(T_Acc const&, int* value) const
         {
-            *value += 0;
+            ++*value;
         }
     };
+
+    struct VoidReceiver
+    {
+        void set_value() noexcept
+        {
+            output.setReady();
+        }
+
+        void set_error(std::exception_ptr error) noexcept
+        {
+            output.setFailed(std::move(error));
+        }
+
+        void set_stopped() noexcept
+        {
+            output.setStopped();
+        }
+
+        caravan::EventSource output;
+    };
 } // namespace
+
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
+void* operator new(std::size_t bytes)
+{
+    if(countAllocations)
+        ++allocationCount;
+    if(auto* memory = std::malloc(bytes == 0u ? 1u : bytes))
+        return memory;
+    throw std::bad_alloc{};
+}
+
+void operator delete(void* memory) noexcept
+{
+    std::free(memory);
+}
+
+void operator delete(void* memory, std::size_t) noexcept
+{
+    std::free(memory);
+}
+#endif
 
 int main(int argc, char** argv)
 {
@@ -45,63 +93,134 @@ int main(int argc, char** argv)
             using Acc = alpaka::AccCpuSerial<Dim, Idx>;
 #endif
             using Queue = alpaka::Queue<Acc, alpaka::NonBlocking>;
-
             auto const device = alpaka::getDevByIdx(alpaka::Platform<Acc>{}, 0u);
             auto const host = alpaka::getDevByIdx(alpaka::PlatformCpu{}, 0u);
             Queue queue{device};
             auto const one = alpaka::Vec<Dim, Idx>{1u};
-            auto deviceValue = alpaka::allocBuf<int, Idx>(device, one);
-            auto hostValue = alpaka::allocBuf<int, Idx>(host, one);
-            int received = -1;
-            hostValue[0] = mpi.topology().rank;
+            auto const workDiv = alpaka::WorkDivMembers<Dim, Idx>{one, one, one};
+            auto producerInput = alpaka::allocBuf<int, Idx>(host, one);
+            auto producerDevice = alpaka::allocBuf<int, Idx>(device, one);
+            auto mpiInput = alpaka::allocBuf<int, Idx>(host, one);
+            auto received = alpaka::allocBuf<int, Idx>(host, one);
+            auto consumerDevice = alpaka::allocBuf<int, Idx>(device, one);
+            auto consumerOutput = alpaka::allocBuf<int, Idx>(host, one);
+            producerInput[0] = mpi.topology().rank;
+            mpiInput[0] = received[0] = consumerOutput[0] = -1;
 
-            bool acceleratorStarted = false;
-            bool mpiStarted = false;
-            bool continued = false;
-            auto accelerator = caravan::alpaka::sequence(
-                caravan::alpaka::sequence(
-                    caravan::alpaka::submit(queue, [&](Queue&) { acceleratorStarted = true; }),
-                    caravan::alpaka::copy(queue, deviceValue, hostValue, one)),
-                caravan::alpaka::sequence(
-                    caravan::alpaka::kernel<Acc>(
-                        queue,
-                        alpaka::WorkDivMembers<Dim, Idx>{one, one, one},
-                        Preserve{},
-                        alpaka::getPtrNative(deviceValue)),
-                    caravan::alpaka::copy(queue, hostValue, deviceValue, one)));
-            auto chain = std::move(accelerator)
-                         | caravan::letValue(
-                             [&]
-                             {
-                                 mpiStarted = true;
-                                 return caravan::whenAll(
-                                     caravan::mpi::send(
-                                         mpi,
-                                         std::as_bytes(std::span{&hostValue[0], 1}),
-                                         caravan::Peer{mpi.topology().rank},
-                                         caravan::MessageTag{951}),
-                                     caravan::mpi::receive(
-                                         mpi,
-                                         std::as_writable_bytes(std::span{&received, 1}),
-                                         caravan::Peer{mpi.topology().rank},
-                                         caravan::MessageTag{951}));
-                             });
-
-            assert(!acceleratorStarted && !mpiStarted);
             auto const applicationThread = std::this_thread::get_id();
+
+            // Ordinary sender construction and connection remain allocation-free.
+            caravan::EventSource allocationOutput;
+            auto allocationResult = allocationOutput.event();
+            allocationCount = 0u;
+            countAllocations = true;
+            auto allocationSender = caravan::mpi::barrier(mpi);
+            auto allocationOperation = std::move(allocationSender).connect(VoidReceiver{allocationOutput});
+            countAllocations = false;
+            assert(allocationCount == 0u);
+            allocationOperation.start();
+            allocationResult.wait();
+
+            // Real A -> M -> B: A produces MPI's input; B consumes and transforms its receive.
+            std::thread::id aCompletionThread;
+            std::thread::id mpiCompletionThread;
+            std::thread::id bSubmissionThread;
+            std::thread::id bCompletionThread;
+            caravan::syncWait(
+                caravan::alpaka::copy(queue, producerDevice, producerInput, one)
+                | caravan::alpaka::sequence(
+                    caravan::alpaka::kernel<Acc>(queue, workDiv, Increment{}, alpaka::getPtrNative(producerDevice)))
+                | caravan::alpaka::sequence(caravan::alpaka::copy(queue, mpiInput, producerDevice, one))
+                | caravan::letValue(
+                    [&]
+                    {
+                        aCompletionThread = std::this_thread::get_id();
+                        return caravan::whenAll(
+                            caravan::mpi::send(
+                                mpi,
+                                std::as_bytes(std::span{&mpiInput[0], 1}),
+                                caravan::Peer{mpi.topology().rank},
+                                caravan::MessageTag{951}),
+                            caravan::mpi::receive(
+                                mpi,
+                                std::as_writable_bytes(std::span{&received[0], 1}),
+                                caravan::Peer{mpi.topology().rank},
+                                caravan::MessageTag{951}));
+                    })
+                | caravan::letValue(
+                    [&](caravan::SendResult const& sentResult, caravan::ReceiveResult const& receivedResult)
+                    {
+                        assert(sentResult.bytes == sizeof(int) && receivedResult.bytes == sizeof(int));
+                        mpiCompletionThread = std::this_thread::get_id();
+                        return caravan::alpaka::submit(
+                                   queue,
+                                   [&](Queue&) { bSubmissionThread = std::this_thread::get_id(); })
+                               | caravan::alpaka::sequence(caravan::alpaka::copy(queue, consumerDevice, received, one))
+                               | caravan::alpaka::sequence(
+                                   caravan::alpaka::kernel<Acc>(
+                                       queue,
+                                       workDiv,
+                                       Increment{},
+                                       alpaka::getPtrNative(consumerDevice)))
+                               | caravan::alpaka::sequence(
+                                   caravan::alpaka::copy(queue, consumerOutput, consumerDevice, one));
+                    })
+                | caravan::then([&] { bCompletionThread = std::this_thread::get_id(); }));
+            assert(mpiInput[0] == mpi.topology().rank + 1);
+            assert(received[0] == mpiInput[0]);
+            assert(consumerOutput[0] == received[0] + 1);
+            assert(aCompletionThread != applicationThread);
+            assert(mpiCompletionThread == bSubmissionThread);
+            assert(bCompletionThread == aCompletionThread);
+            assert(bCompletionThread != mpiCompletionThread);
+
+            // Without an explicit transfer, MPI completion starts the next submission on the owner.
+            std::thread::id directMpiCompletion;
+            std::thread::id directBSubmission;
+            caravan::syncWait(
+                caravan::alpaka::submit(queue, [](Queue&) {})
+                | caravan::letValue(
+                    [&]
+                    {
+                        return caravan::mpi::barrier(mpi)
+                               | caravan::then([&] { directMpiCompletion = std::this_thread::get_id(); });
+                    })
+                | caravan::letValue(
+                    [&]
+                    {
+                        return caravan::alpaka::submit(
+                            queue,
+                            [&](Queue&) { directBSubmission = std::this_thread::get_id(); });
+                    }));
+            assert(directMpiCompletion == directBSubmission);
+
+            // Application restoration keeps the requested hop: B waits for the application loop.
             caravan::RunLoop loop;
             caravan::AsyncScope scope;
+            std::atomic<bool> applicationMpiCompleted = false;
+            std::atomic<bool> applicationBSubmitted = false;
+            std::thread::id applicationBSubmissionThread;
             auto completion = scope.spawn(
-                std::move(chain) | caravan::continuesOn(loop.scheduler())
-                | caravan::then(
-                    [&](caravan::SendResult sent, caravan::ReceiveResult receivedMetadata)
+                caravan::alpaka::submit(queue, [](Queue&) {})
+                | caravan::letValue(
+                    [&]
+                    { return caravan::mpi::barrier(mpi) | caravan::then([&] { applicationMpiCompleted = true; }); })
+                | caravan::continuesOn(loop.scheduler())
+                | caravan::letValue(
+                    [&]
                     {
-                        assert(std::this_thread::get_id() == applicationThread);
-                        assert(sent.bytes == sizeof(int));
-                        assert(receivedMetadata.bytes == sizeof(int));
-                        continued = true;
+                        return caravan::alpaka::submit(
+                            queue,
+                            [&](Queue&)
+                            {
+                                applicationBSubmissionThread = std::this_thread::get_id();
+                                applicationBSubmitted = true;
+                            });
                     }));
 
+            while(!applicationMpiCompleted.load())
+                std::this_thread::yield();
+            assert(!applicationBSubmitted.load());
             while(completion.state() == caravan::CompletionState::pending)
             {
                 loop.runReady();
@@ -109,9 +228,8 @@ int main(int argc, char** argv)
             }
             completion.wait();
             scope.join().wait();
-
-            assert(acceleratorStarted && mpiStarted && continued);
-            assert(received == mpi.topology().rank);
+            assert(applicationBSubmitted.load());
+            assert(applicationBSubmissionThread == applicationThread);
             return 0;
         });
 }

@@ -335,50 +335,11 @@ without an active driver.
 
 ---
 
-## A5: Enforce the normal/native MPI header split
+## A5: MPI header layering (superseded)
 
-### Problem
-
-The intended public layering is:
-
-```text
-caravan/mpi.hpp
-    context and normal typed sender operations
-
-caravan/mpi/native.hpp
-    NativeMpiContext, NativeRequestBatch, request/invoke escape hatches
-```
-
-Currently `mpi/operations.hpp` includes `mpi/native.hpp`, so normal users
-transitively see the native extension surface and `mpi.h`.
-
-### Required implementation
-
-- Move shared request-sender machinery needed by typed operations into an internal
-  `caravan/mpi/detail/...` header or a concrete non-native public sender type.
-- Keep `mpi::send`, `receive`, reductions, gathers, barrier, and communicator
-  operations available from `caravan/mpi.hpp`.
-- Require an explicit include of `caravan/mpi/native.hpp` for
-  `NativeMpiContext`, `NativeRequestBatch`, `mpi::request`, `mpi::invoke`, and
-  `mpi::invokeBlocking`.
-- Do not duplicate the native request progress engine.
-- Do not add a parallel Caravan type hierarchy for all MPI types.
-
-### Required tests
-
-- A translation unit including only `caravan/mpi.hpp` can use every normal typed
-  operation.
-- A translation unit using native request/invocation APIs must include
-  `caravan/mpi/native.hpp` explicitly.
-- Core-only tests do not require MPI headers or linkage.
-- MPI-native tests still use the same request engine as typed convenience
-  operations.
-
-### Done when
-
-- header dependency checks demonstrate the intended split; and
-- the normal public header no longer exposes native extension declarations merely
-  through transitive inclusion.
+The MPI-free umbrella requirement was dropped. `<caravan/mpi.hpp>` exposes native
+MPI declarations so ordinary operations can directly wrap `request` and `invoke`.
+Core and Alpaka headers remain MPI-independent.
 
 ---
 
@@ -796,7 +757,7 @@ auto native = caravan::mpi::request<Result>(
     decodeCompletion,
     collectiveOrderingContract);
 
-auto thirdParty = caravan::mpi::invokeBlocking(
+auto thirdParty = caravan::mpi::invoke(
     mpi,
     blockingMpiEnabledCall);
 ```

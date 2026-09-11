@@ -6,6 +6,7 @@
 
 #include <caravan/mpi/collective.hpp>
 #include <caravan/mpi/context.hpp>
+#include <caravan/mpi/native.hpp>
 #include <caravan/mpi/operations.hpp>
 #include <caravan/mpi/result.hpp>
 #include <caravan/mpi/runtime.hpp>

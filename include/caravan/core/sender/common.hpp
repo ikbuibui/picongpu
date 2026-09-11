@@ -7,6 +7,7 @@
 #include <concepts>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -159,6 +160,57 @@ namespace caravan
 
         template<typename... T_Senders>
         using CombinedValueTuple = decltype(std::tuple_cat(std::declval<ValueTupleOf<T_Senders>>()...));
+
+        /** Connect a successor in place and forward completion to its parent's receiver. */
+        template<typename T_Sender, typename T_Receiver>
+        class ConnectedOperation
+        {
+            struct Receiver
+            {
+                template<typename... T>
+                void set_value(T&&... values) noexcept
+                {
+                    receiver->set_value(std::forward<T>(values)...);
+                }
+
+                void set_error(std::exception_ptr error) noexcept
+                {
+                    receiver->set_error(std::move(error));
+                }
+
+                void set_stopped() noexcept
+                {
+                    receiver->set_stopped();
+                }
+
+                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
+                    requires requires(T_Receiver const& output) { output.get_env(); }
+                {
+                    return std::as_const(*receiver).get_env();
+                }
+
+                T_Receiver* receiver;
+            };
+
+        public:
+            ConnectedOperation(T_Sender sender, T_Receiver& receiver)
+                : m_operation(std::move(sender).connect(Receiver{std::addressof(receiver)}))
+            {
+            }
+
+            ConnectedOperation(ConnectedOperation const&) = delete;
+            ConnectedOperation& operator=(ConnectedOperation const&) = delete;
+            ConnectedOperation(ConnectedOperation&&) = delete;
+            ConnectedOperation& operator=(ConnectedOperation&&) = delete;
+
+            void start() & noexcept
+            {
+                m_operation.start();
+            }
+
+        private:
+            decltype(std::declval<T_Sender&&>().connect(std::declval<Receiver>())) m_operation;
+        };
 
         template<typename T_Function>
         class SenderAdaptorClosure

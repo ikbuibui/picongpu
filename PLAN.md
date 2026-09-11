@@ -774,12 +774,10 @@ PMacc, not a Caravan global manager.
 ### Scope and public layering
 
 `caravan::mpi` is an asynchronous integration layer over native MPI, not a new MPI
-API and not a general scheduler. The ordinary public MPI header exposes the typed
-sender factories applications should normally use: `send`, `receive`, reductions,
-gathers, barrier, and similar operations. Generic request submission,
-`invoke`/`invokeBlocking`, `NativeMpiContext`, and native request ownership belong
-in an explicitly native/extension header. Public header placement must make the
-sender path obvious without hiding the native escape hatch.
+API and not a general scheduler. The public MPI header exposes ordinary sender
+factories, generic `request`/`invoke`, `NativeMpiContext`, and native request
+ownership. It therefore exposes `mpi.h`; Caravan core and Alpaka remain
+MPI-independent.
 
 The hard part is implemented once:
 
@@ -849,23 +847,9 @@ Use it for topology/resource queries or communicator setup when no nonblocking
 request representation exists. It must not become an escape hatch for arbitrary
 expensive application work.
 
-### Blocking MPI-context invocation
-
-Keep one sender-like mechanism for blocking MPI operations and MPI-enabled
-third-party libraries that cannot expose nonblocking requests:
-
-```cpp
-auto invokeBlocking(Callable&& blockingMpiCall);  // sender of T
-```
-
-Dependencies are composed outside the primitive. The MPI backend must not silently
-wait for every previously active request: doing so can create dependency cycles.
-If a third-party call requires specific outstanding operations to finish, PMacc
-composes those dependencies explicitly before the blocking invocation.
-
-Once a blocking call enters a one-thread MPI authority, no other MPI call can run
-on that authority until it returns. This physical exclusion is a policy consequence,
-not an implicit dependency on unrelated active MPI operations.
+`invoke` callbacks run on the MPI owner. A blocking callback blocks request
+progress until it returns. Dependencies are composed outside the primitive; the
+backend does not silently wait for unrelated active requests.
 
 ### MPI progress and lifecycle are policies
 
@@ -991,9 +975,10 @@ submitted/backend-native dependency available
 Do not collapse these if it forces same-device work through the host. Keep native
 milestones backend-local initially.
 
-The P2300 spike should test whether an alpaka execution domain/scheduler or a
-smaller sender transformation can preserve native queue/event dependencies across
-sender composition without putting backend types in `caravan::core`.
+Alpaka uses queue-explicit submissions, native `sequence`, and submission-domain
+`whenAll` lowering to preserve queue/event dependencies without a queue scheduler.
+The P2300 spike should validate the interoperability boundary without putting
+backend types in `caravan::core`.
 
 ### Future SYCL and Kokkos support
 
@@ -1490,9 +1475,8 @@ sufficient until a measured PMacc use case justifies Phase 11.
    nonblocking request engine the central implementation.
 3. **Implemented:** put normal typed sender factories (`mpi::send`, `receive`,
    reductions, gathers, barrier, and peers) in the normal public MPI header.
-4. **Implemented:** keep generic `request`, `invoke`, `invokeBlocking`,
-   `NativeMpiContext`, and raw request/lifetime transfer in the native extension
-   header.
+4. **Implemented:** expose generic `request`, `invoke`, `NativeMpiContext`, and raw
+   request/lifetime transfer from the public MPI umbrella.
 5. Ensure every primitive sender's `start()` performs MPI initiation in the valid
    authority and convenience operations remain thin factories over that path.
 6. **Implemented:** remove predecessor `Event` parameters from the MPI engine and
@@ -1617,7 +1601,7 @@ confined to `MPIReduce`'s generic request initiation hook, and a PMacc CI check
 rejects calls outside that integration boundary. Managed collective abandonment,
 submission rollback, and mixed failed/pending request lifetime behavior are covered
 by one-, two-, and four-rank tests. No PMacc-scoped MPI-enabled third-party call
-requires `invokeBlocking`; PIConGPU plugin/library use remains deferred to Phase 8.
+requires a blocking `invoke` callback; PIConGPU plugin/library use remains deferred to Phase 8.
 
 Begin this phase only after the Phase 2 alpaka sender prototype has exercised the
 shared sender model across both backend shapes.
@@ -1632,7 +1616,7 @@ shared sender model across both backend shapes.
    examples through `caravan::mpi` or narrowly scoped generic native invocation.
 4. **Implemented:** route PMacc signal operations through the same MPI context.
 5. **Implemented for the PMacc scope:** inventory PMacc-relevant MPI-enabled
-   third-party calls; none require `invokeBlocking()`. PIConGPU plugin/library use
+   third-party calls; none require a blocking `invoke`. PIConGPU plugin/library use
    remains a Phase 8 concern.
 6. **Implemented:** preserve and test per-communicator collective initiation
    ordering for managed collective helpers; dependency-ready later collectives
@@ -2061,8 +2045,8 @@ Run with at least one, two, and four ranks where applicable:
 - repeated communicator/resource creation/destruction;
 - progress while application thread sleeps or computes;
 - new submissions while requests are active;
-- `invokeBlocking()` starts only after dependencies explicitly composed before it;
-  it does not wait for unrelated active requests;
+- blocking `invoke` callbacks start only after dependencies explicitly composed
+  before them and do not wait for unrelated active requests;
 - a regression case where an earlier receive requires a later send, proving
   blocking invocation does not manufacture an implicit quiescence deadlock;
 - per-communicator managed collective initiation order despite out-of-order
@@ -2211,8 +2195,8 @@ silently reusing the worker.
 completion of one of those requests requires a later MPI operation to be
 initiated, manufacturing a deadlock that was not present in the application.
 
-**Mitigation:** dependencies before `invokeBlocking()` are composed by the caller
-outside the primitive. Application-required quiescence is built with explicit
+**Mitigation:** dependencies before a blocking `invoke` callback are composed by
+the caller outside the primitive. Application-required quiescence is built with explicit
 joins; the MPI backend never stores Event predecessors or silently adds a
 dependency on all active requests.
 
