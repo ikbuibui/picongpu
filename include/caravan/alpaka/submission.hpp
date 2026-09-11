@@ -17,7 +17,6 @@
 
 #include <caravan/alpaka/completion.hpp>
 #include <caravan/core/eager.hpp>
-#include <caravan/core/inline_scheduler.hpp>
 
 namespace caravan::alpaka
 {
@@ -316,34 +315,4 @@ namespace caravan::alpaka
         return caravan::detail::SenderAdaptorClosure{[next = std::move(next)](auto previous) mutable
                                                      { return sequence(std::move(previous), std::move(next)); }};
     }
-
-    /** Borrowed queue-bound submission scheduler. Scheduling is inline, not device completion. */
-    template<typename T_Queue>
-    class Scheduler
-    {
-    public:
-        explicit Scheduler(T_Queue& queue) : m_queue(&queue)
-        {
-            static_assert(::alpaka::isQueue<T_Queue>);
-        }
-
-        auto query(GetDomain) const noexcept -> SubmissionDomain<T_Queue>
-        {
-            return {};
-        }
-
-        auto schedule() const noexcept
-        {
-            return InlineScheduler{}.schedule();
-        }
-
-        template<typename T_Submit>
-        auto submit(T_Submit callable) const
-        {
-            return alpaka::submit(*m_queue, std::move(callable));
-        }
-
-    private:
-        T_Queue* m_queue;
-    };
 } // namespace caravan::alpaka

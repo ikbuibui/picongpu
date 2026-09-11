@@ -106,51 +106,8 @@ namespace caravan::mpi
                 ManagedCollectiveOperation* owner;
             };
 
-            struct SuccessorReceiver
-            {
-                template<typename... T>
-                void set_value(T&&... values) noexcept
-                {
-                    owner->m_receiver.set_value(std::forward<T>(values)...);
-                }
-
-                void set_error(std::exception_ptr error) noexcept
-                {
-                    owner->m_receiver.set_error(std::move(error));
-                }
-
-                void set_stopped() noexcept
-                {
-                    owner->m_receiver.set_stopped();
-                }
-
-                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
-                    requires requires(T_Receiver const& receiver) { receiver.get_env(); }
-                {
-                    return owner->m_receiver.get_env();
-                }
-
-                ManagedCollectiveOperation* owner;
-            };
-
-            using SuccessorSender = caravan::detail::SuccessorSender<T_Sender, T_Factory>;
-
-            class SuccessorOperation
-            {
-            public:
-                SuccessorOperation(SuccessorSender sender, ManagedCollectiveOperation* owner)
-                    : m_operation(std::move(sender).connect(SuccessorReceiver{owner}))
-                {
-                }
-
-                void start() noexcept
-                {
-                    m_operation.start();
-                }
-
-            private:
-                decltype(std::declval<SuccessorSender&&>().connect(std::declval<SuccessorReceiver>())) m_operation;
-            };
+            using SuccessorOperation = caravan::detail::
+                ConnectedOperation<caravan::detail::SuccessorSender<T_Sender, T_Factory>, T_Receiver>;
 
         public:
             ManagedCollectiveOperation(
@@ -187,7 +144,7 @@ namespace caravan::mpi
                     if(!m_token.accepts(successor))
                         throw std::invalid_argument(
                             "CollectiveLane successor does not match its context and communicator");
-                    m_successor.emplace(std::move(successor), this);
+                    m_successor.emplace(std::move(successor), m_receiver);
                     release([this]() noexcept { m_successor->start(); });
                 }
                 catch(...)

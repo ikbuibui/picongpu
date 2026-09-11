@@ -47,51 +47,7 @@ namespace caravan
                 LetValueOperation* owner;
             };
 
-            struct SuccessorReceiver
-            {
-                template<typename... T>
-                void set_value(T&&... values) noexcept
-                {
-                    owner->m_receiver.set_value(std::forward<T>(values)...);
-                }
-
-                void set_error(std::exception_ptr error) noexcept
-                {
-                    owner->m_receiver.set_error(std::move(error));
-                }
-
-                void set_stopped() noexcept
-                {
-                    owner->m_receiver.set_stopped();
-                }
-
-                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
-                    requires requires(T_Receiver const& receiver) { receiver.get_env(); }
-                {
-                    return owner->m_receiver.get_env();
-                }
-
-                LetValueOperation* owner;
-            };
-
-            using SuccessorSenderType = SuccessorSender<T_Sender, T_Factory>;
-
-            class SuccessorOperation
-            {
-            public:
-                SuccessorOperation(SuccessorSenderType sender, LetValueOperation* owner)
-                    : m_operation(std::move(sender).connect(SuccessorReceiver{owner}))
-                {
-                }
-
-                void start() noexcept
-                {
-                    m_operation.start();
-                }
-
-            private:
-                decltype(std::declval<SuccessorSenderType&&>().connect(std::declval<SuccessorReceiver>())) m_operation;
-            };
+            using SuccessorOperation = ConnectedOperation<SuccessorSender<T_Sender, T_Factory>, T_Receiver>;
 
         public:
             LetValueOperation(T_Sender sender, T_Factory factory, T_Receiver receiver)
@@ -120,7 +76,7 @@ namespace caravan
                     m_values.emplace(std::forward<T>(values)...);
                     auto successor
                         = std::apply([this](auto&... stored) { return std::invoke(m_factory, stored...); }, *m_values);
-                    m_successor.emplace(std::move(successor), this);
+                    m_successor.emplace(std::move(successor), m_receiver);
                     m_successor->start();
                 }
                 catch(...)

@@ -101,26 +101,36 @@ namespace pmacc
             return this->coordinates;
         }
 
-        caravan::mpi::OperationSender<caravan::mpi::operation_detail::Send> send(
-            uint32_t ex,
-            char const* sendData,
-            size_t sendBytes,
-            uint32_t tag);
+        using SendSender = decltype(caravan::mpi::send(
+            std::declval<caravan::MpiContext&>(),
+            std::declval<caravan::ConstMpiBuffer>(),
+            caravan::Peer{},
+            caravan::MessageTag{}));
+        using ReceiveSender = decltype(caravan::mpi::receive(
+            std::declval<caravan::MpiContext&>(),
+            std::declval<caravan::MpiBuffer>(),
+            caravan::Peer{},
+            caravan::MessageTag{}));
+        using AllReduceSender = decltype(caravan::mpi::allReduce(
+            std::declval<caravan::MpiContext&>(),
+            std::declval<caravan::ConstMpiBuffer>(),
+            std::declval<caravan::MpiBuffer>(),
+            caravan::ScalarType{},
+            caravan::ReduceOperation{}));
+        using BarrierSender = decltype(caravan::mpi::barrier(std::declval<caravan::MpiContext&>()));
 
-        caravan::mpi::OperationSender<caravan::mpi::operation_detail::Receive> receive(
-            uint32_t ex,
-            char* receiveData,
-            size_t receiveBytes,
-            uint32_t tag);
+        SendSender send(uint32_t ex, char const* sendData, size_t sendBytes, uint32_t tag);
 
-        caravan::mpi::OperationSender<caravan::mpi::operation_detail::AllReduce> signalAllReduce(
+        ReceiveSender receive(uint32_t ex, char* receiveData, size_t receiveBytes, uint32_t tag);
+
+        AllReduceSender signalAllReduce(
             void const* input,
             void* output,
             size_t bytes,
             caravan::ScalarType type,
             caravan::ReduceOperation operation);
 
-        caravan::mpi::OperationSender<caravan::mpi::operation_detail::Barrier> barrier();
+        BarrierSender barrier();
 
         bool slide();
 

@@ -101,7 +101,7 @@ namespace pmacc
     }
 
     template<unsigned DIM>
-    caravan::mpi::OperationSender<caravan::mpi::operation_detail::Send> CommunicatorMPI<DIM>::send(
+    typename CommunicatorMPI<DIM>::SendSender CommunicatorMPI<DIM>::send(
         uint32_t ex,
         char const* sendData,
         size_t sendBytes,
@@ -116,7 +116,7 @@ namespace pmacc
     }
 
     template<unsigned DIM>
-    caravan::mpi::OperationSender<caravan::mpi::operation_detail::Receive> CommunicatorMPI<DIM>::receive(
+    typename CommunicatorMPI<DIM>::ReceiveSender CommunicatorMPI<DIM>::receive(
         uint32_t ex,
         char* receiveData,
         size_t receiveBytes,
@@ -131,7 +131,7 @@ namespace pmacc
     }
 
     template<unsigned DIM>
-    caravan::mpi::OperationSender<caravan::mpi::operation_detail::AllReduce> CommunicatorMPI<DIM>::signalAllReduce(
+    typename CommunicatorMPI<DIM>::AllReduceSender CommunicatorMPI<DIM>::signalAllReduce(
         void const* input,
         void* output,
         size_t bytes,
@@ -148,7 +148,7 @@ namespace pmacc
     }
 
     template<unsigned DIM>
-    caravan::mpi::OperationSender<caravan::mpi::operation_detail::Barrier> CommunicatorMPI<DIM>::barrier()
+    typename CommunicatorMPI<DIM>::BarrierSender CommunicatorMPI<DIM>::barrier()
     {
         return caravan::mpi::barrier(*mpiContext, communicatorId);
     }

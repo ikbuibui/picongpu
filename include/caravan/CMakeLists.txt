@@ -100,6 +100,15 @@ if(CARAVAN_BUILD_TESTING)
         target_link_libraries(caravan-mpi-test PRIVATE caravan::mpi)
         add_executable(caravan-mpi-external-test test/mpi_external.cpp)
         target_link_libraries(caravan-mpi-external-test PRIVATE caravan::mpi)
+        foreach(buffer IN ITEMS indices statuses)
+            add_test(
+                NAME caravan-mpi-progress-failure-${buffer}
+                COMMAND
+                    ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 ${MPIEXEC_PREFLAGS}
+                    $<TARGET_FILE:caravan-mpi-external-test> --fatal-${buffer} ${MPIEXEC_POSTFLAGS}
+            )
+            set_tests_properties(caravan-mpi-progress-failure-${buffer} PROPERTIES PROCESSORS 1 TIMEOUT 30)
+        endforeach()
         foreach(ranks IN ITEMS 1 2 4)
             add_test(
                 NAME caravan-mpi-${ranks}-ranks

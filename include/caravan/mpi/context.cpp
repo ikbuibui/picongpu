@@ -63,23 +63,11 @@ namespace caravan
 
         void submitNative(detail::NativeSubmission submission)
         {
-            if(detail::nativeCallbackDepth != 0u)
-            {
-                submission.setFailed(
-                    std::make_exception_ptr(std::logic_error("Recursive native MPI submission is not allowed")));
-                return;
-            }
             submit(std::move(submission), [this](detail::NativeSubmission output) { startNative(std::move(output)); });
         }
 
         void invokeNative(detail::NativeInvocation submission)
         {
-            if(detail::nativeCallbackDepth != 0u)
-            {
-                submission.setFailed(
-                    std::make_exception_ptr(std::logic_error("Recursive native MPI submission is not allowed")));
-                return;
-            }
             submit(std::move(submission), [this](detail::NativeInvocation output) { invoke(std::move(output)); });
         }
 
@@ -118,7 +106,8 @@ namespace caravan
             m_queueReady.notify_one();
         }
 
-        void run()
+        void run() noexcept
+        try
         {
             assertOwner();
             ExecutorThreadGuard guard;
@@ -135,8 +124,13 @@ namespace caravan
                         });
             }
         }
+        catch(...)
+        {
+            abortMpi();
+        }
 
-        bool progress()
+        bool progress() noexcept
+        try
         {
             assertOwner();
             {
@@ -160,6 +154,11 @@ namespace caravan
                 m_finished = true;
             }
             return false;
+        }
+        catch(...)
+        {
+            // Never unwind the context and release owners while MPI may still use them.
+            abortMpi();
         }
 
         bool shutdownComplete() const noexcept
@@ -308,6 +307,12 @@ namespace caravan
         template<typename T_Output, typename T_Start>
         void submit(T_Output output, T_Start&& start)
         {
+            if(detail::nativeCallbackDepth != 0u)
+            {
+                output.failed(
+                    std::make_exception_ptr(std::logic_error("Recursive native MPI submission is not allowed")));
+                return;
+            }
             auto fail = output.failed;
             std::function<void()> command;
             try
@@ -320,7 +325,7 @@ namespace caravan
                     }
                     catch(...)
                     {
-                        output.setFailed(std::current_exception());
+                        output.failed(std::current_exception());
                         finishOperation();
                     }
                 };
@@ -422,18 +427,22 @@ namespace caravan
             assertOwner();
             if(native == MPI_COMM_NULL)
                 throw std::invalid_argument("Cannot adopt MPI_COMM_NULL");
-            if(m_communicators.size() >= std::numeric_limits<std::uint32_t>::max())
-                throw std::overflow_error("Too many Caravan communicators");
-            m_communicators.reserve(m_communicators.size() + 1u);
-            int const error = MPI_Comm_set_errhandler(native, MPI_ERRORS_RETURN);
-            if(error != MPI_SUCCESS)
+            try
+            {
+                if(m_communicators.size() >= std::numeric_limits<std::uint32_t>::max())
+                    throw std::overflow_error("Too many Caravan communicators");
+                int const error = MPI_Comm_set_errhandler(native, MPI_ERRORS_RETURN);
+                if(error != MPI_SUCCESS)
+                    throw mpiError("MPI_Comm_set_errhandler", error);
+                auto const id = CommunicatorId{static_cast<std::uint32_t>(m_communicators.size())};
+                m_communicators.emplace_back(native);
+                return id;
+            }
+            catch(...)
             {
                 MPI_Comm_free(&native);
-                throw mpiError("MPI_Comm_set_errhandler", error);
+                throw;
             }
-            auto const id = CommunicatorId{static_cast<std::uint32_t>(m_communicators.size())};
-            m_communicators.emplace_back(native);
-            return id;
         }
 
         void destroyCommunicator(CommunicatorId id)
@@ -459,6 +468,19 @@ namespace caravan
                 { static_cast<Impl*>(implementation)->destroyCommunicator(id); });
         }
 
+        template<typename T>
+        static void reserveForAppend(std::vector<T>& values, std::size_t additional)
+        {
+            if(additional > values.max_size() - values.size())
+                throw std::length_error("Too many native MPI requests");
+            auto const required = values.size() + additional;
+            if(required > values.capacity())
+                values.reserve(
+                    std::max(
+                        required,
+                        values.capacity() + std::min(values.capacity(), values.max_size() - values.capacity())));
+        }
+
         void trackNative(
             detail::NativeSubmission const& output,
             NativeRequestBatch& batch,
@@ -481,8 +503,9 @@ namespace caravan
                 return;
             }
 
-            m_requests.reserve(m_requests.size() + activeRequests);
-            m_active.reserve(m_active.size() + activeRequests);
+            // Both arrays must have capacity before registering any request from the batch.
+            reserveForAppend(m_requests, activeRequests);
+            reserveForAppend(m_active, activeRequests);
             std::vector<MPI_Status> statuses(batch.requests.size());
             auto group = std::make_shared<NativeGroup>(
                 output,
@@ -505,9 +528,9 @@ namespace caravan
             detail::NativeAccess::release(batch);
         }
 
-        [[noreturn]] void failWithLiveNativeRequests() const noexcept
+        [[noreturn]] void abortMpi(int error = MPI_ERR_OTHER) const noexcept
         {
-            MPI_Abort(MPI_COMM_WORLD, MPI_ERR_OTHER);
+            MPI_Abort(MPI_COMM_WORLD, error);
             std::terminate();
         }
 
@@ -539,7 +562,7 @@ namespace caravan
                 }
                 catch(...)
                 {
-                    failWithLiveNativeRequests();
+                    abortMpi();
                 }
             }
         }
@@ -568,10 +591,7 @@ namespace caravan
                     continue;
                 int const error = MPI_Comm_free(&m_communicators[i]);
                 if(error != MPI_SUCCESS)
-                {
-                    MPI_Abort(MPI_COMM_WORLD, error);
-                    std::terminate();
-                }
+                    abortMpi(error);
             }
         }
 
@@ -598,10 +618,7 @@ namespace caravan
                 m_completedIndices.data(),
                 m_statuses.data());
             if(error != MPI_SUCCESS && error != MPI_ERR_IN_STATUS)
-            {
-                MPI_Abort(MPI_COMM_WORLD, error);
-                std::terminate();
-            }
+                abortMpi(error);
             if(completed == MPI_UNDEFINED || completed == 0)
                 return;
 

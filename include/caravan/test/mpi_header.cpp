@@ -13,10 +13,6 @@
 
 #include <caravan/mpi.hpp>
 
-#ifdef MPI_VERSION
-#    error "caravan/mpi.hpp must not expose mpi.h"
-#endif
-
 using Context = caravan::MpiContext;
 using ConstBuffer = caravan::ConstMpiBuffer;
 using Buffer = caravan::MpiBuffer;

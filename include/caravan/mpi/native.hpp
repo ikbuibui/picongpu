@@ -11,6 +11,7 @@
 #include <span>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <caravan/core/sender.hpp>
@@ -122,22 +123,12 @@ namespace caravan
             std::function<NativeRequestBatch(NativeMpiContext&)> start;
             std::function<void(NativeMpiContext&, std::span<MPI_Status const>)> completed;
             std::function<void(std::exception_ptr)> failed;
-
-            void setFailed(std::exception_ptr error) const
-            {
-                failed(std::move(error));
-            }
         };
 
         struct NativeInvocation
         {
             std::function<void(NativeMpiContext&)> invoke;
             std::function<void(std::exception_ptr)> failed;
-
-            void setFailed(std::exception_ptr error) const
-            {
-                failed(std::move(error));
-            }
         };
 
         inline thread_local std::size_t nativeCallbackDepth = 0u;
@@ -261,8 +252,7 @@ namespace caravan
             MpiBuffer const& output,
             ScalarType type,
             ReduceOperation operation,
-            CommunicatorId communicator,
-            std::shared_ptr<std::size_t> const& elements);
+            CommunicatorId communicator);
 
         NativeRequestBatch startReduce(
             NativeMpiContext& context,
@@ -271,8 +261,7 @@ namespace caravan
             ScalarType type,
             ReduceOperation operation,
             Peer root,
-            CommunicatorId communicator,
-            std::shared_ptr<std::size_t> const& elements);
+            CommunicatorId communicator);
 
         NativeRequestBatch startGather(
             NativeMpiContext& context,
@@ -280,14 +269,14 @@ namespace caravan
             MpiBuffer const& output,
             Peer root,
             CommunicatorId communicator,
-            std::shared_ptr<std::size_t> const& resultBytes);
+            std::size_t& resultBytes);
 
         NativeRequestBatch startAllGather(
             NativeMpiContext& context,
             ConstMpiBuffer const& input,
             MpiBuffer const& output,
             CommunicatorId communicator,
-            std::shared_ptr<std::size_t> const& resultBytes);
+            std::size_t& resultBytes);
 
         NativeRequestBatch startGatherV(
             NativeMpiContext& context,
@@ -297,7 +286,9 @@ namespace caravan
             std::vector<std::size_t> const& displacements,
             Peer root,
             CommunicatorId communicator,
-            std::shared_ptr<std::size_t> const& resultBytes);
+            std::size_t& resultBytes);
+
+        std::size_t scalarElements(std::size_t bytes, ScalarType type);
 
         NativeRequestBatch startBarrier(NativeMpiContext& context, CommunicatorId communicator);
 
@@ -322,7 +313,7 @@ namespace caravan
     namespace mpi
     {
         /** Lazy sender for one or more native nonblocking MPI requests. */
-        template<typename T, typename T_Start, typename T_Complete>
+        template<typename T, typename T_Start, typename T_Complete, typename T_State = std::monostate>
         class RequestSender
         {
             static_assert(std::is_void_v<T> || (!std::is_reference_v<T> && !std::is_const_v<T>) );
@@ -331,10 +322,17 @@ namespace caravan
             using completion_signatures
                 = caravan::detail::DefaultCompletionSignatures<caravan::detail::ResultValueSignature<T>>;
 
-            RequestSender(MpiContext& context, T_Start start, T_Complete complete)
+            RequestSender(
+                MpiContext& context,
+                T_Start start,
+                T_Complete complete,
+                T_State state = {},
+                std::optional<CommunicatorId> collective = std::nullopt)
                 : m_context(&context)
                 , m_start(std::move(start))
                 , m_complete(std::move(complete))
+                , m_state(std::move(state))
+                , m_collective(collective)
             {
             }
 
@@ -342,10 +340,11 @@ namespace caravan
             class Operation
             {
             public:
-                Operation(MpiContext& context, T_Start start, T_Complete complete, T_Receiver receiver)
+                Operation(MpiContext& context, T_Start start, T_Complete complete, T_State state, T_Receiver receiver)
                     : m_context(&context)
                     , m_start(std::move(start))
                     , m_complete(std::move(complete))
+                    , m_state(std::move(state))
                     , m_receiver(std::move(receiver))
                 {
                 }
@@ -365,27 +364,43 @@ namespace caravan
                         detail::NativeAccess::submit(
                             *m_context,
                             detail::NativeSubmission{
-                                [this](NativeMpiContext& context) { return detail::invokeNative(m_start, context); },
+                                [this](NativeMpiContext& context)
+                                {
+                                    if constexpr(std::is_invocable_v<T_Start&, T_State&, NativeMpiContext&>)
+                                        return detail::invokeNative(m_start, m_state, context);
+                                    else
+                                        return detail::invokeNative(m_start, context);
+                                },
                                 [this](NativeMpiContext& context, std::span<MPI_Status const> statuses)
                                 {
-                                    if constexpr(std::is_void_v<T>)
+                                    auto complete = [&]() -> decltype(auto)
                                     {
                                         if constexpr(std::is_invocable_v<
                                                          T_Complete&,
+                                                         T_State&,
                                                          NativeMpiContext&,
                                                          std::span<MPI_Status const>>)
-                                            detail::invokeNative(m_complete, context, statuses);
+                                            return detail::invokeNative(m_complete, m_state, context, statuses);
+                                        else if constexpr(std::is_invocable_v<
+                                                              T_Complete&,
+                                                              T_State&,
+                                                              std::span<MPI_Status const>>)
+                                            return detail::invokeNative(m_complete, m_state, statuses);
+                                        else if constexpr(std::is_invocable_v<
+                                                              T_Complete&,
+                                                              NativeMpiContext&,
+                                                              std::span<MPI_Status const>>)
+                                            return detail::invokeNative(m_complete, context, statuses);
                                         else
-                                            detail::invokeNative(m_complete, statuses);
+                                            return detail::invokeNative(m_complete, statuses);
+                                    };
+                                    if constexpr(std::is_void_v<T>)
+                                    {
+                                        complete();
                                         m_receiver.set_value();
                                     }
-                                    else if constexpr(std::is_invocable_v<
-                                                          T_Complete&,
-                                                          NativeMpiContext&,
-                                                          std::span<MPI_Status const>>)
-                                        m_receiver.set_value(detail::invokeNative(m_complete, context, statuses));
                                     else
-                                        m_receiver.set_value(detail::invokeNative(m_complete, statuses));
+                                        m_receiver.set_value(complete());
                                 },
                                 [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); }});
                     }
@@ -399,6 +414,7 @@ namespace caravan
                 MpiContext* m_context;
                 T_Start m_start;
                 T_Complete m_complete;
+                [[no_unique_address]] T_State m_state;
                 T_Receiver m_receiver;
                 bool m_started = false;
             };
@@ -410,13 +426,21 @@ namespace caravan
                     *m_context,
                     std::move(m_start),
                     std::move(m_complete),
+                    std::move(m_state),
                     std::forward<T_Receiver>(receiver)};
+            }
+
+            bool managedCollectiveOn(MpiContext const& context, CommunicatorId communicator) const noexcept
+            {
+                return m_context == &context && m_collective == communicator;
             }
 
         private:
             MpiContext* m_context;
             T_Start m_start;
             T_Complete m_complete;
+            [[no_unique_address]] T_State m_state;
+            std::optional<CommunicatorId> m_collective;
         };
 
         /** Describe native MPI work without initiating it until operation start.
@@ -427,12 +451,34 @@ namespace caravan
          * submission can invert that order.
          */
         template<typename T, typename T_Start, typename T_Complete>
-        auto request(MpiContext& context, T_Start&& start, T_Complete&& complete)
+        auto request(
+            MpiContext& context,
+            T_Start&& start,
+            T_Complete&& complete,
+            std::optional<CommunicatorId> collective = std::nullopt)
         {
             return RequestSender<T, std::decay_t<T_Start>, std::decay_t<T_Complete>>{
                 context,
                 std::forward<T_Start>(start),
-                std::forward<T_Complete>(complete)};
+                std::forward<T_Complete>(complete),
+                {},
+                collective};
+        }
+
+        template<typename T, typename T_State, typename T_Start, typename T_Complete>
+        auto request(
+            MpiContext& context,
+            T_State state,
+            T_Start&& start,
+            T_Complete&& complete,
+            std::optional<CommunicatorId> collective)
+        {
+            return RequestSender<T, std::decay_t<T_Start>, std::decay_t<T_Complete>, T_State>{
+                context,
+                std::forward<T_Start>(start),
+                std::forward<T_Complete>(complete),
+                std::move(state),
+                collective};
         }
 
         template<typename T, typename T_Operation>
@@ -444,9 +490,13 @@ namespace caravan
             using completion_signatures
                 = caravan::detail::DefaultCompletionSignatures<caravan::detail::ResultValueSignature<T>>;
 
-            ContextSender(MpiContext& context, T_Operation operation)
+            ContextSender(
+                MpiContext& context,
+                T_Operation operation,
+                std::optional<CommunicatorId> collective = std::nullopt)
                 : m_context(&context)
                 , m_operation(std::move(operation))
+                , m_collective(collective)
             {
             }
 
@@ -512,34 +562,34 @@ namespace caravan
                     std::forward<T_Receiver>(receiver)};
             }
 
+            bool managedCollectiveOn(MpiContext const& context, CommunicatorId communicator) const noexcept
+            {
+                return m_context == &context && m_collective == communicator;
+            }
+
         private:
             MpiContext* m_context;
             T_Operation m_operation;
+            std::optional<CommunicatorId> m_collective;
         };
 
-        /** Lazily invoke a short operation on the MPI authority.
+        /** Lazily invoke an operation on the MPI owner.
          *
+         * The callback runs on the owner and blocks request progress while it runs.
          * Collective calls use the same caller-managed ordering contract as
-         * request().
+         * request(). Pass their communicator to make the sender compatible with a
+         * matching CollectiveLane.
          */
         template<typename T_Operation>
-        auto invoke(MpiContext& context, T_Operation&& operation)
+        auto invoke(
+            MpiContext& context,
+            T_Operation&& operation,
+            std::optional<CommunicatorId> collective = std::nullopt)
         {
             using Operation = std::decay_t<T_Operation>;
             using Result
                 = std::remove_cv_t<std::remove_reference_t<std::invoke_result_t<Operation&, NativeMpiContext&>>>;
-            return ContextSender<Result, Operation>{context, std::forward<T_Operation>(operation)};
-        }
-
-        /** Lazily invoke a blocking operation without draining unrelated requests.
-         *
-         * Collective calls use the same caller-managed ordering contract as
-         * request().
-         */
-        template<typename T_Operation>
-        auto invokeBlocking(MpiContext& context, T_Operation&& operation)
-        {
-            return invoke(context, std::forward<T_Operation>(operation));
+            return ContextSender<Result, Operation>{context, std::forward<T_Operation>(operation), collective};
         }
 
     } // namespace mpi

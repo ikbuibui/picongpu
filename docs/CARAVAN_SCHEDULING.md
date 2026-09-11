@@ -1,20 +1,24 @@
-# Caravan scheduling
+# Caravan scheduling contracts
 
-Include `<caravan/core.hpp>` or the individual headers under
-`caravan/core/sender/`.
+This document describes the current Caravan placement, Alpaka, and MPI contracts.
+
+## Core placement
+
+Include `<caravan/core.hpp>` or the individual sender headers.
 
 | Algorithm | Effect |
 | --- | --- |
-| `startsOn(scheduler, sender)` | Schedule child initiation; do not restore completion placement. |
-| `on(scheduler, sender)` | Schedule child initiation; restore terminal completion through the ambient scheduler. |
+| `startsOn(scheduler, sender)` | Schedule child initiation and expose that scheduler in the child environment. Completion is not restored. |
+| `on(scheduler, sender)` | Schedule child initiation and restore terminal completion through the scheduler from the receiver environment. |
 | `continuesOn(sender, scheduler)` | Transfer terminal completion to an explicit scheduler. |
 
-All three also support `sender | algorithm(scheduler)`.
+All three support pipe syntax. `then` runs a callback at upstream completion;
+`letValue` creates and starts a returned sender at upstream value completion.
+Neither algorithm supplies thread affinity by itself. Use `continuesOn` before
+blocking or thread-affine application callbacks.
 
-## Choosing restoration
-
-`on` queries `getScheduler(receiver.get_env())` at connection. An enclosing
-`startsOn` supplies that logical current scheduler to its child:
+`on` requires an ambient scheduler in the receiver environment. An enclosing
+`startsOn` can provide it:
 
 ```cpp
 auto work = caravan::startsOn(
@@ -23,115 +27,117 @@ auto work = caravan::startsOn(
         | caravan::then(updateApplicationState));
 ```
 
-The application loop initiates the outer chain. The backend loop starts
-`makeWork()`'s connected operation. Its terminal completion is posted back to
-the application loop before `updateApplicationState` runs. Both loops must be
-driven; a scheduler handle does not create a worker or progress engine.
+Placement wrappers add no worker or progress thread. Scheduler resources and
+borrowed objects must outlive connected operations. A receiver may destroy its
+operation during terminal completion, so delivery code must not access operation
+state afterward.
 
-For restoration without a return hop:
+## Alpaka submission
 
-```cpp
-auto work = caravan::startsOn(
-    caravan::InlineScheduler{},
-    caravan::on(backend.scheduler(), makeWork())
-        | caravan::letValue(makeNextSubmission));
-```
-
-Inline restoration invokes `makeNextSubmission` on the thread delivering the
-backend operation's completion. It does not return to the thread that started
-`work`. The returned sender can later complete on a different thread.
-
-If restoration is not wanted at all, prefer `startsOn(backend.scheduler(),
-makeWork())`. Unlike `on`, its completion placement does not depend on the ambient
-scheduler. Neither algorithm changes the execution semantics of ordinary callable `then` or
-`letValue`: short callbacks run inline on upstream value completion. Transfer
-expensive or thread-affine host work explicitly with `continuesOn`.
-
-## Environment and lifetime contract
-
-- `startsOn` overlays the current scheduler for the whole child expression.
-  Nested `on` restores the nearest enclosing context, not the original physical
-  thread. Asynchronous completion and `continuesOn` do not rewrite that environment.
-- Custom receiver environments provide `query(caravan::GetScheduler)` returning
-  a scheduler handle. Other query CPOs are forwarded through the overlay by
-  invoking them on the original environment; arbitrary environment member names
-  are not automatically forwarded.
-- `on` without a queryable ambient scheduler fails to connect. `AsyncScope`,
-  `syncWait`, and `ControlContext::spawn` do not implicitly supply one; use an
-  enclosing `startsOn` when necessary.
-- Construction/connection does not start work. Child and scheduling operations
-  connect before start, and connection failures throw to the caller.
-- Failed or stopped initiation scheduling skips the child. `on` restores those
-  outcomes as well as the child's value/error/stopped completions. Failure while
-  storing a completion value is also transferred. Failed/stopped restoration
-  replaces the pending outcome and cannot guarantee the requested affinity.
-- Connected operations must stay at a stable address until terminal completion.
-  Borrowed scheduler resources must outlive them. Placement adds no worker,
-  queue, or heap allocation of its own; the selected scheduler may allocate.
-
-These are Caravan APIs, not direct standard-execution models. stdexec
-scheduler/domain metadata translation is not implemented.
-
-## Alpaka submission domain
-
-Include `<caravan/alpaka.hpp>`. Existing `submit`, `kernel`, `copy`, `fill`, and
-`size` factories return typed native submissions. Chain them with
-`alpaka::sequence` (or its pipe adaptor); `then` accepts callables, not senders:
+Include `<caravan/alpaka.hpp>`. Queues are explicit arguments to `submit`,
+`kernel`, `copy`, and `fill`. There is no Alpaka submission scheduler: native
+`alpaka::sequence` and same-domain `whenAll` express queue dependencies directly.
 
 ```cpp
-caravan::alpaka::Scheduler scheduler{queueA}; // borrows queueA
-
 auto work = caravan::whenAll(
-    scheduler.submit([=](auto& queue) {
-        alpaka::exec<Acc>(queue, workDiv, kernelA, argsA);
-    }),
-    caravan::alpaka::kernel<Acc>(queueB, workDiv, kernelB, argsB))
-    | caravan::alpaka::sequence(caravan::alpaka::kernel<Acc>(queueA, workDiv, kernelC, argsC))
-    | caravan::then([] { /* Host callback: all preceding native work is complete. */ });
-
-caravan::syncWait(std::move(work));
+    caravan::alpaka::kernel<Acc>(queueA, workDiv, kernelA),
+    caravan::alpaka::kernel<Acc>(queueB, workDiv, kernelB))
+    | caravan::alpaka::sequence(
+          caravan::alpaka::kernel<Acc>(queueA, workDiv, kernelC));
 ```
 
-The scheduler's `submit(f)` is shorthand for `alpaka::submit(queueA, f)`.
-`schedule()` completes inline on its caller, using the existing inline scheduler;
-that scheduling completion is **not** device completion. `startsOn(scheduler, work)`
-can expose it as the current scheduler, but is not needed for native composition.
-There is no submission worker or public completion-thread scheduler.
+`then`, `letValue`, and placement wrappers are host-completion boundaries. Native
+fusion does not cross them. Submission callables run on the host and must enqueue
+tracked work rather than inspect unfinished device results.
 
-- `getDomain` queries explicitly typed descriptions and schedulers. Alpaka uses
-  `SubmissionDomain<Queue>`; runtime queue identity remains separate.
-- `whenAll` customizes only when all children are native submissions of the same
-  queue type. It preserves independent branches, including nested joins. Distinct
-  queues may overlap; work sharing a queue remains FIFO.
-- `alpaka::sequence(nativeSubmission)` connects predecessor tails to continuation roots using
-  FIFO or native event waits. All reachable submissions are issued during `start`,
-  without an intermediate host-observed device completion. Unbranched adjacent
-  same-queue stages retain the existing shared-fence fast path.
-- `then(f)` and `letValue(f)` keep host-completion semantics. After a mixed-backend
-  join, host callback, different queue type, or placement wrapper, use `letValue`
-  with a factory returning the next submission. It starts after successful host
-  completion and can use predecessor values.
-- No fusion crosses explicit `on`, `startsOn`, or `continuesOn` wrappers. Compose
-  native work inside the placement scope when native batching is desired.
+`retain(value, owner)` keeps the owner alive through native completion. Retention
+does not synchronize access and does not extend the lifetime of borrowed queues.
+Synchronous submission failure skips dependent stages but does not retract
+independent or already-enqueued work. Retained state is released only after
+recorded cleanup fences become terminal.
 
-There is no regrouping across a host boundary: return
-`a | caravan::alpaka::sequence(b)` from a `letValue` factory to submit A and B as
-one native continuation. Separate `letValue` stages retain separate
-host-completion boundaries.
+## MPI submission and progress
 
-Submission callables execute on the **host**, not inside a device kernel. They
-must enqueue tracked work on the supplied queue, must not read unfinished results,
-and must not wait for completion. Explicitly retained captures live until all
-submitted work is quiescent; queues and unowned pointees must outlive that work.
+Include `<caravan/mpi.hpp>` for ordinary and native MPI operations. This umbrella
+now exposes `mpi.h`; core and Alpaka headers remain MPI-independent.
 
-A synchronous submission failure skips dependent stages, but independent branches
-are still submitted. An asynchronous execution error cannot retract an already
-queued continuation. Submission errors take precedence over observed execution
-errors; terminal completion waits for all recorded cleanup fences. Error detection
-remains backend-specific. This is native dependency ordering, not device-side
-conditional execution or cancellation.
+Ordinary operations (`send`, `receive`, reductions, gathers, barriers, and
+communicator operations) are thin wrappers over `mpi::request` or `mpi::invoke`.
+Construction and connection remain allocation-free where previously guaranteed.
+Starting every operation submits through the context's existing FIFO owner queue.
+There is no MPI scheduler, bound primitive, scheduled-initiation branch, owner
+thread inline bypass, or additional progress thread.
 
-The implementation uses a fixed-size dependency matrix for explicit expressions
-(O(N²) storage/scans), with no dynamic graph engine, device-value storage model, or
-ambient/late domain rewriting. These are deliberately narrower contracts than
-nvexec's device-callable `then` and stdexec's domain machinery.
+The context owns communicators, validates operations on its owner, retains buffer
+owners, recovers partially started request batches, progresses requests with
+`MPI_Testsome`, and drains accepted work during shutdown. `MpiRuntime` supplies a
+dedicated owner thread. `MpiExternalRuntime` instead requires the caller to invoke
+`progress()` on the thread that owns MPI.
+
+`mpi::request<T>` accepts a start callback returning `NativeRequestBatch` and a
+completion callback. `mpi::invoke` accepts a callback for immediate owner-thread
+MPI work:
+
+```cpp
+auto rank = caravan::mpi::invoke(
+    mpi,
+    [](caravan::NativeMpiContext& native) {
+        int value = -1;
+        MPI_Comm_rank(native.communicator(caravan::worldCommunicator), &value);
+        return value;
+    });
+```
+
+All native callbacks run on the MPI owner. A blocking `invoke` callback blocks
+request progress, so keep callbacks short unless that serialization is intended.
+Recursive native submission from a native callback is rejected.
+
+Both `request` and `invoke` accept an optional collective communicator. Ordinary
+collective wrappers supply it, allowing `CollectiveLane` to validate context and
+communicator compatibility. Every rank must still reserve, abandon, and start the
+same collective sequence; local scheduling cannot establish cross-rank agreement.
+
+### Mixed Alpaka/MPI chains
+
+Ordinary MPI senders self-queue, and successful completion is delivered on the MPI
+owner. A following `letValue` therefore starts its sender on that owner unless an
+explicit transfer intervenes:
+
+```cpp
+auto work = makeAlpakaA()
+    | caravan::letValue([&] {
+          return caravan::mpi::send(mpi, buffer, peer, tag);
+      })
+    | caravan::letValue([&](caravan::SendResult const&) {
+          return makeAlpakaB();
+      });
+```
+
+To place application completion explicitly, transfer it:
+
+```cpp
+auto placed = std::move(work)
+    | caravan::continuesOn(applicationLoop.scheduler())
+    | caravan::then(updateApplicationState);
+```
+
+Queue acceptance is not request completion. Acceptance/rejection errors need not
+have owner-thread affinity; successful request and invocation callbacks do.
+
+## Validation
+
+The registered Caravan tests cover:
+
+- core placement, failure propagation, shutdown, and receiver-driven destruction;
+- allocation-free ordinary MPI sender construction/connection;
+- ordinary and native MPI operations, FIFO initiation, collective ordering,
+  retained lifetimes, partial-start recovery, and failure cleanup;
+- dedicated MPI runs with 1, 2, and 4 ranks and external progress with 1 and 2;
+- mixed Alpaka/MPI data flow and explicit `continuesOn` placement.
+
+Run available CPU, CUDA, and HIP configurations through the existing CMake/CTest
+targets and `share/ci/run_caravan_device_tests.sh`. Record unavailable device
+backends as compile-only or not tested; do not infer GPU behavior from CPU queues.
+
+No submission framework, scheduler hierarchy, cancellation model, or progress
+thread is planned without a measured requirement.
