@@ -149,7 +149,7 @@ auto run(caravan::MpiContext& mpi) -> int
     auto residualBuffer = std::make_unique<pmacc::HostDeviceBuffer<float, DIM1>>(pmacc::DataSpace<DIM1>::create(1));
 
     auto boundaryKernel
-        = pmacc::lockstep::exec::kernel(SetBoundaryConditions{}).config(borderMapper.getGridDim(), SuperCell{});
+        = PMACC_LOCKSTEP_KERNEL(SetBoundaryConditions{}).config(borderMapper.getGridDim(), SuperCell{});
     auto initialValues = caravan::alpaka::sequence(
         caravan::alpaka::sequence(
             caravan::alpaka::fill(computeQueue, buff1->getDeviceBuffer().getOwnedAlpakaView(), 0u),
@@ -186,7 +186,7 @@ auto run(caravan::MpiContext& mpi) -> int
     {
         auto communication = buff1->spawnCommunication(asyncContext, communicationQueue);
 
-        auto core = pmacc::lockstep::exec::kernel(StencilFourPoint{})
+        auto core = PMACC_LOCKSTEP_KERNEL(StencilFourPoint{})
                         .config(coreMapper.getGridDim(), SuperCell{})(
                             computeQueue,
                             caravan::retain(
@@ -220,7 +220,7 @@ auto run(caravan::MpiContext& mpi) -> int
                           gridSize,
                           borderMapper);
                       auto border
-                          = pmacc::lockstep::exec::kernel(StencilFourPoint{})
+                          = PMACC_LOCKSTEP_KERNEL(StencilFourPoint{})
                                 .config(borderMapper.getGridDim(), SuperCell{})(
                                     computeQueue,
                                     caravan::retain(buff1->getDeviceBuffer().getDataBox(), readView),

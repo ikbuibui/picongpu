@@ -153,7 +153,7 @@ namespace pmacc
                     auto& deviceBuffer = idBuf.getDeviceBuffer();
 
                     auto generate
-                        = pmacc::lockstep::exec::kernel(GenerateIds<numIdsPerBlock>{})
+                        = PMACC_LOCKSTEP_KERNEL(GenerateIds<numIdsPerBlock>{})
                               .template config<numIdsPerBlock>(numBlocks)(
                                   queue,
                                   caravan::retain(deviceBuffer.getDataBox(), deviceBuffer.getOwnedAlpakaView()),
