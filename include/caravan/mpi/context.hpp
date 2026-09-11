@@ -34,7 +34,6 @@ namespace caravan
     inline constexpr CommunicatorId worldCommunicator{0u};
 
     class MpiContext;
-    class MpiExternalRuntime;
     class MpiRuntime;
 
     namespace detail
@@ -156,9 +155,7 @@ namespace caravan
         MpiContext();
 
         void run();
-        bool progress();
         void requestShutdown();
-        bool shutdownComplete() const noexcept;
         void submitNative(detail::NativeSubmission submission);
         void invokeNative(detail::NativeInvocation submission);
 
@@ -169,7 +166,6 @@ namespace caravan
         void abandonManagedCollective(detail::ManagedCollectiveTicket ticket) noexcept;
 
         friend class MpiRuntime;
-        friend class MpiExternalRuntime;
         friend struct detail::CollectiveAccess;
         friend struct detail::NativeAccess;
     };
