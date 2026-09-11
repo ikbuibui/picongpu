@@ -67,10 +67,28 @@ namespace pmacc::lockstep
                 using KernelFunctor = detail::LockStepKernel<T_UserKernelFunctor, T_BlockCfg>;
 
                 T_UserKernelFunctor const m_UserKernelFunctor;
+#if defined(PMACC_SYNC_KERNEL) && PMACC_SYNC_KERNEL == 1
+                char const* const m_file;
+                size_t const m_line;
+#else
+                static constexpr char const* m_file = "";
+                static constexpr size_t m_line = 0u;
+#endif
 
-                HINLINE KernelPreperationWrapper(T_UserKernelFunctor const& kernelFunctor)
+                HINLINE KernelPreperationWrapper(
+                    T_UserKernelFunctor const& kernelFunctor,
+                    char const* const file = "",
+                    size_t const line = 0u)
                     : m_UserKernelFunctor(kernelFunctor)
+#if defined(PMACC_SYNC_KERNEL) && PMACC_SYNC_KERNEL == 1
+                    , m_file(file)
+                    , m_line(line)
+#endif
                 {
+#if !defined(PMACC_SYNC_KERNEL) || PMACC_SYNC_KERNEL != 1
+                    static_cast<void>(file);
+                    static_cast<void>(line);
+#endif
                 }
 
                 /** Configured kernel object.
@@ -97,6 +115,8 @@ namespace pmacc::lockstep
                     blockExtent.x() = BlockConfiguration::numWorkers();
                     return pmacc::exec::detail::KernelLauncher<KernelFunctor<BlockConfiguration>, dim>{
                         m_UserKernelFunctor,
+                        m_file,
+                        m_line,
                         gridSize,
                         blockExtent};
                 }
@@ -119,6 +139,8 @@ namespace pmacc::lockstep
                     blockSizeND.x() = BlockConfiguration::numWorkers();
                     return pmacc::exec::detail::KernelLauncher<KernelFunctor<BlockConfiguration>, dim>{
                         m_UserKernelFunctor,
+                        m_file,
+                        m_line,
                         gridSize,
                         blockSizeND};
                 }
@@ -141,6 +163,8 @@ namespace pmacc::lockstep
                     blockExtent.x() = BlockConfiguration::numWorkers();
                     return pmacc::exec::detail::KernelLauncher<KernelFunctor<BlockConfiguration>, dim>{
                         m_UserKernelFunctor,
+                        m_file,
+                        m_line,
                         gridSize,
                         blockExtent};
                 }
@@ -166,6 +190,8 @@ namespace pmacc::lockstep
                         pmacc::exec::detail::KernelWithDynSharedMem<KernelFunctor<BlockConfiguration>>(
                             m_UserKernelFunctor,
                             sharedMemByte),
+                        m_file,
+                        m_line,
                         gridSize,
                         blockExtent};
                 }
@@ -194,6 +220,8 @@ namespace pmacc::lockstep
                         pmacc::exec::detail::KernelWithDynSharedMem<KernelFunctor<BlockConfiguration>>(
                             m_UserKernelFunctor,
                             sharedMemByte),
+                        m_file,
+                        m_line,
                         gridSize,
                         blockExtent};
                 }
@@ -224,6 +252,8 @@ namespace pmacc::lockstep
                         pmacc::exec::detail::KernelWithDynSharedMem<KernelFunctor<BlockConfiguration>>(
                             m_UserKernelFunctor,
                             sharedMemByte),
+                        m_file,
+                        m_line,
                         gridSize,
                         blockExtent};
                 }
@@ -237,20 +267,28 @@ namespace pmacc::lockstep
          * example for lambda usage:
          *
          * @code{.cpp}
-         *   pmacc::lockstep::exec::kernel([]ALPAKA_FN_ACC(auto const& acc) -> void{
+         *   PMACC_LOCKSTEP_KERNEL([]ALPAKA_FN_ACC(auto const& acc) -> void{
          *       printf("Hello World.\n");
          *   }).config<1>(1)(queue)
          * @endcode
          *
          * @tparam T_KernelFunctor type of the kernel functor
          * @param kernelFunctor instance of the functor, lambda are supported
+         * @param file kernel call-site file used by blocking-kernel diagnostics
+         * @param line kernel call-site line used by blocking-kernel diagnostics
          */
         template<typename T_KernelFunctor>
-        [[nodiscard]] inline auto kernel(T_KernelFunctor const& kernelFunctor)
-            -> detail::KernelPreperationWrapper<T_KernelFunctor>
+        [[nodiscard]] inline auto kernel(
+            T_KernelFunctor const& kernelFunctor,
+            char const* const file = "",
+            size_t const line = 0u) -> detail::KernelPreperationWrapper<T_KernelFunctor>
         {
-            return detail::KernelPreperationWrapper<T_KernelFunctor>(kernelFunctor);
+            return detail::KernelPreperationWrapper<T_KernelFunctor>(kernelFunctor, file, line);
         }
 
     } // namespace exec
 } // namespace pmacc::lockstep
+
+/** Create a lockstep kernel object and retain its call site for blocking-kernel diagnostics. */
+#define PMACC_LOCKSTEP_KERNEL(...)                                                                                    \
+    ::pmacc::lockstep::exec::kernel(__VA_ARGS__, __FILE__, static_cast<size_t>(__LINE__))

@@ -49,9 +49,28 @@ namespace pmacc::exec
         struct KernelPreperationWrapper
         {
             T_KernelFunctor const m_kernelFunctor;
+#if defined(PMACC_SYNC_KERNEL) && PMACC_SYNC_KERNEL == 1
+            char const* const m_file;
+            size_t const m_line;
+#else
+            static constexpr char const* m_file = "";
+            static constexpr size_t m_line = 0u;
+#endif
 
-            HINLINE KernelPreperationWrapper(T_KernelFunctor const& kernelFunctor) : m_kernelFunctor(kernelFunctor)
+            HINLINE KernelPreperationWrapper(
+                T_KernelFunctor const& kernelFunctor,
+                char const* const file = "",
+                size_t const line = 0u)
+                : m_kernelFunctor(kernelFunctor)
+#if defined(PMACC_SYNC_KERNEL) && PMACC_SYNC_KERNEL == 1
+                , m_file(file)
+                , m_line(line)
+#endif
             {
+#if !defined(PMACC_SYNC_KERNEL) || PMACC_SYNC_KERNEL != 1
+                static_cast<void>(file);
+                static_cast<void>(line);
+#endif
             }
 
             /** Apply grid and block extents and optionally dynamic shared memory to the wrapped functor.
@@ -88,18 +107,21 @@ namespace pmacc::exec
      * example for lambda usage:
      *
      * @code{.cpp}
-     *   pmacc::exec::kernel([]ALPAKA_FN_ACC(auto const& acc) -> void{
+     *   PMACC_KERNEL([]ALPAKA_FN_ACC(auto const& acc) -> void{
      *       printf("Hello World.\n");
      *   })(1,1)(queue)
      * @endcode
      *
      * @tparam T_KernelFunctor type of the kernel functor
      * @param kernelFunctor instance of the functor, lambda are supported
+     * @param file kernel call-site file used by blocking-kernel diagnostics
+     * @param line kernel call-site line used by blocking-kernel diagnostics
      */
     template<typename T_KernelFunctor>
-    auto kernel(T_KernelFunctor const& kernelFunctor) -> detail::KernelPreperationWrapper<T_KernelFunctor>
+    auto kernel(T_KernelFunctor const& kernelFunctor, char const* const file = "", size_t const line = 0u)
+        -> detail::KernelPreperationWrapper<T_KernelFunctor>
     {
-        return detail::KernelPreperationWrapper<T_KernelFunctor>(kernelFunctor);
+        return detail::KernelPreperationWrapper<T_KernelFunctor>(kernelFunctor, file, line);
     }
 } // namespace pmacc::exec
 
@@ -126,8 +148,8 @@ namespace alpaka
     } // namespace trait
 } // namespace alpaka
 
-/** Create a kernel object out of a functor instance. */
-#define PMACC_KERNEL(...) ::pmacc::exec::kernel(__VA_ARGS__)
+/** Create a kernel object and retain its call site for blocking-kernel diagnostics. */
+#define PMACC_KERNEL(...) ::pmacc::exec::kernel(__VA_ARGS__, __FILE__, static_cast<size_t>(__LINE__))
 
 
 #include "pmacc/exec/Kernel.tpp"

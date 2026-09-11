@@ -171,7 +171,7 @@ namespace pmacc
             {
                 constexpr uint32_t blockSize = 256;
                 uint32_t const gridSize = (rngSize.productOfComponents() + blockSize - 1u) / blockSize;
-                return pmacc::lockstep::exec::kernel(RandomFiller<blockSize>{})
+                return PMACC_LOCKSTEP_KERNEL(RandomFiller<blockSize>{})
                     .template config<blockSize>(gridSize)(
                         queue,
                         caravan::retain(buffer.getDataBox(), buffer.getOwnedAlpakaView()),
