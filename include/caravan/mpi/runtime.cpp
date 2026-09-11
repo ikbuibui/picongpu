@@ -4,11 +4,9 @@
  */
 #include <exception>
 #include <future>
-#include <memory>
 #include <stdexcept>
 #include <string>
 #include <thread>
-#include <utility>
 
 #include <caravan/mpi/error.hpp>
 #include <caravan/mpi/runtime.hpp>
@@ -17,87 +15,6 @@
 namespace caravan
 {
     using detail::mpiError;
-
-    class MpiExternalRuntime::Impl
-    {
-    public:
-        Impl()
-        {
-            int initialized = 0;
-            int finalized = 0;
-            if(MPI_Initialized(&initialized) != MPI_SUCCESS || MPI_Finalized(&finalized) != MPI_SUCCESS || !initialized
-               || finalized)
-                throw std::logic_error("MpiExternalRuntime requires an active caller-owned MPI lifecycle");
-
-            int const getHandlerError = MPI_Comm_get_errhandler(MPI_COMM_WORLD, &m_previousErrorHandler);
-            if(getHandlerError != MPI_SUCCESS)
-                throw mpiError("MPI_Comm_get_errhandler", getHandlerError);
-            try
-            {
-                int const setHandlerError = MPI_Comm_set_errhandler(MPI_COMM_WORLD, MPI_ERRORS_RETURN);
-                if(setHandlerError != MPI_SUCCESS)
-                    throw mpiError("MPI_Comm_set_errhandler", setHandlerError);
-                context.reset(new MpiContext{});
-            }
-            catch(...)
-            {
-                restoreErrorHandler();
-                throw;
-            }
-        }
-
-        ~Impl()
-        {
-            if(context && !context->shutdownComplete())
-                std::terminate();
-            context.reset();
-            restoreErrorHandler();
-        }
-
-        void restoreErrorHandler() noexcept
-        {
-            if(m_previousErrorHandler == MPI_ERRHANDLER_NULL)
-                return;
-            auto handler = std::exchange(m_previousErrorHandler, MPI_ERRHANDLER_NULL);
-            int const setError = MPI_Comm_set_errhandler(MPI_COMM_WORLD, handler);
-            int const freeError = MPI_Errhandler_free(&handler);
-            if(setError != MPI_SUCCESS || freeError != MPI_SUCCESS)
-                std::terminate();
-        }
-
-        std::unique_ptr<MpiContext> context;
-
-    private:
-        MPI_Errhandler m_previousErrorHandler = MPI_ERRHANDLER_NULL;
-    };
-
-    MpiExternalRuntime::MpiExternalRuntime() : m_implementation(std::make_unique<Impl>())
-    {
-    }
-
-    MpiExternalRuntime::~MpiExternalRuntime() = default;
-
-    MpiContext& MpiExternalRuntime::context() noexcept
-    {
-        return *m_implementation->context;
-    }
-
-    bool MpiExternalRuntime::progress()
-    {
-        return m_implementation->context->progress();
-    }
-
-    void MpiExternalRuntime::requestShutdown()
-    {
-        m_implementation->context->requestShutdown();
-    }
-
-    void MpiExternalRuntime::finish()
-    {
-        requestShutdown();
-        while(progress())
-            std::this_thread::yield();
-    }
 
     int MpiRuntime::runImpl(int& argc, char**& argv, std::function<int(MpiContext&)> application)
     {
