@@ -141,9 +141,8 @@ namespace pmacc
             return caravan::Retained{*view, *devBuffer};
         }
 
-        /** Lazily fill every current element with a value on the caller-supplied queue. */
-        template<typename T_Queue>
-        auto setValueAsync(T_Queue& queue, T_Type const& value)
+        /** Lazily fill every current element with a value. */
+        auto setValueAsync(T_Type const& value)
         {
             auto const areaSize = MemSpace<T_dim>(this->sizeND(this->size()));
             auto gridSize = areaSize;
@@ -161,9 +160,8 @@ namespace pmacc
 
             if constexpr(sizeof(T_Type) <= 128u && std::is_trivially_copyable_v<T_Type>)
                 return caravan::alpaka::submit(
-                    queue,
                     [destination = std::move(destination), destinationBox, value, areaSize, workDiv, blockCfg](
-                        T_Queue& nativeQueue) mutable
+                        auto& nativeQueue) mutable
                     {
                         if(areaSize.productOfComponents() != 0u)
                             alpaka::exec<Acc<T_dim>>(
@@ -186,14 +184,13 @@ namespace pmacc
                     manager::Device<ComputeDevice>::get().current(),
                     MemSpace<DIM1>(1).toAlpakaMemVec());
                 return caravan::alpaka::submit(
-                    queue,
                     [destination = std::move(destination),
                      destinationBox,
                      hostValue = std::move(hostValue),
                      deviceValue = std::move(deviceValue),
                      areaSize,
                      workDiv,
-                     blockCfg](T_Queue& nativeQueue) mutable
+                     blockCfg](auto& nativeQueue) mutable
                     {
                         if(areaSize.productOfComponents() == 0u)
                             return;

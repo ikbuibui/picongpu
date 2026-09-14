@@ -8,8 +8,9 @@
 
 namespace caravan::alpaka
 {
-    /** Fixed-size, device-local pool shared by all connected graphs.
+    /** Device-local pool shared by all connected graphs.
      *
+     * The pool may grow before its first connection and is fixed-size afterwards.
      * At connection, logical lane i maps to (base + i) % queueCount; base advances by the graph's lane count.
      * sequence retains logical affinity, while whenAll branches may serialize on the same physical queue.
      * There are no exclusive leases or completion-time admission waits. The cap applies to this pool instance.
@@ -89,6 +90,22 @@ namespace caravan::alpaka
             return SubmissionFactory{*this};
         }
 
+        /** Add queues before the pool is first used. */
+        void addQueues(std::size_t count)
+        {
+            std::lock_guard lock(m_mutex);
+            if(m_started)
+                throw std::logic_error("SharedQueuePool cannot grow after its first submission");
+            while(count-- != 0u)
+                m_queues.emplace_back(::alpaka::getDev(m_queues.front()));
+        }
+
+        std::size_t size() const
+        {
+            std::lock_guard lock(m_mutex);
+            return m_queues.size();
+        }
+
     private:
         template<typename, typename, typename...>
         friend class detail::PooledSubmitOperation;
@@ -96,6 +113,7 @@ namespace caravan::alpaka
         Binding acquire(std::size_t laneCount)
         {
             std::lock_guard lock(m_mutex);
+            m_started = true;
             auto base = m_next;
             m_next = (m_next + laneCount % m_queues.size()) % m_queues.size();
             return Binding{*this, base};
@@ -103,7 +121,8 @@ namespace caravan::alpaka
 
         std::vector<T_Queue> m_queues;
         // ponytail: serialize graph submission, not execution; use per-queue fence-run locking if contention matters.
-        std::mutex m_mutex;
+        mutable std::mutex m_mutex;
         std::size_t m_next = 0u;
+        bool m_started = false;
     };
 } // namespace caravan::alpaka

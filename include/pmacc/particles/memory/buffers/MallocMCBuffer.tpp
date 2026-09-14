@@ -46,8 +46,7 @@ namespace pmacc
     }
 
     template<typename T_DeviceHeap>
-    template<typename T_Queue>
-    auto MallocMCBuffer<T_DeviceHeap>::synchronize(T_Queue& queue)
+    auto MallocMCBuffer<T_DeviceHeap>::synchronize()
     {
         auto const extent = pmacc::math::Vector<pmacc::MemIdxType, 1>(deviceHeapInfo.size).toAlpakaMemVec();
         if(!hostBuffer)
@@ -64,10 +63,8 @@ namespace pmacc
             static_cast<uint8_t*>(deviceHeapInfo.p),
             manager::Device<ComputeDevice>::get().current(),
             extent);
-        return caravan::alpaka::submit(
-            queue,
-            [host = std::move(host), device, extent](T_Queue& nativeQueue) mutable
-            { alpaka::memcpy(nativeQueue, host, device, extent); });
+        return caravan::alpaka::submit([host = std::move(host), device, extent](auto& nativeQueue) mutable
+                                       { alpaka::memcpy(nativeQueue, host, device, extent); });
     }
 
 } // namespace pmacc

@@ -73,10 +73,9 @@ namespace pmacc
         };
 
         /** Return a lazy copy of the current device state to the host. */
-        template<typename T_Queue>
-        auto synchronize(T_Queue& queue)
+        auto synchronize()
         {
-            return idBuffer.deviceToHost(queue);
+            return idBuffer.deviceToHost();
         }
 
         SimulationDataId getUniqueId() override
@@ -95,17 +94,14 @@ namespace pmacc
             return State{*idBuffer.getHostBuffer().data(), m_startId, m_maxNumProc};
         }
 
-        /** Lazily allocate and fetch one id on an explicit queue. */
-        template<typename T_Queue>
-        auto getNewIdHost(T_Queue& queue)
+        /** Lazily allocate and fetch one id. */
+        auto getNewIdHost()
         {
             auto newIdBuffer = std::make_shared<HostDeviceBuffer<uint64_t, 1>>(DataSpace<1>{1});
             auto& deviceBuffer = newIdBuffer->getDeviceBuffer();
-            auto fetch = PMACC_LOCKSTEP_KERNEL(FetchId{}).template config<1>(1)(
-                queue,
-                getDeviceGenerator(),
-                caravan::retain(deviceBuffer.data(), deviceBuffer.getOwnedAlpakaView()));
-            auto copy = newIdBuffer->deviceToHost(queue);
+            auto fetch = PMACC_LOCKSTEP_KERNEL(FetchId{}).template config<1>(
+                1)(getDeviceGenerator(), caravan::retain(deviceBuffer.data(), deviceBuffer.getOwnedAlpakaView()));
+            auto copy = newIdBuffer->deviceToHost();
             return caravan::alpaka::sequence(std::move(fetch), std::move(copy))
                    | caravan::then([newIdBuffer] { return *newIdBuffer->getHostBuffer().data(); });
         }
@@ -122,10 +118,9 @@ namespace pmacc
         }
 
         /** Return a lazy copy of the host state to the device. */
-        template<typename T_Queue>
-        auto initialize(T_Queue& queue)
+        auto initialize()
         {
-            return idBuffer.hostToDevice(queue);
+            return idBuffer.hostToDevice();
         }
 
         /** Construct host state; initialize() must complete before the first device use. */

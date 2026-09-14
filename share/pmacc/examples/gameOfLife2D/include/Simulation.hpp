@@ -35,7 +35,6 @@
 #include <pmacc/mpi/GatherSlice.hpp>
 #include <pmacc/traits/NumberOfExchanges.hpp>
 
-#include <optional>
 #include <string>
 
 #include <caravan/alpaka.hpp>
@@ -62,8 +61,6 @@ namespace gol
         uint32_t steps;
 
         bool isMaster{false};
-        std::optional<ComputeDeviceQueue> communicationQueue;
-        std::optional<ComputeDeviceQueue> computeQueue;
         caravan::ControlContext asyncContext;
 
     public:
@@ -84,13 +81,8 @@ namespace gol
              * -Second the cudaDevices will be allocated to the corresponding     *
              *  Host MPI processes where hostRank == deviceNumber, if the device  *
              *  is not marked to be used exclusively by another process. This     *
-             *  affects: cudaMalloc,cudaKernelLaunch,                             *
-             * -Then this simulation creates the queues it owns for communication *
-             *  and computation.                                                   */
+             *  affects: cudaMalloc,cudaKernelLaunch.                              */
             Environment<DIM2>::get().initDevices(mpi, devices, periodic);
-            auto const device = manager::Device<ComputeDevice>::get().current();
-            communicationQueue.emplace(device);
-            computeQueue.emplace(device);
 
             /* Now we have allocated every node to a grid position in the GC. We  *
              * use that grid position to allocate every node to a position in the *
@@ -113,8 +105,6 @@ namespace gol
             gather.reset();
             buff1.reset();
             buff2.reset();
-            communicationQueue.reset();
-            computeQueue.reset();
         }
 
         void init()
@@ -198,15 +188,15 @@ namespace gol
              * white points. World will be written to buffer in first argument    */
             auto initialization = caravan::alpaka::sequence(
                 caravan::alpaka::sequence(
-                    caravan::alpaka::fill(*computeQueue, buff1->getDeviceBuffer().getOwnedAlpakaView(), 0u),
-                    caravan::alpaka::fill(*computeQueue, buff2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
+                    caravan::alpaka::fill(buff1->getDeviceBuffer().getOwnedAlpakaView(), 0u),
+                    caravan::alpaka::fill(buff2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
                 evo.initEvolution(
-                    *computeQueue,
                     caravan::retain(
                         buff1->getDeviceBuffer().getDataBox(),
                         buff1->getDeviceBuffer().getOwnedAlpakaView()),
                     0.1));
-            asyncContext.wait(asyncContext.spawn(std::move(initialization)));
+            asyncContext.wait(asyncContext.spawn(
+                caravan::alpaka::withDevice(Environment<>::get().DeviceContext(), std::move(initialization))));
         }
 
         void start()
@@ -221,9 +211,8 @@ namespace gol
     private:
         void oneStep(uint32_t currentStep, std::unique_ptr<Buffer>& read, std::unique_ptr<Buffer>& write)
         {
-            auto communication = read->spawnCommunication(asyncContext, *communicationQueue);
+            auto communication = read->spawnCommunication(asyncContext);
             auto core = evo.runAsync<CORE>(
-                *computeQueue,
                 caravan::retain(read->getDeviceBuffer().getDataBox(), read->getDeviceBuffer().getOwnedAlpakaView()),
                 caravan::retain(write->getDeviceBuffer().getDataBox(), write->getDeviceBuffer().getOwnedAlpakaView()));
 
@@ -234,11 +223,11 @@ namespace gol
                              writeView = write->getDeviceBuffer().getOwnedAlpakaView()]() mutable
                             {
                                 return evo.runAsync<BORDER>(
-                                    *computeQueue,
                                     caravan::retain(read->getDeviceBuffer().getDataBox(), readView),
                                     caravan::retain(write->getDeviceBuffer().getDataBox(), writeView));
                             });
-            asyncContext.wait(asyncContext.spawn(std::move(step)));
+            asyncContext.wait(asyncContext.spawn(
+                caravan::alpaka::withDevice(Environment<>::get().DeviceContext(), std::move(step))));
 
             /* gather::operator() gathers all the buffers and assembles those to  *
              * a complete picture discarding the guards.                          */
@@ -254,11 +243,11 @@ namespace gol
                 // create a contiguous buffer required for gathering the data
                 auto dataWithoutGuard = std::make_unique<HostBuffer<uint8_t, DIM2>>(localDataExtents);
                 auto copy = caravan::alpaka::copy(
-                    *computeQueue,
                     dataWithoutGuard->getOwnedAlpakaView(),
                     view->getOwnedAlpakaView(),
                     localDataExtents.toAlpakaMemVec());
-                asyncContext.wait(asyncContext.spawn(std::move(copy)));
+                asyncContext.wait(asyncContext.spawn(
+                    caravan::alpaka::withDevice(Environment<>::get().DeviceContext(), std::move(copy))));
                 auto picture = gather->gatherSliceExplicit(
                     *dataWithoutGuard,
                     subGrid.getGlobalDomain().size,

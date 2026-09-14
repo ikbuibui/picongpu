@@ -117,13 +117,13 @@ namespace pmacc
                     uint64_t maxRanks = Environment<T_dim>::get().GridController().getGpuNodes().productOfComponents();
                     uint64_t rank = Environment<T_dim>::get().GridController().getScalarPosition();
                     auto idProvider = IdProvider("id provider", rank, maxRanks);
-                    auto const device = manager::Device<ComputeDevice>::get().current();
-                    ComputeDeviceQueue queue(device);
+                    auto& device = Environment<>::get().DeviceContext();
                     caravan::ControlContext context;
-                    context.wait(context.spawn(idProvider.initialize(queue)));
+                    context.wait(context.spawn(caravan::alpaka::withDevice(device, idProvider.initialize())));
                     auto getNewId = [&]
                     {
-                        auto result = context.spawnFuture<uint64_t>(idProvider.getNewIdHost(queue));
+                        auto result = context.spawnFuture<uint64_t>(
+                            caravan::alpaka::withDevice(device, idProvider.getNewIdHost()));
                         context.wait(result.event());
                         return result.result();
                     };
@@ -142,11 +142,11 @@ namespace pmacc
                         REQUIRE(checkDuplicate(ids, newId, false));
                         ids.insert(newId);
                     }
-                    context.wait(context.spawn(idProvider.synchronize(queue)));
+                    context.wait(context.spawn(caravan::alpaka::withDevice(device, idProvider.synchronize())));
                     REQUIRE(idProvider.getStateHost().nextId == state.nextId + numIds + 1u);
                     // Reset the state
                     idProvider.setStateHost(state);
-                    context.wait(context.spawn(idProvider.initialize(queue)));
+                    context.wait(context.spawn(caravan::alpaka::withDevice(device, idProvider.initialize())));
                     REQUIRE(getNewId() == state.nextId);
                     // Generate the same IDs on the device
                     HostDeviceBuffer<uint64_t, 1> idBuf(numIds);
@@ -155,13 +155,15 @@ namespace pmacc
                     auto generate
                         = PMACC_LOCKSTEP_KERNEL(GenerateIds<numIdsPerBlock>{})
                               .template config<numIdsPerBlock>(numBlocks)(
-                                  queue,
                                   caravan::retain(deviceBuffer.getDataBox(), deviceBuffer.getOwnedAlpakaView()),
                                   idProvider.getDeviceGenerator(),
                                   numThreads,
                                   numIdsPerThread);
-                    auto copy = idBuf.deviceToHost(queue);
-                    context.wait(context.spawn(caravan::alpaka::sequence(std::move(generate), std::move(copy))));
+                    auto copy = idBuf.deviceToHost();
+                    context.wait(context.spawn(
+                        caravan::alpaka::withDevice(
+                            device,
+                            caravan::alpaka::sequence(std::move(generate), std::move(copy)))));
                     REQUIRE(numIds == ids.size());
                     auto hostBox = idBuf.getHostBuffer().getDataBox();
                     // Make sure they are the same

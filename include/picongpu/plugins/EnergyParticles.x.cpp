@@ -346,23 +346,23 @@ namespace picongpu
             auto particles = dc.get<ParticlesType>(ParticlesType::FrameType::getName());
 
             auto const mapper = makeAreaMapper<AREA>(*m_cellDescription);
-            auto& queue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+            auto& device = Environment<>::get().DeviceContext();
             auto binaryKernel = [&](auto filter)
             {
-                auto initialize = caravan::alpaka::fill(queue, gEnergy->getDeviceBuffer().getOwnedAlpakaView(), 0u);
+                auto initialize = caravan::alpaka::fill(gEnergy->getDeviceBuffer().getOwnedAlpakaView(), 0u);
                 auto kernel = PMACC_LOCKSTEP_KERNEL(KernelEnergyParticles{})
-                                  .config(mapper.getGridDim(), *particles)
-                                  .sender(
-                                      queue,
+                                  .config(mapper.getGridDim(), *particles)(
                                       particles->getDeviceParticlesBox(),
                                       gEnergy->getDeviceBuffer().getDataBox(),
                                       mapper,
                                       filter);
-                auto copy = gEnergy->deviceToHost(queue);
+                auto copy = gEnergy->deviceToHost();
                 caravan::syncWait(
-                    caravan::alpaka::sequence(
-                        caravan::alpaka::sequence(std::move(initialize), std::move(kernel)),
-                        std::move(copy)));
+                    caravan::alpaka::withDevice(
+                        device,
+                        caravan::alpaka::sequence(
+                            caravan::alpaka::sequence(std::move(initialize), std::move(kernel)),
+                            std::move(copy))));
             };
 
             auto idProvider = dc.get<IdProvider>("globalId");

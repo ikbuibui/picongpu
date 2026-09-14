@@ -71,13 +71,11 @@ namespace pmacc
              */
             RNGProvider(Space const& size, std::string const& uniqueId = "");
 
-            /** Lazily initialize the random number generators on an explicit queue.
+            /** Lazily initialize the random number generators.
              *
-             * @param queue queue used for initialization
              * @param seed base seed to be used
              */
-            template<typename T_Queue>
-            auto init(T_Queue& queue, uint32_t seed);
+            auto init(uint32_t seed);
 
             /**
              * Factory method
@@ -103,11 +101,9 @@ namespace pmacc
             static std::string getName();
             SimulationDataId getUniqueId() override;
 
-            template<typename T_Queue>
-            auto synchronize(T_Queue& queue);
+            auto synchronize();
 
-            template<typename T_Queue>
-            auto syncToDevice(T_Queue& queue);
+            auto syncToDevice();
 
             /**
              * Return a reference to the buffer containing the states

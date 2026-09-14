@@ -96,31 +96,25 @@ namespace pmacc
                 stackIndexer.getDeviceBuffer().getDataBox());
         }
 
-        template<typename T_Queue>
-        auto resetAsync(T_Queue& queue)
+        auto resetAsync()
         {
             stack.getDeviceBuffer().setSizeHostSide(0u);
             stackIndexer.getDeviceBuffer().setSizeHostSide(0u);
             auto stackSize = caravan::alpaka::size(
-                queue,
                 stack.getDeviceBuffer().sizeOnDeviceBuffer(),
                 stack.getDeviceBuffer().sizeHostSideBuffer());
             auto indexSize = caravan::alpaka::size(
-                queue,
                 stackIndexer.getDeviceBuffer().sizeOnDeviceBuffer(),
                 stackIndexer.getDeviceBuffer().sizeHostSideBuffer());
             return caravan::alpaka::sequence(std::move(stackSize), std::move(indexSize));
         }
 
-        template<typename T_Queue>
-        auto publishDeviceSizes(T_Queue& queue)
+        auto publishDeviceSizes()
         {
             auto stackSize = caravan::alpaka::size(
-                queue,
                 stack.getDeviceBuffer().sizeHostSideBuffer(),
                 stack.getDeviceBuffer().sizeOnDeviceBuffer());
             auto indexSize = caravan::alpaka::size(
-                queue,
                 stackIndexer.getDeviceBuffer().sizeHostSideBuffer(),
                 stackIndexer.getDeviceBuffer().sizeOnDeviceBuffer());
             return caravan::alpaka::sequence(std::move(stackSize), std::move(indexSize));

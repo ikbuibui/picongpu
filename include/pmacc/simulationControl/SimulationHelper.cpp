@@ -130,8 +130,8 @@ namespace pmacc
         DataConnector& dc = Environment<>::get().DataConnector();
         auto idProvider = std::make_shared<IdProvider>("globalId", rank, maxRanks);
         dc.share(idProvider);
-        ComputeDeviceQueue idProviderQueue(manager::Device<ComputeDevice>::get().current());
-        asyncContext.wait(asyncContext.spawn(idProvider->initialize(idProviderQueue)));
+        asyncContext.wait(asyncContext.spawn(
+            caravan::alpaka::withDevice(Environment<>::get().DeviceContext(), idProvider->initialize())));
 
         init();
 

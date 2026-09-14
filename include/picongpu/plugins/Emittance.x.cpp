@@ -438,7 +438,7 @@ namespace picongpu
             auto particles = dc.get<ParticlesType>(ParticlesType::FrameType::getName());
 
             auto const mapper = makeAreaMapper<AREA>(*m_cellDescription);
-            auto& queue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+            auto& device = Environment<>::get().DeviceContext();
 
             // Some variables required so that it is possible for the kernel
             // to calculate the absolute position of the particles
@@ -451,15 +451,13 @@ namespace picongpu
             {
                 auto initialize = caravan::alpaka::sequence(
                     caravan::alpaka::sequence(
-                        caravan::alpaka::fill(queue, gSumMom2->getDeviceBuffer().getOwnedAlpakaView(), 0u),
-                        caravan::alpaka::fill(queue, gSumPos2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
+                        caravan::alpaka::fill(gSumMom2->getDeviceBuffer().getOwnedAlpakaView(), 0u),
+                        caravan::alpaka::fill(gSumPos2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
                     caravan::alpaka::sequence(
-                        caravan::alpaka::fill(queue, gSumMomPos->getDeviceBuffer().getOwnedAlpakaView(), 0u),
-                        caravan::alpaka::fill(queue, gCount_e->getDeviceBuffer().getOwnedAlpakaView(), 0u)));
+                        caravan::alpaka::fill(gSumMomPos->getDeviceBuffer().getOwnedAlpakaView(), 0u),
+                        caravan::alpaka::fill(gCount_e->getDeviceBuffer().getOwnedAlpakaView(), 0u)));
                 auto kernel = PMACC_LOCKSTEP_KERNEL(KernelCalcEmittance{})
-                                  .config(mapper.getGridDim(), *particles)
-                                  .sender(
-                                      queue,
+                                  .config(mapper.getGridDim(), *particles)(
                                       particles->getDeviceParticlesBox(),
                                       gSumMom2->getDeviceBuffer().getDataBox(),
                                       gSumPos2->getDeviceBuffer().getDataBox(),
@@ -468,7 +466,10 @@ namespace picongpu
                                       globalOffset,
                                       mapper,
                                       filter);
-                caravan::syncWait(caravan::alpaka::sequence(std::move(initialize), std::move(kernel)));
+                caravan::syncWait(
+                    caravan::alpaka::withDevice(
+                        device,
+                        caravan::alpaka::sequence(std::move(initialize), std::move(kernel))));
             };
 
             auto idProvider = dc.get<IdProvider>("globalId");
@@ -479,9 +480,9 @@ namespace picongpu
                 binaryKernel);
 
             auto copies = caravan::alpaka::sequence(
-                caravan::alpaka::sequence(gSumMom2->deviceToHost(queue), gSumPos2->deviceToHost(queue)),
-                caravan::alpaka::sequence(gSumMomPos->deviceToHost(queue), gCount_e->deviceToHost(queue)));
-            caravan::syncWait(std::move(copies));
+                caravan::alpaka::sequence(gSumMom2->deviceToHost(), gSumPos2->deviceToHost()),
+                caravan::alpaka::sequence(gSumMomPos->deviceToHost(), gCount_e->deviceToHost()));
+            caravan::syncWait(caravan::alpaka::withDevice(device, std::move(copies)));
 
             auto const localDomSizeY = subGrid.getLocalDomain().size.y();
             pmacc::HostBuffer<float_64, DIM1> reducedSumMom2(localDomSizeY);

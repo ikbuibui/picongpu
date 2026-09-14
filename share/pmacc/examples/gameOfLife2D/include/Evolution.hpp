@@ -184,8 +184,8 @@ namespace gol
             mapping = std::make_unique<T_MappingDesc>(layout, guardSize);
         }
 
-        template<typename T_Queue, typename T_Write>
-        auto initEvolution(T_Queue& queue, T_Write write, float const fraction)
+        template<typename T_Write>
+        auto initEvolution(T_Write write, float const fraction)
         {
             AreaMapping<CORE + BORDER, T_MappingDesc> mapper(*mapping);
 
@@ -195,17 +195,17 @@ namespace gol
             return PMACC_LOCKSTEP_KERNEL(kernel::RandomInit{})
                 .config(
                     mapper.getGridDim(),
-                    typename T_MappingDesc::SuperCellSize{})(queue, std::move(write), seed, fraction, mapper);
+                    typename T_MappingDesc::SuperCellSize{})(std::move(write), seed, fraction, mapper);
         }
 
-        template<uint32_t Area, typename T_Queue, typename T_Read, typename T_Write>
-        auto runAsync(T_Queue& queue, T_Read read, T_Write write)
+        template<uint32_t Area, typename T_Read, typename T_Write>
+        auto runAsync(T_Read read, T_Write write)
         {
             AreaMapping<Area, T_MappingDesc> mapper(*mapping);
             return PMACC_LOCKSTEP_KERNEL(kernel::Evolution{})
                 .config(
                     mapper.getGridDim(),
-                    typename T_MappingDesc::SuperCellSize{})(queue, std::move(read), std::move(write), rule, mapper);
+                    typename T_MappingDesc::SuperCellSize{})(std::move(read), std::move(write), rule, mapper);
         }
     };
 

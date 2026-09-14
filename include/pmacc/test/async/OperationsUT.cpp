@@ -50,25 +50,23 @@ namespace
 
 namespace
 {
-    [[maybe_unused]] auto compileFieldSend(pmacc::ComputeDeviceQueue& queue, MockField& field)
+    [[maybe_unused]] auto compileFieldSend(MockField& field)
     {
-        auto sender = pmacc::fields::sendExchange(queue, field, 1u);
+        auto sender = pmacc::fields::sendExchange(field, 1u);
         static_assert(caravan::Sender<decltype(sender)>);
         return sender;
     }
 
-    [[maybe_unused]] auto compileFieldReceive(pmacc::ComputeDeviceQueue& queue, MockField& field)
+    [[maybe_unused]] auto compileFieldReceive(MockField& field)
     {
-        auto sender = pmacc::fields::receiveExchange(queue, field, 1u);
+        auto sender = pmacc::fields::receiveExchange(field, 1u);
         static_assert(caravan::Sender<decltype(sender)>);
         return sender;
     }
 
-    [[maybe_unused]] auto compileParticleStackSizes(
-        pmacc::ComputeDeviceQueue& queue,
-        pmacc::StackExchangeBuffer<int, int, DIM1>& stack)
+    [[maybe_unused]] auto compileParticleStackSizes(pmacc::StackExchangeBuffer<int, int, DIM1>& stack)
     {
-        return caravan::alpaka::sequence(stack.resetAsync(queue), stack.publishDeviceSizes(queue));
+        return caravan::alpaka::sequence(stack.resetAsync(), stack.publishDeviceSizes());
     }
 } // namespace
 
@@ -127,15 +125,14 @@ TEST_CASE("DeviceBuffer value fill is a lazy sender", "[async][memory]")
         int values[40];
     };
 
-    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
-    pmacc::ComputeDeviceQueue queue(device);
+    auto& device = pmacc::Environment<>::get().DeviceContext();
     auto const extent = pmacc::MemSpace<DIM1>{3u};
 
     pmacc::HostDeviceBuffer<int, DIM1> small(extent);
-    auto smallFill = small.getDeviceBuffer().setValueAsync(queue, 42);
+    auto smallFill = small.getDeviceBuffer().setValueAsync(42);
     static_assert(caravan::Sender<decltype(smallFill)>);
-    caravan::syncWait(std::move(smallFill));
-    caravan::syncWait(small.deviceToHost(queue));
+    caravan::syncWait(caravan::alpaka::withDevice(device, std::move(smallFill)));
+    caravan::syncWait(caravan::alpaka::withDevice(device, small.deviceToHost()));
     for(size_t i = 0u; i < 3u; ++i)
         CHECK(small.getHostBuffer().data()[i] == 42);
 
@@ -143,8 +140,8 @@ TEST_CASE("DeviceBuffer value fill is a lazy sender", "[async][memory]")
     LargeValue value{};
     value.values[0] = 17;
     value.values[39] = 23;
-    caravan::syncWait(large.getDeviceBuffer().setValueAsync(queue, value));
-    caravan::syncWait(large.deviceToHost(queue));
+    caravan::syncWait(caravan::alpaka::withDevice(device, large.getDeviceBuffer().setValueAsync(value)));
+    caravan::syncWait(caravan::alpaka::withDevice(device, large.deviceToHost()));
     for(size_t i = 0u; i < 3u; ++i)
     {
         CHECK(large.getHostBuffer().data()[i].values[0] == 17);
@@ -154,46 +151,45 @@ TEST_CASE("DeviceBuffer value fill is a lazy sender", "[async][memory]")
 
 TEST_CASE("Device reduction returns a lazy sender", "[async][reduce]")
 {
-    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
-    pmacc::ComputeDeviceQueue queue(device);
+    auto& device = pmacc::Environment<>::get().DeviceContext();
     pmacc::HostDeviceBuffer<int, DIM1> input(pmacc::MemSpace<DIM1>{4u});
     input.getHostBuffer().data()[0] = 1;
     input.getHostBuffer().data()[1] = 2;
     input.getHostBuffer().data()[2] = 3;
     input.getHostBuffer().data()[3] = 4;
-    caravan::syncWait(input.hostToDevice(queue));
+    caravan::syncWait(caravan::alpaka::withDevice(device, input.hostToDevice()));
 
     pmacc::device::Reduce reduce(1024u);
-    auto reduction = reduce.reduce(queue, pmacc::math::operation::Add{}, input.getDeviceBuffer().getDataBox(), 4u);
+    auto reduction = reduce.reduce(pmacc::math::operation::Add{}, input.getDeviceBuffer().getDataBox(), 4u);
     static_assert(caravan::Sender<decltype(reduction)>);
-    auto result = caravan::syncWait<int>(std::move(reduction));
+    auto result = caravan::syncWait<int>(caravan::alpaka::withDevice(device, std::move(reduction)));
 
     CHECK(result == 10);
 }
 
 TEST_CASE("Host-device buffer queue overloads return lazy copies", "[async][memory]")
 {
-    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
-    pmacc::ComputeDeviceQueue queue(device);
+    auto& device = pmacc::Environment<>::get().DeviceContext();
     pmacc::HostDeviceBuffer<int, DIM1> buffer(pmacc::MemSpace<DIM1>{2u}, true);
     buffer.getHostBuffer().data()[0] = 41;
     buffer.getHostBuffer().data()[1] = 99;
     buffer.getHostBuffer().setSizeHostSide(1u);
 
     caravan::ControlContext context;
-    context.wait(context.spawn(buffer.hostToDevice(queue)));
+    context.wait(context.spawn(caravan::alpaka::withDevice(device, buffer.hostToDevice())));
 
     buffer.getDeviceBuffer().setSizeHostSide(0u);
     context.wait(context.spawn(
-        caravan::alpaka::size(
-            queue,
-            buffer.getDeviceBuffer().sizeHostSideBuffer(),
-            buffer.getDeviceBuffer().sizeOnDeviceBuffer())));
+        caravan::alpaka::withDevice(
+            device,
+            caravan::alpaka::size(
+                buffer.getDeviceBuffer().sizeHostSideBuffer(),
+                buffer.getDeviceBuffer().sizeOnDeviceBuffer()))));
     CHECK(buffer.getDeviceBuffer().size() == 1u);
 
     buffer.getHostBuffer().data()[0] = 0;
     buffer.getHostBuffer().data()[1] = 77;
-    context.wait(context.spawn(buffer.deviceToHost(queue)));
+    context.wait(context.spawn(caravan::alpaka::withDevice(device, buffer.deviceToHost())));
     CHECK(buffer.getHostBuffer().size() == 1u);
     CHECK(buffer.getHostBuffer().data()[0] == 41);
     CHECK(buffer.getHostBuffer().data()[1] == 77);

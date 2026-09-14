@@ -28,6 +28,22 @@ int main()
     {
     }
 
+    // The pool may grow during startup, but not once queue references have been handed out.
+    {
+        caravan::alpaka::SharedQueuePool<Queue> pool{device, 1u};
+        pool.addQueues(6u);
+        assert(pool.size() == 7u);
+        caravan::syncWait(caravan::alpaka::withDevice(pool, caravan::alpaka::enqueue([] {})));
+        try
+        {
+            pool.addQueues(1u);
+            assert(false);
+        }
+        catch(std::logic_error const&)
+        {
+        }
+    }
+
     // Nested logical forks keep their dependencies when fixed physical lanes alias.
     for(std::size_t count : {1u, 2u, 3u})
     {

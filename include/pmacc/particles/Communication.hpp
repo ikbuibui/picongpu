@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include "pmacc/Environment.hpp"
 #include "pmacc/assert.hpp"
 #include "pmacc/traits/NumberOfExchanges.hpp"
 #include "pmacc/type/Exchange.hpp"
@@ -22,7 +23,7 @@ namespace pmacc::particles
 {
     namespace detail
     {
-        template<typename T_Particles, typename T_Queue, typename T_Receiver>
+        template<typename T_Particles, typename T_Receiver>
         class SendChunksOperation
         {
             struct PackReceiver
@@ -36,6 +37,12 @@ namespace pmacc::particles
                 void set_error(std::exception_ptr error) noexcept
                 {
                     owner->fail(std::move(error));
+                }
+
+                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
+                    requires requires(T_Receiver const& output) { output.get_env(); }
+                {
+                    return std::as_const(owner->receiver).get_env();
                 }
 
                 SendChunksOperation* owner;
@@ -54,15 +61,19 @@ namespace pmacc::particles
                     owner->fail(std::move(error));
                 }
 
+                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
+                    requires requires(T_Receiver const& output) { output.get_env(); }
+                {
+                    return std::as_const(owner->receiver).get_env();
+                }
+
                 SendChunksOperation* owner;
             };
 
-            using PackSender = decltype(std::declval<T_Particles&>().copyGuardToExchangeAsync(
-                std::declval<T_Queue&>(),
-                std::declval<uint32_t>()));
-            using SendSender = decltype(std::declval<T_Particles&>().getParticlesBuffer().sendParticles(
-                std::declval<T_Queue&>(),
-                std::declval<uint32_t>()));
+            using PackSender
+                = decltype(std::declval<T_Particles&>().copyGuardToExchangeAsync(std::declval<uint32_t>()));
+            using SendSender
+                = decltype(std::declval<T_Particles&>().getParticlesBuffer().sendParticles(std::declval<uint32_t>()));
 
             class PackOperation
             {
@@ -99,9 +110,8 @@ namespace pmacc::particles
             };
 
         public:
-            SendChunksOperation(T_Queue& queue, T_Particles& particles, uint32_t exchange, T_Receiver receiver)
-                : queue(queue)
-                , particles(particles)
+            SendChunksOperation(T_Particles& particles, uint32_t exchange, T_Receiver receiver)
+                : particles(particles)
                 , exchange(exchange)
                 , receiver(std::move(receiver))
             {
@@ -128,7 +138,7 @@ namespace pmacc::particles
         private:
             void startPack()
             {
-                packs.emplace_back(particles.copyGuardToExchangeAsync(queue, exchange), this);
+                packs.emplace_back(particles.copyGuardToExchangeAsync(exchange), this);
                 packs.back().start();
             }
 
@@ -140,7 +150,7 @@ namespace pmacc::particles
                                    .getSendExchangeStack(exchange)
                                    .getDeviceParticlesCurrentSize();
                     PMACC_ASSERT(lastSize <= maxSize);
-                    sends.emplace_back(particles.getParticlesBuffer().sendParticles(queue, exchange), this);
+                    sends.emplace_back(particles.getParticlesBuffer().sendParticles(exchange), this);
                     sends.back().start();
                 }
                 catch(...)
@@ -180,7 +190,6 @@ namespace pmacc::particles
                 receiver.set_error(std::move(error));
             }
 
-            T_Queue& queue;
             T_Particles& particles;
             uint32_t exchange;
             T_Receiver receiver;
@@ -193,7 +202,7 @@ namespace pmacc::particles
             std::list<SendOperation> sends;
         };
 
-        template<typename T_Particles, typename T_Queue, typename T_Receiver>
+        template<typename T_Particles, typename T_Receiver>
         class ReceiveChunksOperation
         {
             struct ReceiveReceiver
@@ -207,6 +216,12 @@ namespace pmacc::particles
                 void set_error(std::exception_ptr error) noexcept
                 {
                     owner->fail(std::move(error));
+                }
+
+                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
+                    requires requires(T_Receiver const& output) { output.get_env(); }
+                {
+                    return std::as_const(owner->receiver).get_env();
                 }
 
                 ReceiveChunksOperation* owner;
@@ -225,14 +240,18 @@ namespace pmacc::particles
                     owner->fail(std::move(error));
                 }
 
+                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
+                    requires requires(T_Receiver const& output) { output.get_env(); }
+                {
+                    return std::as_const(owner->receiver).get_env();
+                }
+
                 ReceiveChunksOperation* owner;
             };
 
             using ReceiveSender = decltype(std::declval<T_Particles&>().getParticlesBuffer().receiveParticles(
-                std::declval<T_Queue&>(),
                 std::declval<uint32_t>()));
             using InsertSender = decltype(std::declval<T_Particles&>().insertParticlesAsync(
-                std::declval<T_Queue&>(),
                 std::declval<uint32_t>(),
                 std::declval<size_t>()));
 
@@ -271,9 +290,8 @@ namespace pmacc::particles
             };
 
         public:
-            ReceiveChunksOperation(T_Queue& queue, T_Particles& particles, uint32_t exchange, T_Receiver receiver)
-                : queue(queue)
-                , particles(particles)
+            ReceiveChunksOperation(T_Particles& particles, uint32_t exchange, T_Receiver receiver)
+                : particles(particles)
                 , exchange(exchange)
                 , receiver(std::move(receiver))
             {
@@ -300,7 +318,7 @@ namespace pmacc::particles
         private:
             void startReceive()
             {
-                receives.emplace_back(particles.getParticlesBuffer().receiveParticles(queue, exchange), this);
+                receives.emplace_back(particles.getParticlesBuffer().receiveParticles(exchange), this);
                 receives.back().start();
             }
 
@@ -317,7 +335,7 @@ namespace pmacc::particles
                         receiver.set_value();
                         return;
                     }
-                    inserts.emplace_back(particles.insertParticlesAsync(queue, exchange, lastSize), this);
+                    inserts.emplace_back(particles.insertParticlesAsync(exchange, lastSize), this);
                     inserts.back().start();
                 }
                 catch(...)
@@ -346,7 +364,6 @@ namespace pmacc::particles
                 receiver.set_error(std::move(error));
             }
 
-            T_Queue& queue;
             T_Particles& particles;
             uint32_t exchange;
             T_Receiver receiver;
@@ -359,89 +376,79 @@ namespace pmacc::particles
         };
     } // namespace detail
 
-    template<typename T_Particles, typename T_Queue>
+    template<typename T_Particles>
     class SendChunksSender
     {
     public:
         using completion_signatures
             = caravan::CompletionSignatures<caravan::ValueSignature<>, caravan::ErrorSignature<std::exception_ptr>>;
 
-        SendChunksSender(T_Queue& queue, T_Particles& particles, uint32_t exchange)
-            : queue(&queue)
-            , particles(&particles)
-            , exchange(exchange)
+        SendChunksSender(T_Particles& particles, uint32_t exchange) : particles(&particles), exchange(exchange)
         {
         }
 
         template<typename T_Receiver>
         auto connect(T_Receiver&& receiver) &&
         {
-            return detail::SendChunksOperation<T_Particles, T_Queue, std::decay_t<T_Receiver>>{
-                *queue,
+            return detail::SendChunksOperation<T_Particles, std::decay_t<T_Receiver>>{
                 *particles,
                 exchange,
                 std::forward<T_Receiver>(receiver)};
         }
 
     private:
-        T_Queue* queue;
         T_Particles* particles;
         uint32_t exchange;
     };
 
-    template<typename T_Particles, typename T_Queue>
-    auto sendChunks(T_Queue& queue, T_Particles& particles, uint32_t exchange)
+    template<typename T_Particles>
+    auto sendChunks(T_Particles& particles, uint32_t exchange)
     {
-        return SendChunksSender<T_Particles, T_Queue>{queue, particles, exchange};
+        return SendChunksSender<T_Particles>{particles, exchange};
     }
 
-    template<typename T_Particles, typename T_Queue>
+    template<typename T_Particles>
     class ReceiveChunksSender
     {
     public:
         using completion_signatures
             = caravan::CompletionSignatures<caravan::ValueSignature<>, caravan::ErrorSignature<std::exception_ptr>>;
 
-        ReceiveChunksSender(T_Queue& queue, T_Particles& particles, uint32_t exchange)
-            : queue(&queue)
-            , particles(&particles)
-            , exchange(exchange)
+        ReceiveChunksSender(T_Particles& particles, uint32_t exchange) : particles(&particles), exchange(exchange)
         {
         }
 
         template<typename T_Receiver>
         auto connect(T_Receiver&& receiver) &&
         {
-            return detail::ReceiveChunksOperation<T_Particles, T_Queue, std::decay_t<T_Receiver>>{
-                *queue,
+            return detail::ReceiveChunksOperation<T_Particles, std::decay_t<T_Receiver>>{
                 *particles,
                 exchange,
                 std::forward<T_Receiver>(receiver)};
         }
 
     private:
-        T_Queue* queue;
         T_Particles* particles;
         uint32_t exchange;
     };
 
-    template<typename T_Particles, typename T_Queue>
-    auto receiveChunks(T_Queue& queue, T_Particles& particles, uint32_t exchange)
+    template<typename T_Particles>
+    auto receiveChunks(T_Particles& particles, uint32_t exchange)
     {
-        return ReceiveChunksSender<T_Particles, T_Queue>{queue, particles, exchange};
+        return ReceiveChunksSender<T_Particles>{particles, exchange};
     }
 
     /** Eager runtime-sized adapter for all particle exchange directions. */
-    template<typename T_Particles, typename T_Queue>
+    template<typename T_Particles>
     caravan::Event spawnCommunication(
         caravan::ControlContext& context,
-        T_Queue& queue,
         T_Particles& particles,
         caravan::Event previous = {})
     {
         using HandleGuardRegion = typename T_Particles::HandleGuardRegion;
         using HandleNotExchanged = typename HandleGuardRegion::HandleNotExchanged;
         auto& buffer = particles.getParticlesBuffer();
+        auto& device = Environment<>::get().DeviceContext();
         std::vector<caravan::Event> sends;
         std::vector<caravan::Event> receives;
         constexpr auto numExchanges = pmacc::traits::NumberOfExchanges<T_Particles::dim>::value;
@@ -454,41 +461,50 @@ namespace pmacc::particles
             {
                 std::array dependencies{previous, buffer.sendCompletion(exchange)};
                 auto completion = context.spawn(
-                    caravan::asSender(caravan::whenAll(dependencies))
-                    | caravan::letValue([&queue, &particles, exchange]
-                                        { return sendChunks(queue, particles, exchange); }));
+                    caravan::alpaka::withDevice(
+                        device,
+                        caravan::asSender(caravan::whenAll(dependencies))
+                            | caravan::letValue([&particles, exchange] { return sendChunks(particles, exchange); })));
                 buffer.setSendCompletion(exchange, completion);
                 sends.push_back(std::move(completion));
             }
             else
                 sends.push_back(context.spawn(
-                    caravan::asSender(previous)
-                    | caravan::letValue(
-                        [&queue, &particles, exchange]
-                        { return HandleNotExchanged{}.handleOutgoingAsync(queue, particles, exchange); })));
+                    caravan::alpaka::withDevice(
+                        device,
+                        caravan::asSender(previous)
+                            | caravan::letValue(
+                                [&particles, exchange]
+                                { return HandleNotExchanged{}.handleOutgoingAsync(particles, exchange); }))));
 
             if(buffer.hasReceiveExchange(exchange))
             {
                 std::array dependencies{previous, buffer.receiveCompletion(exchange)};
                 auto completion = context.spawn(
-                    caravan::asSender(caravan::whenAll(dependencies))
-                    | caravan::letValue([&queue, &particles, exchange]
-                                        { return receiveChunks(queue, particles, exchange); }));
+                    caravan::alpaka::withDevice(
+                        device,
+                        caravan::asSender(caravan::whenAll(dependencies))
+                            | caravan::letValue([&particles, exchange]
+                                                { return receiveChunks(particles, exchange); })));
                 buffer.setReceiveCompletion(exchange, completion);
                 receives.push_back(std::move(completion));
             }
             else
                 receives.push_back(context.spawn(
-                    caravan::asSender(previous)
-                    | caravan::letValue(
-                        [&queue, &particles, exchange]
-                        { return HandleNotExchanged{}.handleIncomingAsync(queue, particles, exchange); })));
+                    caravan::alpaka::withDevice(
+                        device,
+                        caravan::asSender(previous)
+                            | caravan::letValue(
+                                [&particles, exchange]
+                                { return HandleNotExchanged{}.handleIncomingAsync(particles, exchange); }))));
         }
 
         auto received = caravan::whenAll(receives);
         auto filled = context.spawn(
-            caravan::asSender(std::move(received))
-            | caravan::letValue([&queue, &particles] { return particles.fillBorderGapsAsync(queue); }));
+            caravan::alpaka::withDevice(
+                device,
+                caravan::asSender(std::move(received))
+                    | caravan::letValue([&particles] { return particles.fillBorderGapsAsync(); })));
         sends.push_back(std::move(filled));
         return caravan::whenAll(sends);
     }

@@ -258,9 +258,8 @@ namespace pmacc
             caravan::ReceiveResult const mpi;
         };
 
-        /** Describe one lazy send. The exchange, queue, and borrowed buffers must outlive it. */
-        template<typename T_Queue>
-        auto send(T_Queue& queue)
+        /** Describe one lazy send. The exchange and borrowed buffers must outlive it. */
+        auto send()
         {
             auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
             auto source = getDeviceBuffer().getOwnedAlpakaView();
@@ -273,11 +272,10 @@ namespace pmacc
                 hostStaging.emplace(getHostBuffer().getOwnedAlpakaView());
 
             auto queueTail = caravan::alpaka::submit(
-                queue,
                 [this,
                  source = std::move(source),
                  deviceStaging = std::move(deviceStaging),
-                 hostStaging = std::move(hostStaging)](T_Queue& nativeQueue) mutable
+                 hostStaging = std::move(hostStaging)](auto& nativeQueue) mutable
                 {
                     auto const elements = getDeviceBuffer().size();
                     auto const extent = getDeviceBuffer().sizeND(elements).toAlpakaMemVec();
@@ -305,8 +303,7 @@ namespace pmacc
         }
 
         /** Describe one lazy receive followed by size publication and device copies. */
-        template<typename T_Queue>
-        auto receive(T_Queue& queue)
+        auto receive()
         {
             auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
             auto destination = getDeviceBuffer().getOwnedAlpakaView();
@@ -323,7 +320,6 @@ namespace pmacc
             return std::move(receive)
                    | caravan::letValue(
                        [this,
-                        &queue,
                         destination = std::move(destination),
                         deviceStaging = std::move(deviceStaging),
                         hostStaging = std::move(hostStaging)](caravan::ReceiveResult result) mutable
@@ -340,14 +336,13 @@ namespace pmacc
                            auto const sizeExtent = MemSpace<DIM1>(1).toAlpakaMemVec();
                            auto const dataExtent = getDeviceBuffer().sizeND(metadata.elements).toAlpakaMemVec();
                            auto copy = caravan::alpaka::submit(
-                               queue,
                                [destination = std::move(destination),
                                 deviceStaging = std::move(deviceStaging),
                                 hostStaging = std::move(hostStaging),
                                 deviceSize = std::move(deviceSize),
                                 hostSize = std::move(hostSize),
                                 sizeExtent,
-                                dataExtent](T_Queue& nativeQueue) mutable
+                                dataExtent](auto& nativeQueue) mutable
                                {
                                    if(deviceSize)
                                        ::alpaka::memcpy(nativeQueue, *deviceSize, hostSize, sizeExtent);

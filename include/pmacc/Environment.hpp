@@ -64,6 +64,9 @@ namespace pmacc
             /** get the attached Caravan MPI context */
             HINLINE caravan::MpiContext& getMpiContext();
 
+            /** Get the process-global accelerator queue pool. */
+            HINLINE caravan::alpaka::SharedQueuePool<ComputeDeviceQueue>& DeviceContext();
+
             /** get the singleton MemoryInfo
              *
              * @return instance of MemoryInfo

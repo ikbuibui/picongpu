@@ -79,7 +79,7 @@ namespace caravan::alpaka
     auto size(T_Destination destination, T_Source source)
     {
         using Source = std::remove_cvref_t<decltype(caravan::unwrap(source))>;
-        return copy(
+        return caravan::alpaka::copy(
             std::move(destination),
             std::move(source),
             ::alpaka::Vec<::alpaka::Dim<Source>, ::alpaka::Idx<Source>>::ones());

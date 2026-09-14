@@ -253,4 +253,11 @@ namespace caravan::alpaka
             return ManagedSubmitSender<Submit>{{std::move(submit)}};
         }
     } // namespace detail
+
+    /** Lazily describe one native submission whose queue comes from the receiver environment. */
+    template<typename T_Submit>
+    auto submit(T_Submit submit)
+    {
+        return detail::managedSubmit(std::move(submit));
+    }
 } // namespace caravan::alpaka

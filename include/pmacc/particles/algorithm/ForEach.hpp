@@ -434,26 +434,22 @@ namespace pmacc::particles::algorithm
      * @param areaMapperFactory factory to construct an area mapper,
      *                          the area is defined by the constructed mapper object
      */
-    template<typename T_Queue, typename T_Species, typename T_Functor, typename T_AreaMapperFactory>
-    HINLINE auto forEachAsync(
-        T_Queue& queue,
-        T_Species&& species,
-        T_Functor functor,
-        T_AreaMapperFactory const& areaMapperFactory)
+    template<typename T_Species, typename T_Functor, typename T_AreaMapperFactory>
+    HINLINE auto forEachAsync(T_Species&& species, T_Functor functor, T_AreaMapperFactory const& areaMapperFactory)
     {
         auto const mapper = areaMapperFactory(species.getCellDescription());
         return PMACC_LOCKSTEP_KERNEL(acc::detail::KernelForEachParticle{})
-            .config(mapper.getGridDim(), species)(queue, std::move(functor), mapper, species.getDeviceParticlesBox());
+            .config(mapper.getGridDim(), species)(std::move(functor), mapper, species.getDeviceParticlesBox());
     }
 
     /** Version for a fixed area
      *
      * @tparam T_area area to process particles in
      */
-    template<uint32_t T_area, typename T_Queue, typename T_Species, typename T_Functor>
-    HINLINE auto forEachAsync(T_Queue& queue, T_Species&& species, T_Functor functor)
+    template<uint32_t T_area, typename T_Species, typename T_Functor>
+    HINLINE auto forEachAsync(T_Species&& species, T_Functor functor)
     {
-        return forEachAsync(queue, std::forward<T_Species>(species), std::move(functor), AreaMapperFactory<T_area>{});
+        return forEachAsync(std::forward<T_Species>(species), std::move(functor), AreaMapperFactory<T_area>{});
     }
 
     /** @} */

@@ -73,15 +73,15 @@ struct IotaGenericKernel
     }
 };
 
-template<uint32_t T_chunkSize, typename T_DeviceBuffer, typename T_Queue>
-inline auto iotaGerneric(T_DeviceBuffer& devBuffer, T_Queue& queue)
+template<uint32_t T_chunkSize, typename T_DeviceBuffer>
+inline auto iotaGerneric(T_DeviceBuffer& devBuffer)
 {
     auto bufferSize = devBuffer.size();
     // use only half of the blocks needed to process the full data
     uint32_t const numBlocks = bufferSize / T_chunkSize / 2u;
     return PMACC_LOCKSTEP_KERNEL(IotaGenericKernel{})
         .config<T_chunkSize>(
-            numBlocks)(queue, caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
+            numBlocks)(caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
 
 // doc-include-end: lockstep generic kernel
@@ -97,15 +97,15 @@ namespace pmacc::lockstep::traits
     };
 } // namespace pmacc::lockstep::traits
 
-template<typename T_DeviceBuffer, typename T_Queue>
-inline auto iotaGernericBufferDerivedChunksize(T_DeviceBuffer& devBuffer, T_Queue& queue)
+template<typename T_DeviceBuffer>
+inline auto iotaGernericBufferDerivedChunksize(T_DeviceBuffer& devBuffer)
 {
     auto bufferSize = devBuffer.size();
     constexpr uint32_t numBlocks = 9;
     return PMACC_LOCKSTEP_KERNEL(IotaGenericKernel{})
-        .config(
-            numBlocks,
-            devBuffer)(queue, caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
+        .config(numBlocks, devBuffer)(
+            caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()),
+            bufferSize);
 }
 
 // doc-include-end: lockstep generic kernel buffer selected domain size
@@ -142,13 +142,13 @@ struct IotaFixedChunkSizeKernel
     }
 };
 
-template<typename T_DeviceBuffer, typename T_Queue>
-inline auto iotaFixedChunkSize(T_DeviceBuffer& devBuffer, T_Queue& queue)
+template<typename T_DeviceBuffer>
+inline auto iotaFixedChunkSize(T_DeviceBuffer& devBuffer)
 {
     auto bufferSize = devBuffer.size();
     constexpr uint32_t numBlocks = 10;
     return PMACC_LOCKSTEP_KERNEL(IotaFixedChunkSizeKernel{})
-        .config(numBlocks)(queue, caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
+        .config(numBlocks)(caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
 
 // doc-include-end: lockstep generic kernel hard coded domain size
@@ -187,13 +187,13 @@ struct IotaFixedChunkSizeKernelND
     }
 };
 
-template<typename T_DeviceBuffer, typename T_Queue>
-inline auto iotaFixedChunkSizeND(T_DeviceBuffer& devBuffer, T_Queue& queue)
+template<typename T_DeviceBuffer>
+inline auto iotaFixedChunkSizeND(T_DeviceBuffer& devBuffer)
 {
     auto bufferSize = devBuffer.size();
     constexpr uint32_t numBlocks = 11;
     return PMACC_LOCKSTEP_KERNEL(IotaFixedChunkSizeKernelND{})
-        .config(numBlocks)(queue, caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
+        .config(numBlocks)(caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()), bufferSize);
 }
 
 // doc-include-end: lockstep generic kernel hard coded N dimensional domain size
@@ -230,8 +230,8 @@ struct IotaGenericKernelWithDynSharedMem
     }
 };
 
-template<uint32_t T_chunkSize, typename T_DeviceBuffer, typename T_Queue>
-inline auto iotaGernericWithDynSharedMem(T_DeviceBuffer& devBuffer, T_Queue& queue)
+template<uint32_t T_chunkSize, typename T_DeviceBuffer>
+inline auto iotaGernericWithDynSharedMem(T_DeviceBuffer& devBuffer)
 {
     auto bufferSize = devBuffer.size();
     // use only half of the blocks needed to process the full data
@@ -239,7 +239,6 @@ inline auto iotaGernericWithDynSharedMem(T_DeviceBuffer& devBuffer, T_Queue& que
     constexpr size_t requiredSharedMemBytes = T_chunkSize * sizeof(uint32_t);
     return PMACC_LOCKSTEP_KERNEL(IotaGenericKernelWithDynSharedMem{})
         .configSMem<T_chunkSize>(numBlocks, requiredSharedMemBytes)(
-            queue,
             caravan::retain(devBuffer.getDataBox(), devBuffer.getOwnedAlpakaView()),
             bufferSize);
 }
@@ -303,33 +302,34 @@ TEST_CASE("lockstep kernel", "[iota]")
 
     auto hostDeviceBuffer = HostDeviceBuffer<uint32_t, DIM1>(DataSpace<DIM1>{numElements});
     using DeviceBuf = DeviceBuffer<uint32_t, DIM1>;
-    auto const device = manager::Device<ComputeDevice>::get().current();
-    ComputeDeviceQueue queue(device);
+    auto& device = Environment<>::get().DeviceContext();
     caravan::ControlContext context;
 
     // register all required test functions
     auto testsFunctions = std::make_tuple(
         // generic host size chunk size selection
-        iotaGerneric<128, DeviceBuf, ComputeDeviceQueue>,
-        iotaGerneric<16, DeviceBuf, ComputeDeviceQueue>,
+        iotaGerneric<128, DeviceBuf>,
+        iotaGerneric<16, DeviceBuf>,
         // generic host size chunk size selection and dynamic shared memory
-        iotaGernericWithDynSharedMem<23, DeviceBuf, ComputeDeviceQueue>,
+        iotaGernericWithDynSharedMem<23, DeviceBuf>,
         // derive the chunk size from the result buffer
-        iotaGernericBufferDerivedChunksize<DeviceBuf, ComputeDeviceQueue>,
+        iotaGernericBufferDerivedChunksize<DeviceBuf>,
         // kernel defined fixed chunk size (kernel defines value blockDomSize)
-        iotaFixedChunkSize<DeviceBuf, ComputeDeviceQueue>,
+        iotaFixedChunkSize<DeviceBuf>,
         // kernel defined fixed chunk size (kernel defines type BlockDomSizeND)
-        iotaFixedChunkSizeND<DeviceBuf, ComputeDeviceQueue>);
+        iotaFixedChunkSizeND<DeviceBuf>);
 
     auto runTest = [&](auto&& function)
     {
-        auto initialize = caravan::alpaka::fill(queue, hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u);
-        auto kernel = function(hostDeviceBuffer.getDeviceBuffer(), queue);
-        auto copy = hostDeviceBuffer.deviceToHost(queue);
+        auto initialize = caravan::alpaka::fill(hostDeviceBuffer.getDeviceBuffer().getOwnedAlpakaView(), 0u);
+        auto kernel = function(hostDeviceBuffer.getDeviceBuffer());
+        auto copy = hostDeviceBuffer.deviceToHost();
         context.wait(context.spawn(
-            caravan::alpaka::sequence(
-                caravan::alpaka::sequence(std::move(initialize), std::move(kernel)),
-                std::move(copy))));
+            caravan::alpaka::withDevice(
+                device,
+                caravan::alpaka::sequence(
+                    caravan::alpaka::sequence(std::move(initialize), std::move(kernel)),
+                    std::move(copy)))));
         validate(hostDeviceBuffer.getHostBuffer(), referenceBuffer);
     };
 

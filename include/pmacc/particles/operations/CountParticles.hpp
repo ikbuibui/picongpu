@@ -127,26 +127,14 @@ namespace pmacc
          *                  The working domain for the filter is supercells.
          * @return lazy sender yielding the number of particles in the defined area
          */
-        template<
-            uint32_t AREA,
-            typename T_Queue,
-            class PBuffer,
-            class Filter,
-            class CellDesc,
-            typename T_ParticleFilter>
-        static auto countAsync(
-            T_Queue& queue,
-            PBuffer& buffer,
-            CellDesc cellDescription,
-            Filter filter,
-            T_ParticleFilter& parFilter)
+        template<uint32_t AREA, class PBuffer, class Filter, class CellDesc, typename T_ParticleFilter>
+        static auto countAsync(PBuffer& buffer, CellDesc cellDescription, Filter filter, T_ParticleFilter& parFilter)
         {
             auto counter = std::make_shared<GridBuffer<uint64_cu, DIM1>>(DataSpace<DIM1>(1));
             auto const mapper = makeAreaMapper<AREA>(cellDescription);
-            auto initialize = caravan::alpaka::fill(queue, counter->getDeviceBuffer().getOwnedAlpakaView(), 0u);
+            auto initialize = caravan::alpaka::fill(counter->getDeviceBuffer().getOwnedAlpakaView(), 0u);
             auto count = PMACC_LOCKSTEP_KERNEL(KernelCountParticles{})
                              .config(mapper.getGridDim(), buffer)(
-                                 queue,
                                  buffer.getDeviceParticlesBox(),
                                  caravan::retain(
                                      counter->getDeviceBuffer().data(),
@@ -154,7 +142,7 @@ namespace pmacc
                                  filter,
                                  mapper,
                                  parFilter);
-            auto copy = counter->deviceToHost(queue);
+            auto copy = counter->deviceToHost();
             return caravan::alpaka::sequence(
                        caravan::alpaka::sequence(std::move(initialize), std::move(count)),
                        std::move(copy))
@@ -170,16 +158,10 @@ namespace pmacc
          *                  The working domain for the filter is supercells.
          * @return lazy sender yielding the number of particles in the defined area
          */
-        template<typename T_Queue, class PBuffer, class Filter, class CellDesc, typename T_ParticleFilter>
-        static auto countAsync(
-            T_Queue& queue,
-            PBuffer& buffer,
-            CellDesc cellDescription,
-            Filter filter,
-            T_ParticleFilter& parFilter)
+        template<class PBuffer, class Filter, class CellDesc, typename T_ParticleFilter>
+        static auto countAsync(PBuffer& buffer, CellDesc cellDescription, Filter filter, T_ParticleFilter& parFilter)
         {
             return pmacc::CountParticles::countAsync<CORE + BORDER + GUARD>(
-                queue,
                 buffer,
                 cellDescription,
                 filter,
@@ -198,15 +180,8 @@ namespace pmacc
          *                  The working domain for the filter is supercells.
          * @return lazy sender yielding the number of particles in the defined area
          */
-        template<
-            uint32_t AREA,
-            typename T_Queue,
-            class PBuffer,
-            class CellDesc,
-            class Space,
-            typename T_ParticleFilter>
+        template<uint32_t AREA, class PBuffer, class CellDesc, class Space, typename T_ParticleFilter>
         static auto countAsync(
-            T_Queue& queue,
             PBuffer& buffer,
             CellDesc cellDescription,
             Space const& origin,
@@ -217,7 +192,7 @@ namespace pmacc
             using MyParticleFilter = typename FilterFactory<usedFilters>::FilterType;
             MyParticleFilter filter;
             filter.setWindowPosition(origin, size);
-            return pmacc::CountParticles::countAsync<AREA>(queue, buffer, cellDescription, filter, parFilter);
+            return pmacc::CountParticles::countAsync<AREA>(buffer, cellDescription, filter, parFilter);
         }
 
         /** Get particle count
@@ -230,9 +205,8 @@ namespace pmacc
          *                  The working domain for the filter is supercells.
          * @return lazy sender yielding the number of particles in the defined area
          */
-        template<typename T_Queue, class PBuffer, class Filter, class CellDesc, class Space, typename T_ParticleFilter>
+        template<class PBuffer, class CellDesc, class Space, typename T_ParticleFilter>
         static auto countAsync(
-            T_Queue& queue,
             PBuffer& buffer,
             CellDesc cellDescription,
             Space const& origin,
@@ -240,7 +214,6 @@ namespace pmacc
             T_ParticleFilter& parFilter)
         {
             return pmacc::CountParticles::countAsync<CORE + BORDER + GUARD>(
-                queue,
                 buffer,
                 cellDescription,
                 origin,

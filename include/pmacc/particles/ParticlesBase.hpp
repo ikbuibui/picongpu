@@ -92,52 +92,43 @@ namespace pmacc
         }
 
         /** Lazily shift particles in an area defined by a mapper factory. */
-        template<uint32_t T_area, typename T_Queue>
-        auto shiftParticlesAsync(T_Queue& queue, bool onlyProcessMustShiftSupercells)
+        template<uint32_t T_area>
+        auto shiftParticlesAsync(bool onlyProcessMustShiftSupercells)
         {
-            return shiftParticlesAsync(queue, StrideAreaMapperFactory<T_area, 3>{}, onlyProcessMustShiftSupercells);
+            return shiftParticlesAsync(StrideAreaMapperFactory<T_area, 3>{}, onlyProcessMustShiftSupercells);
         }
 
-        template<typename T_Queue, typename T_MapperFactory>
-        auto shiftParticlesAsync(
-            T_Queue& queue,
-            T_MapperFactory const& mapperFactory,
-            bool onlyProcessMustShiftSupercells)
+        template<typename T_MapperFactory>
+        auto shiftParticlesAsync(T_MapperFactory const& mapperFactory, bool onlyProcessMustShiftSupercells)
         {
             return shiftParticlesImplAsync(
-                queue,
                 StrideMapperFactory<T_MapperFactory, 3>{mapperFactory},
                 onlyProcessMustShiftSupercells);
         }
 
     public:
-        template<typename T_Queue, typename T_MapperFactory>
-        auto fillGapsAsync(T_Queue& queue, T_MapperFactory const& mapperFactory)
+        template<typename T_MapperFactory>
+        auto fillGapsAsync(T_MapperFactory const& mapperFactory)
         {
             auto const mapper = mapperFactory(this->cellDescription);
             return PMACC_LOCKSTEP_KERNEL(KernelFillGaps{})
-                .config(mapper.getGridDim(), *particlesBuffer)(queue, particlesBuffer->getDeviceParticleBox(), mapper);
+                .config(mapper.getGridDim(), *particlesBuffer)(particlesBuffer->getDeviceParticleBox(), mapper);
         }
 
-        template<typename T_Queue>
-        auto fillAllGapsAsync(T_Queue& queue)
+        auto fillAllGapsAsync()
         {
-            return fillGapsAsync(queue, AreaMapperFactory<CORE + BORDER + GUARD>{});
+            return fillGapsAsync(AreaMapperFactory<CORE + BORDER + GUARD>{});
         }
 
-        template<typename T_Queue>
-        auto fillBorderGapsAsync(T_Queue& queue)
+        auto fillBorderGapsAsync()
         {
-            auto const mapper = AreaMapperFactory<BORDER>{}(this->cellDescription);
-            return PMACC_LOCKSTEP_KERNEL(KernelFillGaps{})
-                .config(mapper.getGridDim(), *particlesBuffer)(queue, particlesBuffer->getDeviceParticleBox(), mapper);
+            return fillGapsAsync(AreaMapperFactory<BORDER>{});
         }
 
-        template<typename T_Queue>
-        auto deleteGuardParticlesAsync(T_Queue& queue, uint32_t exchangeType);
+        auto deleteGuardParticlesAsync(uint32_t exchangeType);
 
-        template<uint32_t T_area, typename T_Queue>
-        auto deleteParticlesInAreaAsync(T_Queue& queue);
+        template<uint32_t T_area>
+        auto deleteParticlesInAreaAsync();
 
         /** copy guard particles to intermediate exchange buffer
          *
@@ -148,11 +139,9 @@ namespace pmacc
          * Call fillAllGaps afterwards if you need a valid number of particles
          * and a contiguously filled last frame.
          */
-        template<typename T_Queue>
-        auto copyGuardToExchangeAsync(T_Queue& queue, uint32_t exchangeType);
+        auto copyGuardToExchangeAsync(uint32_t exchangeType);
 
-        template<typename T_Queue>
-        auto insertParticlesAsync(T_Queue& queue, uint32_t exchangeType, size_t numParticles);
+        auto insertParticlesAsync(uint32_t exchangeType, size_t numParticles);
 
         ParticlesBoxType getDeviceParticlesBox()
         {
@@ -172,12 +161,11 @@ namespace pmacc
             return *particlesBuffer;
         }
 
-        template<typename T_Queue>
-        auto resetAsync(T_Queue& queue)
+        auto resetAsync()
         {
             return caravan::alpaka::sequence(
-                deleteParticlesInAreaAsync<CORE + BORDER + GUARD>(queue),
-                particlesBuffer->resetAsync(queue));
+                deleteParticlesInAreaAsync<CORE + BORDER + GUARD>(),
+                particlesBuffer->resetAsync());
         }
 
     private:
@@ -194,9 +182,8 @@ namespace pmacc
          * @param onlyProcessMustShiftSupercells whether to process only supercells with mustShift set to true
          * (optimization to be used with particle pusher) or process all supercells
          */
-        template<typename T_Queue, typename T_StrideMapperFactory>
+        template<typename T_StrideMapperFactory>
         auto shiftParticlesImplAsync(
-            T_Queue& queue,
             T_StrideMapperFactory const& strideMapperFactory,
             bool onlyProcessMustShiftSupercells)
         {
@@ -207,8 +194,7 @@ namespace pmacc
             auto const pBox = particlesBuffer->getDeviceParticleBox();
             auto const numSupercellsWithGuards = particlesBuffer->getSuperCellsCount();
             return caravan::alpaka::submit(
-                queue,
-                [mapper, pBox, numSupercellsWithGuards, onlyProcessMustShiftSupercells](T_Queue& nativeQueue) mutable
+                [mapper, pBox, numSupercellsWithGuards, onlyProcessMustShiftSupercells](auto& nativeQueue) mutable
                 {
                     do
                     {
