@@ -144,13 +144,23 @@ namespace pmacc
                     const
                 {
                     boost::ignore_unused(superCellSize);
+
                     using SuperCellSize = T_SuperCellSize;
+
                     constexpr uint32_t dim = T_SuperCellSize::dim;
+
                     using MappingDesc = MappingDescription<dim, SuperCellSize>;
 
+                    /* use only the x dimension to determine the number of supercells in the guard
+                     * pmacc restriction: all dimension must have the some number of guarding
+                     * supercells.
+                     */
                     auto const numGuardSuperCells = srcBuffer.getGridLayout().guardSizeND() / SuperCellSize::toRT();
+
                     MappingDesc const mappingDesc(srcBuffer.getGridLayout().sizeND(), numGuardSuperCells);
+
                     ExchangeMapping<GUARD, MappingDesc> mapper(mappingDesc, exchangeType);
+
                     DataSpace<dim> const direction = Mask::getRelativeDirections<dim>(mapper.getExchangeType());
                     auto source = srcBuffer.getDeviceBuffer().getOwnedAlpakaView();
                     auto exchange = srcBuffer.getSendExchange(exchangeType).getDeviceBuffer().getOwnedAlpakaView();
