@@ -121,12 +121,10 @@ namespace
         {
         }
 
-        template<typename T_Queue>
-        auto sendParticles(T_Queue& queue, uint32_t)
+        auto sendParticles(uint32_t)
         {
             return caravan::alpaka::submit(
-                queue,
-                [this](T_Queue&)
+                [this](auto&)
                 {
                     if(failure == FailurePoint::sendInitiation)
                         throw std::runtime_error("injected particle send initiation failure");
@@ -135,12 +133,10 @@ namespace
                 });
         }
 
-        template<typename T_Queue>
-        auto receiveParticles(T_Queue& queue, uint32_t)
+        auto receiveParticles(uint32_t)
         {
             return caravan::alpaka::submit(
-                queue,
-                [this](T_Queue&)
+                [this](auto&)
                 {
                     if(failure == FailurePoint::receiveInitiation)
                         throw std::runtime_error("injected particle receive initiation failure");
@@ -179,8 +175,7 @@ namespace
             return buffer;
         }
 
-        template<typename T_Queue>
-        auto copyGuardToExchangeAsync(T_Queue&, uint32_t)
+        auto copyGuardToExchangeAsync(uint32_t)
         {
             if(buffer.failure == FailurePoint::retrySetup && buffer.sendChunk != 0u)
                 throw std::runtime_error("injected particle retry failure");
@@ -190,8 +185,7 @@ namespace
             return caravan::asSender(caravan::readyEvent());
         }
 
-        template<typename T_Queue>
-        auto insertParticlesAsync(T_Queue&, uint32_t, size_t count)
+        auto insertParticlesAsync(uint32_t, size_t count)
         {
             if(buffer.failure == FailurePoint::insertion)
                 return caravan::asSender(failedEvent());
@@ -199,10 +193,9 @@ namespace
             return caravan::asSender(caravan::readyEvent());
         }
 
-        template<typename T_Queue>
-        auto fillBorderGapsAsync(T_Queue& queue)
+        auto fillBorderGapsAsync()
         {
-            return caravan::alpaka::submit(queue, [this](T_Queue&) { gapsFilled = true; });
+            return caravan::alpaka::submit([this](auto&) { gapsFilled = true; });
         }
 
         MockParticlesBuffer buffer;
@@ -213,25 +206,22 @@ namespace
 
 TEST_CASE("Particle chunk senders are lazy", "[particles][async]")
 {
-    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
-    pmacc::ComputeDeviceQueue queue(device);
+    auto& device = pmacc::Environment<>::get().DeviceContext();
     caravan::ControlContext context;
     MockParticles particles;
-    auto sender = pmacc::particles::sendChunks(queue, particles, 1u);
+    auto sender = pmacc::particles::sendChunks(particles, 1u);
     static_assert(caravan::Sender<decltype(sender)>);
-    static_assert(caravan::Sender<decltype(pmacc::particles::receiveChunks(queue, particles, 1u))>);
+    static_assert(caravan::Sender<decltype(pmacc::particles::receiveChunks(particles, 1u))>);
     CHECK(particles.buffer.sendChunk == 0u);
-    context.wait(context.spawn(std::move(sender)));
+    context.wait(context.spawn(caravan::alpaka::withDevice(device, std::move(sender))));
     CHECK(particles.buffer.sendChunk == 2u);
 }
 
 TEST_CASE("Particle communication handles exact and partial chunks", "[particles][async]")
 {
-    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
-    pmacc::ComputeDeviceQueue queue(device);
     caravan::ControlContext context;
     MockParticles particles;
-    context.wait(pmacc::particles::spawnCommunication(context, queue, particles));
+    context.wait(pmacc::particles::spawnCommunication(context, particles));
     CHECK(particles.buffer.sendChunk == 2u);
     CHECK(particles.buffer.receiveChunk == 2u);
     CHECK(particles.inserted == 3u);
@@ -240,13 +230,11 @@ TEST_CASE("Particle communication handles exact and partial chunks", "[particles
 
 TEST_CASE("Particle communication handles empty chunks", "[particles][async]")
 {
-    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
-    pmacc::ComputeDeviceQueue queue(device);
     caravan::ControlContext context;
     MockParticles particles;
     particles.buffer.sendChunks = {0u, 0u};
     particles.buffer.receiveChunks = {0u, 0u};
-    context.wait(pmacc::particles::spawnCommunication(context, queue, particles));
+    context.wait(pmacc::particles::spawnCommunication(context, particles));
     CHECK(particles.buffer.sendChunk == 1u);
     CHECK(particles.buffer.receiveChunk == 1u);
     CHECK(particles.inserted == 0u);
@@ -255,8 +243,6 @@ TEST_CASE("Particle communication handles empty chunks", "[particles][async]")
 
 TEST_CASE("Particle communication forwards callback failures", "[particles][async]")
 {
-    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
-    pmacc::ComputeDeviceQueue queue(device);
     for(auto const failure :
         {FailurePoint::packingCompletion,
          FailurePoint::sizeExtraction,
@@ -270,8 +256,6 @@ TEST_CASE("Particle communication forwards callback failures", "[particles][asyn
         caravan::ControlContext context;
         MockParticles particles;
         particles.buffer.failure = failure;
-        CHECK_THROWS_AS(
-            context.wait(pmacc::particles::spawnCommunication(context, queue, particles)),
-            std::runtime_error);
+        CHECK_THROWS_AS(context.wait(pmacc::particles::spawnCommunication(context, particles)), std::runtime_error);
     }
 }

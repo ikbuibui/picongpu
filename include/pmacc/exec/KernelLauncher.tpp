@@ -99,11 +99,21 @@ namespace pmacc::exec::detail
 
         /** Lazily describe this kernel on an explicitly borrowed queue. */
         template<typename T_Queue, typename... T_Args>
+        requires(::alpaka::isQueue<T_Queue>)
         [[nodiscard]] HINLINE auto operator()(T_Queue& queue, T_Args... args) const
         {
             return caravan::alpaka::submit(
                 queue,
                 [launcher = *this, args = std::tuple<T_Args...>{std::move(args)...}](T_Queue& nativeQueue) mutable
+                { std::apply([&](auto&... values) { launcher.enqueueNative(nativeQueue, values...); }, args); });
+        }
+
+        /** Lazily describe this kernel; the receiver environment supplies its queue. */
+        template<typename... T_Args>
+        [[nodiscard]] HINLINE auto operator()(T_Args... args) const
+        {
+            return caravan::alpaka::submit(
+                [launcher = *this, args = std::tuple<T_Args...>{std::move(args)...}](auto& nativeQueue) mutable
                 { std::apply([&](auto&... values) { launcher.enqueueNative(nativeQueue, values...); }, args); });
         }
     };

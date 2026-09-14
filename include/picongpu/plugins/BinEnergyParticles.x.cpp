@@ -429,14 +429,12 @@ namespace picongpu
             float_X const maxEnergy = sim.pic.conv().eV2Joule(maxEnergy_keV * 1.0e3);
 
             auto const mapper = makeAreaMapper<AREA>(*m_cellDescription);
-            auto& queue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
+            auto& device = Environment<>::get().DeviceContext();
             auto runKernel = [&](auto filter)
             {
-                auto initialize = caravan::alpaka::fill(queue, gBins->getDeviceBuffer().getOwnedAlpakaView(), 0u);
+                auto initialize = caravan::alpaka::fill(gBins->getDeviceBuffer().getOwnedAlpakaView(), 0u);
                 auto kernel = PMACC_LOCKSTEP_KERNEL(KernelBinEnergyParticles{})
-                                  .configSMem(mapper.getGridDim(), *particles, realNumBins * sizeof(float_X))
-                                  .sender(
-                                      queue,
+                                  .configSMem(mapper.getGridDim(), *particles, realNumBins * sizeof(float_X))(
                                       particles->getDeviceParticlesBox(),
                                       gBins->getDeviceBuffer().getDataBox(),
                                       numBins,
@@ -444,11 +442,13 @@ namespace picongpu
                                       maxEnergy,
                                       mapper,
                                       filter);
-                auto copy = gBins->deviceToHost(queue);
+                auto copy = gBins->deviceToHost();
                 caravan::syncWait(
-                    caravan::alpaka::sequence(
-                        caravan::alpaka::sequence(std::move(initialize), std::move(kernel)),
-                        std::move(copy)));
+                    caravan::alpaka::withDevice(
+                        device,
+                        caravan::alpaka::sequence(
+                            caravan::alpaka::sequence(std::move(initialize), std::move(kernel)),
+                            std::move(copy))));
             };
 
             meta::ForEach<typename Help::EligibleFilters, plugins::misc::ExecuteIfNameIsEqual<boost::mpl::_1>>{}(

@@ -69,8 +69,8 @@ namespace pmacc
              * The queue and source storage must remain alive through completion. Operations using the same reducer
              * must not overlap because they share its scratch buffer.
              */
-            template<typename T_Queue, class Functor, typename Src>
-            HINLINE auto reduce(T_Queue& queue, Functor func, Src src, uint32_t n)
+            template<class Functor, typename Src>
+            HINLINE auto reduce(Functor func, Src src, uint32_t n)
             {
                 using Type
                     = std::remove_const_t<std::remove_reference_t<typename traits::GetValueType<Src>::ValueType>>;
@@ -78,15 +78,14 @@ namespace pmacc
                 tmpBufferAlloc();
                 auto* destination = reinterpret_cast<Type*>(reduceBuffer->getDeviceBuffer().data());
                 auto kernels = caravan::alpaka::submit(
-                    queue,
                     [func = std::move(func),
                      src = std::move(src),
                      n,
                      destination,
                      scratchBytes = byte,
-                     sharedBytes = sharedMemByte](T_Queue& nativeQueue) mutable
+                     sharedBytes = sharedMemByte](auto& nativeQueue) mutable
                     { enqueueReduction(nativeQueue, func, src, n, destination, scratchBytes, sharedBytes); });
-                auto copy = reduceBuffer->deviceToHost(queue);
+                auto copy = reduceBuffer->deviceToHost();
                 auto host = reduceBuffer->getHostBuffer().getOwnedAlpakaView();
                 return caravan::alpaka::sequence(std::move(kernels), std::move(copy))
                        | caravan::then([host = std::move(host)]

@@ -61,6 +61,14 @@ namespace pmacc
             return *EnvironmentContext::getInstance().m_mpiContext;
         }
 
+        caravan::alpaka::SharedQueuePool<ComputeDeviceQueue>& Environment::DeviceContext()
+        {
+            PMACC_ASSERT_MSG(
+                EnvironmentContext::getInstance().m_deviceContext,
+                "Environment< DIM >::initDevices() must be called before this method!");
+            return *EnvironmentContext::getInstance().m_deviceContext;
+        }
+
         device::MemoryInfo& Environment::MemoryInfo()
         {
             PMACC_ASSERT_MSG(
@@ -153,6 +161,8 @@ namespace pmacc
             {
                 // Required by scorep for flushing the buffers. Application async contexts must already be joined.
                 alpaka::wait(manager::Device<ComputeDevice>::get().current());
+                m_deviceContext.reset();
+                m_isDeviceSelected = false;
                 m_isMpiInitialized = false;
                 m_mpiContext = nullptr;
             }
@@ -259,6 +269,9 @@ namespace pmacc
             // initialize the default host device
             manager::Device<HostDevice>::get().device();
             m_isDeviceSelected = true;
+            m_deviceContext = std::make_unique<caravan::alpaka::SharedQueuePool<ComputeDeviceQueue>>(
+                manager::Device<ComputeDevice>::get().current(),
+                1u);
         }
 
     } // namespace detail

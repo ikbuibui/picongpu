@@ -147,9 +147,8 @@ namespace pmacc
                  * @param superCellSize compile time supercell size
                  * @param exchangeType the exchange direction which needs to be copied
                  */
-                template<typename T_Queue, typename T_DestBuffer, typename T_SuperCellSize>
+                template<typename T_DestBuffer, typename T_SuperCellSize>
                 auto sender(
-                    T_Queue& queue,
                     T_DestBuffer& destBuffer,
                     T_SuperCellSize const& superCellSize,
                     uint32_t const exchangeType) const
@@ -168,7 +167,6 @@ namespace pmacc
 
                     return PMACC_LOCKSTEP_KERNEL(KernelAddExchangeToBorder{})
                         .config(mapper.getGridDim(), SuperCellSize{})(
-                            queue,
                             caravan::retain(destBuffer.getDeviceBuffer().getDataBox(), destination),
                             caravan::retain(
                                 destBuffer.getReceiveExchange(exchangeType).getDeviceBuffer().getDataBox(),

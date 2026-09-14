@@ -51,7 +51,7 @@ namespace pmacc
          *
          * @param size DataSpace representing buffer size
          * @param sizeOnDevice if true, allocate device-side size storage. Initialize it explicitly, for example by
-         *        starting hostToDevice(queue), before device use.
+         *        starting hostToDevice(), before device use.
          */
         HostDeviceBuffer(DataSpace<T_dim> const& size, bool sizeOnDevice = false);
 
@@ -90,12 +90,10 @@ namespace pmacc
         HINLINE DBuffer& getDeviceBuffer() const;
 
         /** Return a lazy copy from the internal host buffer to the device buffer. */
-        template<typename T_Queue>
-        HINLINE auto hostToDevice(T_Queue& queue);
+        HINLINE auto hostToDevice();
 
         /** Return a lazy copy from the internal device buffer to the host buffer. */
-        template<typename T_Queue>
-        HINLINE auto deviceToHost(T_Queue& queue);
+        HINLINE auto deviceToHost();
 
     private:
         std::unique_ptr<HBuffer> hostBuffer;

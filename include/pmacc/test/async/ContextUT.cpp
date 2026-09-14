@@ -2,11 +2,18 @@
  * This file is part of PIConGPU.
  * SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
  */
+#include <pmacc/Environment.hpp>
+
 #include <chrono>
 #include <thread>
 
 #include <caravan/core.hpp>
 #include <catch2/catch_test_macros.hpp>
+
+TEST_CASE("PMacc environment owns one accelerator queue", "[async]")
+{
+    CHECK(pmacc::Environment<>::get().DeviceContext().size() == 1u);
+}
 
 TEST_CASE("PMacc async context owns work and drives host continuations", "[async]")
 {

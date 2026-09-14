@@ -155,15 +155,13 @@ namespace pmacc
         }
 
         /** Lazily initialize host and device supercell storage. */
-        template<typename T_Queue>
-        auto resetAsync(T_Queue& queue)
+        auto resetAsync()
         {
             auto host = superCells->getHostBuffer().getOwnedAlpakaView();
             auto device = superCells->getDeviceBuffer().getOwnedAlpakaView();
             auto const elements = superCells->getHostBuffer().capacityND().productOfComponents();
             return caravan::alpaka::submit(
-                queue,
-                [host = std::move(host), device = std::move(device), elements](T_Queue& nativeQueue) mutable
+                [host = std::move(host), device = std::move(device), elements](auto& nativeQueue) mutable
                 {
                     std::fill_n(alpaka::getPtrNative(host.value), elements, SuperCellType{});
                     alpaka::memcpy(nativeQueue, device.value, host.value, alpaka::getExtents(host.value));
@@ -284,20 +282,14 @@ namespace pmacc
             exchangeMemoryIndexer->setReceiveCompletion(exchange, std::move(completion));
         }
 
-        template<typename T_Queue>
-        auto sendParticles(T_Queue& queue, uint32_t exchange)
+        auto sendParticles(uint32_t exchange)
         {
-            return caravan::whenAll(
-                framesExchanges->send(queue, exchange),
-                exchangeMemoryIndexer->send(queue, exchange));
+            return caravan::whenAll(framesExchanges->send(exchange), exchangeMemoryIndexer->send(exchange));
         }
 
-        template<typename T_Queue>
-        auto receiveParticles(T_Queue& queue, uint32_t exchange)
+        auto receiveParticles(uint32_t exchange)
         {
-            return caravan::whenAll(
-                       framesExchanges->receive(queue, exchange),
-                       exchangeMemoryIndexer->receive(queue, exchange))
+            return caravan::whenAll(framesExchanges->receive(exchange), exchangeMemoryIndexer->receive(exchange))
                    | caravan::then([](auto&&...) {});
         }
 

@@ -221,6 +221,10 @@ namespace picongpu
             }
 
             Environment<simDim>::get().initDevices(mpiContext, gpus, isPeriodic);
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+            // Match the old event system's seven-queue cap: PMacc owns one, PIConGPU adds six.
+            Environment<>::get().DeviceContext().addQueues(6u);
+#endif
             pmacc::GridController<simDim>& gc = pmacc::Environment<simDim>::get().GridController();
 
             DataSpace<simDim> myGPUpos(gc.getPosition());
@@ -367,8 +371,10 @@ namespace picongpu
 
             // init and share random number generator
             pmacc::GridController<simDim>& gridCon = pmacc::Environment<simDim>::get().GridController();
-            auto& rngQueue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
-            asyncContext.wait(asyncContext.spawn(rngFactory->init(rngQueue, gridCon.getScalarPosition() ^ seed)));
+            asyncContext.wait(asyncContext.spawn(
+                caravan::alpaka::withDevice(
+                    Environment<>::get().DeviceContext(),
+                    rngFactory->init(gridCon.getScalarPosition() ^ seed))));
             dc.consume(std::move(rngFactory));
 
 #if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
@@ -429,11 +435,6 @@ namespace picongpu
                 freeGpuMem = freeDeviceMemory();
                 log<picLog::MEMORY>("free mem after all mem is allocated %1% MiB") % (freeGpuMem / 1024 / 1024);
             }
-
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
-            /* add CUDA streams to the QueueController for concurrent execution */
-            Environment<>::get().QueueController().addQueues(6);
-#endif
         }
 
         uint32_t fillSimulation() override
@@ -482,11 +483,9 @@ namespace picongpu
 
             // generate valid GUARDS (overwrite)
             eventSystem::getTransactionEvent().waitForFinished();
-            auto& fieldEQueue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
-            auto& fieldBQueue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
             std::array communications{
-                pmacc::fields::spawnCommunication(asyncContext, fieldEQueue, *fieldE),
-                pmacc::fields::spawnCommunication(asyncContext, fieldBQueue, *fieldB)};
+                pmacc::fields::spawnCommunication(asyncContext, *fieldE),
+                pmacc::fields::spawnCommunication(asyncContext, *fieldB)};
             asyncContext.wait(caravan::whenAll(communications));
 
             log<picLog::SIMULATION_STATE>("Starting simulation from timestep 0");

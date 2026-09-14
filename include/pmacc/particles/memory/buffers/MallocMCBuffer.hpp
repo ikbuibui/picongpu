@@ -65,8 +65,7 @@ namespace pmacc
             return hostBufferOffset;
         }
 
-        template<typename T_Queue>
-        auto synchronize(T_Queue& queue);
+        auto synchronize();
 
     private:
         std::optional<BufferType> hostBuffer;
@@ -108,10 +107,9 @@ namespace pmacc
             return 0u;
         }
 
-        template<typename T_Queue>
-        auto synchronize(T_Queue& queue)
+        auto synchronize()
         {
-            return caravan::alpaka::submit(queue, [](T_Queue&) {});
+            return caravan::alpaka::submit([](auto&) {});
         }
     };
 

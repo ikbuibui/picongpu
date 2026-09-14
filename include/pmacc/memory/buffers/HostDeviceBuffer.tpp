@@ -56,12 +56,8 @@ namespace pmacc
             return extent;
         }
 
-        template<uint32_t T_dim, typename T_Queue, typename T_Destination, typename T_Source, typename T_UpdateSize>
-        auto copyBuffer(
-            T_Queue& queue,
-            T_Destination& destinationBuffer,
-            T_Source& sourceBuffer,
-            T_UpdateSize updateSize)
+        template<uint32_t T_dim, typename T_Destination, typename T_Source, typename T_UpdateSize>
+        auto copyBuffer(T_Destination& destinationBuffer, T_Source& sourceBuffer, T_UpdateSize updateSize)
         {
             auto destination = destinationBuffer.getOwnedAlpakaView();
             auto source = sourceBuffer.getOwnedAlpakaView();
@@ -70,14 +66,13 @@ namespace pmacc
             auto const capacity = sourceBuffer.capacityND();
             bool const contiguous = destinationBuffer.isContiguous() && sourceBuffer.isContiguous();
             return caravan::alpaka::submit(
-                queue,
                 [destination = std::move(destination),
                  source = std::move(source),
                  destinationSize = std::move(destinationSize),
                  sourceSize = std::move(sourceSize),
                  capacity,
                  contiguous,
-                 updateSize = std::move(updateSize)](T_Queue& nativeQueue) mutable
+                 updateSize = std::move(updateSize)](auto& nativeQueue) mutable
                 {
                     auto const size = *::alpaka::getPtrNative(sourceSize);
                     *::alpaka::getPtrNative(destinationSize) = size;
@@ -159,15 +154,13 @@ namespace pmacc
     }
 
     template<typename T_Type, unsigned T_dim>
-    template<typename T_Queue>
-    auto HostDeviceBuffer<T_Type, T_dim>::hostToDevice(T_Queue& queue)
+    auto HostDeviceBuffer<T_Type, T_dim>::hostToDevice()
     {
         auto deviceSize = deviceBuffer->currentSizeBufferDevice;
         return detail::copyBuffer<T_dim>(
-            queue,
             *deviceBuffer,
             *hostBuffer,
-            [deviceSize = std::move(deviceSize)](T_Queue& nativeQueue, auto const& hostSize) mutable
+            [deviceSize = std::move(deviceSize)](auto& nativeQueue, auto const& hostSize) mutable
             {
                 if(deviceSize)
                     ::alpaka::memcpy(
@@ -179,10 +172,9 @@ namespace pmacc
     }
 
     template<typename T_Type, unsigned T_dim>
-    template<typename T_Queue>
-    auto HostDeviceBuffer<T_Type, T_dim>::deviceToHost(T_Queue& queue)
+    auto HostDeviceBuffer<T_Type, T_dim>::deviceToHost()
     {
-        return detail::copyBuffer<T_dim>(queue, *hostBuffer, *deviceBuffer, [](T_Queue&, auto const&) {});
+        return detail::copyBuffer<T_dim>(*hostBuffer, *deviceBuffer, [](auto&, auto const&) {});
     }
 
 

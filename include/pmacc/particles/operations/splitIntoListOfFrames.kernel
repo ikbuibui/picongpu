@@ -277,14 +277,12 @@ namespace pmacc
              */
             template<
                 typename T_LogLvl,
-                typename T_Queue,
                 typename T_DestSpecies,
                 typename T_SrcFrame,
                 typename T_Space,
                 typename T_Identifier,
                 typename T_CellDescription>
             HINLINE auto splitIntoListOfFramesAsync(
-                T_Queue& queue,
                 T_DestSpecies& destSpecies,
                 T_SrcFrame srcFrame,
                 uint32_t numParticles,
@@ -302,11 +300,9 @@ namespace pmacc
                  */
                 auto counterBuffer = std::make_shared<GridBuffer<uint32_t, DIM1>>(DataSpace<DIM1>(3));
                 constexpr uint32_t frameSize = T_SrcFrame::frameSize;
-                auto initialize
-                    = caravan::alpaka::fill(queue, counterBuffer->getDeviceBuffer().getOwnedAlpakaView(), 0u);
+                auto initialize = caravan::alpaka::fill(counterBuffer->getDeviceBuffer().getOwnedAlpakaView(), 0u);
                 auto split = PMACC_LOCKSTEP_KERNEL(detail::KernelSplitIntoListOfFrames{})
                                  .template config<frameSize>(alpaka::core::divCeil(numParticles, frameSize))(
-                                     queue,
                                      counterBuffer->getDeviceBuffer().getDataBox(),
                                      destSpecies.getDeviceParticlesBox(),
                                      srcFrame,
@@ -314,8 +310,8 @@ namespace pmacc
                                      cellOffsetToTotalDomain,
                                      domainCellIdxIdentifier,
                                      cellDesc);
-                auto fill = destSpecies.fillAllGapsAsync(queue);
-                auto copy = counterBuffer->deviceToHost(queue);
+                auto fill = destSpecies.fillAllGapsAsync();
+                auto copy = counterBuffer->deviceToHost();
                 return caravan::alpaka::sequence(
                            caravan::alpaka::sequence(
                                caravan::alpaka::sequence(std::move(initialize), std::move(split)),

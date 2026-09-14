@@ -23,6 +23,9 @@
 
 #include "pmacc/types.hpp"
 
+#include <memory>
+
+#include <caravan/alpaka.hpp>
 #include <caravan/mpi.hpp>
 
 namespace pmacc
@@ -63,6 +66,9 @@ namespace pmacc
 
             /** Caravan MPI context, owned by MpiRuntime's dedicated thread. */
             caravan::MpiContext* m_mpiContext{nullptr};
+
+            /** Process-global accelerator queues, created after device selection. */
+            std::unique_ptr<caravan::alpaka::SharedQueuePool<ComputeDeviceQueue>> m_deviceContext;
 
             /** get the singleton EnvironmentContext
              *

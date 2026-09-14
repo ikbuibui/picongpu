@@ -474,22 +474,19 @@ namespace pmacc
         }
 
         /** Describe one lazy send for an active exchange direction. */
-        template<typename T_Queue>
-        auto send(T_Queue& queue, uint32_t exchange)
+        auto send(uint32_t exchange)
         {
-            return sendExchanges[exchange]->send(queue);
+            return sendExchanges[exchange]->send();
         }
 
         /** Describe one lazy receive for an active exchange direction. */
-        template<typename T_Queue>
-        auto receive(T_Queue& queue, uint32_t exchange)
+        auto receive(uint32_t exchange)
         {
-            return receiveExchanges[exchange]->receive(queue);
+            return receiveExchanges[exchange]->receive();
         }
 
         /** Eager runtime-sized boundary for dynamically selected exchange directions. */
-        template<typename T_Queue>
-        caravan::Event spawnCommunication(caravan::ControlContext& context, T_Queue& queue)
+        caravan::Event spawnCommunication(caravan::ControlContext& context)
         {
             std::vector<caravan::Event> branches;
             branches.reserve(maxExchange * 2u);
@@ -498,8 +495,10 @@ namespace pmacc
                 if(hasReceiveExchange(i))
                 {
                     auto completion = context.spawnFuture<typename Exchange<BORDERTYPE, DIM>::ReceiveMetadata>(
-                        caravan::asSender(receiveCompletions[i])
-                        | caravan::letValue([this, &queue, i] { return receive(queue, i); }));
+                        caravan::alpaka::withDevice(
+                            Environment<>::get().DeviceContext(),
+                            caravan::asSender(receiveCompletions[i])
+                                | caravan::letValue([this, i] { return receive(i); })));
                     receiveCompletions[i] = completion.event();
                     branches.push_back(completion.event());
                 }
@@ -507,7 +506,8 @@ namespace pmacc
                 auto const sendEx = Mask::getMirroredExchangeType(i);
                 if(hasSendExchange(sendEx))
                 {
-                    auto completion = context.spawn(send(queue, sendEx));
+                    auto completion = context.spawn(
+                        caravan::alpaka::withDevice(Environment<>::get().DeviceContext(), send(sendEx)));
                     sendCompletions[sendEx] = completion;
                     branches.push_back(std::move(completion));
                 }

@@ -61,21 +61,21 @@ namespace picongpu
                 auto hostDeviceBuffer = pmacc::HostDeviceBuffer<Estimate, 1>{1u};
                 auto hostBox = hostDeviceBuffer.getHostBuffer().getDataBox();
                 hostBox(0) = Estimate{};
-                auto& queue = Environment<>::get().QueueController().getNextStream()->borrowAlpakaQueue();
-                auto initialize = hostDeviceBuffer.hostToDevice(queue);
+                auto& device = Environment<>::get().DeviceContext();
+                auto initialize = hostDeviceBuffer.hostToDevice();
                 auto kernel = PMACC_LOCKSTEP_KERNEL(DebyeLengthEstimateKernel{})
-                                  .config(mapper.getGridDim(), electrons)
-                                  .sender(
-                                      queue,
+                                  .config(mapper.getGridDim(), electrons)(
                                       electrons.getDeviceParticlesBox(),
                                       mapper,
                                       minMacroparticlesPerSupercell,
                                       hostDeviceBuffer.getDeviceBuffer().getDataBox());
-                auto copy = hostDeviceBuffer.deviceToHost(queue);
+                auto copy = hostDeviceBuffer.deviceToHost();
                 caravan::syncWait(
-                    caravan::alpaka::sequence(
-                        caravan::alpaka::sequence(std::move(initialize), std::move(kernel)),
-                        std::move(copy)));
+                    caravan::alpaka::withDevice(
+                        device,
+                        caravan::alpaka::sequence(
+                            caravan::alpaka::sequence(std::move(initialize), std::move(kernel)),
+                            std::move(copy))));
                 return hostBox(0);
             }
 

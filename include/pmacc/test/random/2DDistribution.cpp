@@ -161,9 +161,8 @@ namespace pmacc
                 }
             }
 
-            template<class T_Queue, class T_DeviceBuffer, class T_Random>
+            template<class T_DeviceBuffer, class T_Random>
             auto generateRandomNumbers(
-                T_Queue& queue,
                 Space2D const& rngSize,
                 uint32_t numSamples,
                 T_DeviceBuffer& buffer,
@@ -173,7 +172,6 @@ namespace pmacc
                 uint32_t const gridSize = (rngSize.productOfComponents() + blockSize - 1u) / blockSize;
                 return PMACC_LOCKSTEP_KERNEL(RandomFiller<blockSize>{})
                     .template config<blockSize>(gridSize)(
-                        queue,
                         caravan::retain(buffer.getDataBox(), buffer.getOwnedAlpakaView()),
                         buffer.capacityND(),
                         rand,
@@ -198,26 +196,23 @@ namespace pmacc
                 auto rngProvider = std::make_shared<RNGProvider>(rngSize);
 
                 pmacc::Environment<>::get().DataConnector().share(rngProvider);
-                auto const device = manager::Device<ComputeDevice>::get().current();
-                ComputeDeviceQueue queue(device);
+                auto& device = Environment<>::get().DeviceContext();
                 caravan::ControlContext context;
                 auto initialize = caravan::alpaka::sequence(
-                    rngProvider->init(queue, 0x4213'3742),
-                    caravan::alpaka::fill(queue, detector.getDeviceBuffer().getOwnedAlpakaView(), 0u));
-                auto generate = generateRandomNumbers(
-                    queue,
-                    rngSize,
-                    numSamples,
-                    detector.getDeviceBuffer(),
-                    GetRanidx<RNGProvider>());
-                auto copy = detector.deviceToHost(queue);
+                    rngProvider->init(0x4213'3742),
+                    caravan::alpaka::fill(detector.getDeviceBuffer().getOwnedAlpakaView(), 0u));
+                auto generate
+                    = generateRandomNumbers(rngSize, numSamples, detector.getDeviceBuffer(), GetRanidx<RNGProvider>());
+                auto copy = detector.deviceToHost();
 
                 pmacc::TimeInterval timer;
                 timer.toggleStart();
                 context.wait(context.spawn(
-                    caravan::alpaka::sequence(
-                        caravan::alpaka::sequence(std::move(initialize), std::move(generate)),
-                        std::move(copy))));
+                    caravan::alpaka::withDevice(
+                        device,
+                        caravan::alpaka::sequence(
+                            caravan::alpaka::sequence(std::move(initialize), std::move(generate)),
+                            std::move(copy)))));
                 timer.toggleEnd();
                 std::cout << "Done in " << timer.getInterval() << "ms" << std::endl;
                 auto box = detector.getHostBuffer().getDataBox();

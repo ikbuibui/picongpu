@@ -139,12 +139,9 @@ namespace pmacc
                  * @param superCellSize compile time supercell size
                  * @param exchangeType the exchange direction which needs to be copied
                  */
-                template<typename T_Queue, typename T_SrcBuffer, typename T_SuperCellSize>
-                auto sender(
-                    T_Queue& queue,
-                    T_SrcBuffer& srcBuffer,
-                    T_SuperCellSize const& superCellSize,
-                    uint32_t const exchangeType) const
+                template<typename T_SrcBuffer, typename T_SuperCellSize>
+                auto sender(T_SrcBuffer& srcBuffer, T_SuperCellSize const& superCellSize, uint32_t const exchangeType)
+                    const
                 {
                     boost::ignore_unused(superCellSize);
                     using SuperCellSize = T_SuperCellSize;
@@ -160,7 +157,6 @@ namespace pmacc
 
                     return PMACC_LOCKSTEP_KERNEL(KernelCopyGuardToExchange{})
                         .config(mapper.getGridDim(), SuperCellSize{})(
-                            queue,
                             caravan::retain(
                                 srcBuffer.getSendExchange(exchangeType).getDeviceBuffer().getDataBox(),
                                 exchange),

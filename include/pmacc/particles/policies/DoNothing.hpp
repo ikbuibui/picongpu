@@ -44,16 +44,16 @@ namespace pmacc
                 {
                 }
 
-                template<typename T_Queue, typename T_Particles>
-                auto handleOutgoingAsync(T_Queue& queue, T_Particles&, int32_t) const
+                template<typename T_Particles>
+                auto handleOutgoingAsync(T_Particles&, int32_t) const
                 {
-                    return caravan::alpaka::submit(queue, [](T_Queue&) {});
+                    return caravan::alpaka::submit([](auto&) {});
                 }
 
-                template<typename T_Queue, typename T_Particles>
-                auto handleIncomingAsync(T_Queue& queue, T_Particles&, int32_t) const
+                template<typename T_Particles>
+                auto handleIncomingAsync(T_Particles&, int32_t) const
                 {
-                    return caravan::alpaka::submit(queue, [](T_Queue&) {});
+                    return caravan::alpaka::submit([](auto&) {});
                 }
             };
 
