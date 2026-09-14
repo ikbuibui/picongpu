@@ -29,12 +29,6 @@ namespace caravan::stdexecInterop
             using type = stdexec::set_error_t(T);
         };
 
-        template<>
-        struct CompletionSignature<StoppedSignature>
-        {
-            using type = stdexec::set_stopped_t();
-        };
-
         template<typename T_Signatures>
         struct CompletionSignatures;
 
@@ -62,11 +56,6 @@ namespace caravan::stdexecInterop
             void set_error(T&& error) noexcept
             {
                 stdexec::set_error(std::move(m_receiver), std::forward<T>(error));
-            }
-
-            void set_stopped() noexcept
-            {
-                stdexec::set_stopped(std::move(m_receiver));
             }
 
             auto get_env() const noexcept

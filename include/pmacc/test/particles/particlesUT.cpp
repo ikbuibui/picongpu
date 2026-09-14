@@ -40,7 +40,6 @@ namespace
     {
         none,
         packingCompletion,
-        packingStopped,
         sizeExtraction,
         sendInitiation,
         sendCompletion,
@@ -54,13 +53,6 @@ namespace
     {
         caravan::EventSource source;
         source.setFailed(std::make_exception_ptr(std::runtime_error("injected particle failure")));
-        return source.event();
-    }
-
-    caravan::Event stoppedEvent()
-    {
-        caravan::EventSource source;
-        source.setStopped();
         return source.event();
     }
 
@@ -194,8 +186,6 @@ namespace
                 throw std::runtime_error("injected particle retry failure");
             if(buffer.failure == FailurePoint::packingCompletion)
                 return caravan::asSender(failedEvent());
-            if(buffer.failure == FailurePoint::packingStopped)
-                return caravan::asSender(stoppedEvent());
             buffer.sendSize = buffer.sendChunks.at(buffer.sendChunk++);
             return caravan::asSender(caravan::readyEvent());
         }
@@ -233,18 +223,6 @@ TEST_CASE("Particle chunk senders are lazy", "[particles][async]")
     CHECK(particles.buffer.sendChunk == 0u);
     context.wait(context.spawn(std::move(sender)));
     CHECK(particles.buffer.sendChunk == 2u);
-}
-
-TEST_CASE("Particle chunk senders propagate stopped completion", "[particles][async]")
-{
-    auto const device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
-    pmacc::ComputeDeviceQueue queue(device);
-    caravan::ControlContext context;
-    MockParticles particles;
-    particles.buffer.failure = FailurePoint::packingStopped;
-    CHECK_THROWS_AS(
-        context.wait(context.spawn(pmacc::particles::sendChunks(queue, particles, 1u))),
-        caravan::StoppedError);
 }
 
 TEST_CASE("Particle communication handles exact and partial chunks", "[particles][async]")

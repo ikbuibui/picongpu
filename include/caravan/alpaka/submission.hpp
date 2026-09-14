@@ -231,8 +231,7 @@ namespace caravan::alpaka
         static_assert(stageCount > 0u, "An alpaka submission chain must contain at least one stage");
 
     public:
-        using completion_signatures
-            = CompletionSignatures<ValueSignature<>, ErrorSignature<std::exception_ptr>, StoppedSignature>;
+        using completion_signatures = CompletionSignatures<ValueSignature<>, ErrorSignature<std::exception_ptr>>;
 
         SubmitSender(
             std::array<T_Queue*, stageCount> queues,

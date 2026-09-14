@@ -22,7 +22,7 @@ namespace caravan
      * - spawnFuture() does the same while retaining one result value;
      * - runReady() executes a snapshot of queued control work without waiting;
      * - wait() pumps control work until its Event completes, then reports the
-     *   ready, failed, or stopped outcome; and
+     *   ready or failed outcome; and
      * - destruction closes and joins the scope while pumping the loop, then
      *   finishes the loop, so destruction may block.
      *

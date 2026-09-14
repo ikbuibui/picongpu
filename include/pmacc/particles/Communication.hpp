@@ -38,11 +38,6 @@ namespace pmacc::particles
                     owner->fail(std::move(error));
                 }
 
-                void set_stopped() noexcept
-                {
-                    owner->stop();
-                }
-
                 SendChunksOperation* owner;
             };
 
@@ -57,11 +52,6 @@ namespace pmacc::particles
                 void set_error(std::exception_ptr error) noexcept
                 {
                     owner->fail(std::move(error));
-                }
-
-                void set_stopped() noexcept
-                {
-                    owner->stop();
                 }
 
                 SendChunksOperation* owner;
@@ -190,11 +180,6 @@ namespace pmacc::particles
                 receiver.set_error(std::move(error));
             }
 
-            void stop() noexcept
-            {
-                receiver.set_stopped();
-            }
-
             T_Queue& queue;
             T_Particles& particles;
             uint32_t exchange;
@@ -224,11 +209,6 @@ namespace pmacc::particles
                     owner->fail(std::move(error));
                 }
 
-                void set_stopped() noexcept
-                {
-                    owner->stop();
-                }
-
                 ReceiveChunksOperation* owner;
             };
 
@@ -243,11 +223,6 @@ namespace pmacc::particles
                 void set_error(std::exception_ptr error) noexcept
                 {
                     owner->fail(std::move(error));
-                }
-
-                void set_stopped() noexcept
-                {
-                    owner->stop();
                 }
 
                 ReceiveChunksOperation* owner;
@@ -371,11 +346,6 @@ namespace pmacc::particles
                 receiver.set_error(std::move(error));
             }
 
-            void stop() noexcept
-            {
-                receiver.set_stopped();
-            }
-
             T_Queue& queue;
             T_Particles& particles;
             uint32_t exchange;
@@ -393,10 +363,8 @@ namespace pmacc::particles
     class SendChunksSender
     {
     public:
-        using completion_signatures = caravan::CompletionSignatures<
-            caravan::ValueSignature<>,
-            caravan::ErrorSignature<std::exception_ptr>,
-            caravan::StoppedSignature>;
+        using completion_signatures
+            = caravan::CompletionSignatures<caravan::ValueSignature<>, caravan::ErrorSignature<std::exception_ptr>>;
 
         SendChunksSender(T_Queue& queue, T_Particles& particles, uint32_t exchange)
             : queue(&queue)
@@ -431,10 +399,8 @@ namespace pmacc::particles
     class ReceiveChunksSender
     {
     public:
-        using completion_signatures = caravan::CompletionSignatures<
-            caravan::ValueSignature<>,
-            caravan::ErrorSignature<std::exception_ptr>,
-            caravan::StoppedSignature>;
+        using completion_signatures
+            = caravan::CompletionSignatures<caravan::ValueSignature<>, caravan::ErrorSignature<std::exception_ptr>>;
 
         ReceiveChunksSender(T_Queue& queue, T_Particles& particles, uint32_t exchange)
             : queue(&queue)

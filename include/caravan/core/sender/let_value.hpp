@@ -33,11 +33,6 @@ namespace caravan
                     owner->m_receiver.set_error(std::move(error));
                 }
 
-                void set_stopped() noexcept
-                {
-                    owner->m_receiver.set_stopped();
-                }
-
                 decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
                     requires requires(T_Receiver const& receiver) { receiver.get_env(); }
                 {

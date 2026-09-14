@@ -107,12 +107,6 @@ namespace caravan
                 finishSpawn(owner, std::move(scope));
             }
 
-            void set_stopped() noexcept
-            {
-                output.setStopped();
-                finishSpawn(owner, std::move(scope));
-            }
-
             std::shared_ptr<AsyncScopeState> scope;
             T_Output output;
             SpawnOwner owner;
@@ -138,12 +132,6 @@ namespace caravan
             void set_error(std::exception_ptr error) noexcept
             {
                 output.setFailed(std::move(error));
-                finishSpawn(owner, std::move(scope));
-            }
-
-            void set_stopped() noexcept
-            {
-                output.setStopped();
                 finishSpawn(owner, std::move(scope));
             }
 
@@ -189,7 +177,7 @@ namespace caravan
      * quiescent. The owner must provide progress and wait for that Event before
      * destruction; destroying an unjoined or non-quiescent scope terminates
      * instead of attempting hidden, potentially unbounded progress. The returned
-     * Event carries each sender's value/error/stopped channel; values are
+     * Event carries each sender's value/error channel; values are
      * deliberately type-erased at this migration boundary.
      */
     class AsyncScope

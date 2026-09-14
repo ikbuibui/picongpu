@@ -197,12 +197,6 @@ namespace caravan::alpaka
                     receiver.set_error(std::move(error));
                 }
 
-                void set_stopped() noexcept
-                {
-                    binding->reset();
-                    receiver.set_stopped();
-                }
-
                 decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
                     requires requires(T_Receiver const& output) { output.get_env(); }
                 {
@@ -268,8 +262,7 @@ namespace caravan::alpaka
         static_assert(stageCount > 0u, "An alpaka submission chain must contain at least one stage");
 
     public:
-        using completion_signatures
-            = CompletionSignatures<ValueSignature<>, ErrorSignature<std::exception_ptr>, StoppedSignature>;
+        using completion_signatures = CompletionSignatures<ValueSignature<>, ErrorSignature<std::exception_ptr>>;
 
         PoolSubmitSender(
             T_Pool& pool,
