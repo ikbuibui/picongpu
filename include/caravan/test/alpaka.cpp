@@ -100,6 +100,46 @@ int main()
 
     caravan::RunLoop loop;
     caravan::AsyncScope scope;
+
+    // Managed operations remain bound to their device context across a host scheduler transfer.
+    caravan::alpaka::Context<Acc> context{device};
+    auto managedInput = alpaka::allocBuf<int, Idx>(host, one);
+    auto managedOutput = alpaka::allocBuf<int, Idx>(host, one);
+    auto managedOtherOutput = alpaka::allocBuf<int, Idx>(host, one);
+    auto managedValue = alpaka::allocBuf<int, Idx>(device, one);
+    auto managedOther = alpaka::allocBuf<int, Idx>(device, one);
+    managedInput[0] = 8;
+    managedOutput[0] = 0;
+    managedOtherOutput[0] = 0;
+    bool changedScheduler = false;
+    auto managedCompletion = scope.spawn(
+        caravan::alpaka::withDevice(
+            context,
+            caravan::startsOn(
+                loop.scheduler(),
+                caravan::whenAll(
+                    caravan::alpaka::copy(managedValue, managedInput, one),
+                    caravan::alpaka::fill(managedOther, 0u))
+                    | caravan::alpaka::sequence(
+                        caravan::whenAll(
+                            caravan::alpaka::kernel<Acc>(workDiv, Increment{}, alpaka::getPtrNative(managedValue)),
+                            caravan::alpaka::kernel<Acc>(workDiv, Increment{}, alpaka::getPtrNative(managedOther))))
+                    | caravan::alpaka::sequence(caravan::alpaka::copy(managedOutput, managedValue, one))
+                    | caravan::continuesOn(loop.scheduler())
+                    | caravan::letValue(
+                        [&]
+                        {
+                            changedScheduler = true;
+                            return caravan::alpaka::copy(managedOtherOutput, managedOther, one);
+                        }))));
+    while(managedCompletion.state() == caravan::CompletionState::pending)
+    {
+        loop.runReady();
+        std::this_thread::yield();
+    }
+    managedCompletion.wait();
+    assert(changedScheduler && managedOutput[0] == 9 && managedOtherOutput[0] == 1);
+
     std::thread::id continuationThread;
     auto completion = scope.spawn(
         std::move(sender) | caravan::continuesOn(loop.scheduler())

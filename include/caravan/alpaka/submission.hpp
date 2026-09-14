@@ -10,6 +10,7 @@
 #include <array>
 #include <exception>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <tuple>
 #include <type_traits>
@@ -39,6 +40,36 @@ namespace caravan::alpaka
                 return result;
             }
         };
+
+        template<bool T_Ordered, std::size_t T_LeftCount, std::size_t T_RightCount>
+        auto composeDependencies(
+            SubmissionDependencies<T_LeftCount> const& left,
+            SubmissionDependencies<T_RightCount> const& right)
+        {
+            SubmissionDependencies<T_LeftCount + T_RightCount> dependencies;
+            std::array<bool, T_LeftCount> tails;
+            tails.fill(true);
+            for(std::size_t i = 0u; i < T_LeftCount; ++i)
+                for(std::size_t j = 0u; j < T_LeftCount; ++j)
+                {
+                    auto edge = left.predecessors[i][j];
+                    dependencies.predecessors[i][j] = edge;
+                    if(edge)
+                        tails[j] = false;
+                }
+            for(std::size_t i = 0u; i < T_RightCount; ++i)
+            {
+                auto const& predecessors = right.predecessors[i];
+                std::copy(
+                    predecessors.begin(),
+                    predecessors.end(),
+                    dependencies.predecessors[T_LeftCount + i].begin() + T_LeftCount);
+                if constexpr(T_Ordered)
+                    if(std::none_of(predecessors.begin(), predecessors.end(), [](bool edge) { return edge; }))
+                        std::copy(tails.begin(), tails.end(), dependencies.predecessors[T_LeftCount + i].begin());
+            }
+            return dependencies;
+        }
 
         template<typename T_Queue, typename T_Receiver, typename... T_Submits>
         class SubmitOperation : private CompletionTask
@@ -90,9 +121,16 @@ namespace caravan::alpaka
             SubmitOperation(SubmitOperation&&) = delete;
             SubmitOperation& operator=(SubmitOperation&&) = delete;
 
-            void start() & noexcept
+            void start(std::mutex* submissionMutex = nullptr) & noexcept
             {
-                submitStage<0u>();
+                if(submissionMutex)
+                {
+                    std::lock_guard lock(*submissionMutex);
+                    submitStage<0u>();
+                }
+                else
+                    submitStage<0u>();
+                // Publish only after unlocking: completion can destroy this operation and start another graph.
                 m_completionThread.post(*this);
             }
 
@@ -238,32 +276,10 @@ namespace caravan::alpaka
             std::array<T_Queue*, stageCount + rightCount> queues;
             auto output = std::copy(m_queues.begin(), m_queues.end(), queues.begin());
             std::copy(right.m_queues.begin(), right.m_queues.end(), output);
-            detail::SubmissionDependencies<stageCount + rightCount> dependencies;
-            std::array<bool, stageCount> tails;
-            tails.fill(true);
-            for(std::size_t i = 0u; i < stageCount; ++i)
-                for(std::size_t j = 0u; j < stageCount; ++j)
-                {
-                    auto edge = m_dependencies.predecessors[i][j];
-                    dependencies.predecessors[i][j] = edge;
-                    if(edge)
-                        tails[j] = false;
-                }
-            for(std::size_t i = 0u; i < rightCount; ++i)
-            {
-                auto const& predecessors = right.m_dependencies.predecessors[i];
-                std::copy(
-                    predecessors.begin(),
-                    predecessors.end(),
-                    dependencies.predecessors[stageCount + i].begin() + stageCount);
-                if constexpr(T_Ordered)
-                    if(std::none_of(predecessors.begin(), predecessors.end(), [](bool edge) { return edge; }))
-                        std::copy(tails.begin(), tails.end(), dependencies.predecessors[stageCount + i].begin());
-            }
             return SubmitSender<T_Queue, T_Submits..., T_Right...>{
                 queues,
                 std::tuple_cat(std::move(m_submits), std::move(right.m_submits)),
-                dependencies};
+                detail::composeDependencies<T_Ordered>(m_dependencies, right.m_dependencies)};
         }
 
         std::array<T_Queue*, stageCount> m_queues;
