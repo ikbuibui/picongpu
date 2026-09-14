@@ -101,6 +101,93 @@ int main(int argc, char** argv)
         std::_Exit(EXIT_FAILURE);
     }
 
+    // Queue-free graphs preserve fork/join dependencies and lease another queue for concurrent work.
+    {
+        caravan::alpaka::QueuePool<Queue> pool{device};
+        std::array<int, 4u> values{};
+        int seed = 0;
+        auto branch = [&](std::size_t index)
+        {
+            return caravan::alpaka::enqueue(
+                [&, index]
+                {
+                    assert(seed == 42);
+                    if(index >= 2u)
+                        assert(values[1u] == seed + 1);
+                    values[index] = seed + static_cast<int>(index);
+                });
+        };
+        auto work = caravan::alpaka::enqueue([&] { seed = 42; })
+                    | caravan::alpaka::sequence(
+                        caravan::whenAll(
+                            branch(0u),
+                            branch(1u) | caravan::alpaka::sequence(caravan::whenAll(branch(2u), branch(3u)))))
+                    | caravan::alpaka::sequence(
+                        caravan::alpaka::enqueue([&] { assert((values == std::array{42, 43, 44, 45})); }));
+        static_assert(caravan::Sender<decltype(work)>);
+        caravan::syncWait(caravan::alpaka::withDevice(pool, std::move(work)));
+
+        int stage = 0;
+        caravan::syncWait(
+            caravan::alpaka::withDevice(
+                pool,
+                caravan::alpaka::enqueue([&] { stage = 1; })
+                    | caravan::letValue(
+                        [&]
+                        {
+                            assert(stage == 1);
+                            return caravan::alpaka::enqueue([&] { stage = 2; });
+                        })
+                    | caravan::letValue(
+                        [&]
+                        {
+                            assert(stage == 2);
+                            return caravan::alpaka::enqueue([&] { stage = 3; });
+                        })));
+        assert(stage == 3);
+
+        auto failed = scope.spawn(
+            caravan::alpaka::withDevice(
+                pool,
+                caravan::alpaka::enqueue([] { throw std::runtime_error("execution failure"); })));
+        expectFailed(failed);
+        caravan::syncWait(caravan::alpaka::withDevice(pool, caravan::alpaka::enqueue([] {})));
+
+        std::promise<void> release, started;
+        auto gate = release.get_future().share();
+        auto branchStarted = started.get_future();
+        std::thread busy(
+            [&]
+            {
+                caravan::syncWait(
+                    caravan::alpaka::withDevice(
+                        pool,
+                        caravan::alpaka::enqueue(
+                            [&, gate]
+                            {
+                                started.set_value();
+                                gate.wait();
+                            })));
+            });
+        branchStarted.get();
+        bool concurrentRan = false;
+        caravan::syncWait(caravan::alpaka::withDevice(pool, caravan::alpaka::enqueue([&] { concurrentRan = true; })));
+        assert(concurrentRan);
+        release.set_value();
+        busy.join();
+    }
+
+    // Independently bound contexts join through ordinary sender composition.
+    {
+        caravan::alpaka::QueuePool<Queue> firstPool{device}, secondPool{device};
+        bool firstRan = false, secondRan = false;
+        caravan::syncWait(
+            caravan::whenAll(
+                caravan::alpaka::withDevice(firstPool, caravan::alpaka::enqueue([&] { firstRan = true; })),
+                caravan::alpaka::withDevice(secondPool, caravan::alpaka::enqueue([&] { secondRan = true; }))));
+        assert(firstRan && secondRan);
+    }
+
     // Native fork/join submits the join before host completion, without serializing branches.
     // The fork follows a seed on queue A; branch B must start even while branch A is blocked.
     {

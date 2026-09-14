@@ -224,6 +224,13 @@ namespace caravan
         std::tuple<T_Senders...> m_senders;
     };
 
+    /** Join senders without domain-specific fusion. */
+    template<Sender... T_Senders>
+    auto genericWhenAll(T_Senders... senders)
+    {
+        return WhenAllSender<T_Senders...>{std::move(senders)...};
+    }
+
     template<typename... T_Senders>
     requires(Sender<T_Senders> && ...)
     auto whenAll(T_Senders... senders)
@@ -232,6 +239,6 @@ namespace caravan
         if constexpr(requires { domain.transform(WhenAllTag{}, std::move(senders)...); })
             return domain.transform(WhenAllTag{}, std::move(senders)...);
         else
-            return WhenAllSender<T_Senders...>{std::move(senders)...};
+            return genericWhenAll(std::move(senders)...);
     }
 } // namespace caravan
