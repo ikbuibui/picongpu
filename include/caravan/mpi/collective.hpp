@@ -92,11 +92,6 @@ namespace caravan::mpi
                                    { owner->m_receiver.set_error(std::move(error)); });
                 }
 
-                void set_stopped() noexcept
-                {
-                    owner->release([owner = owner]() noexcept { owner->m_receiver.set_stopped(); });
-                }
-
                 decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
                     requires requires(T_Receiver const& receiver) { receiver.get_env(); }
                 {
@@ -210,13 +205,13 @@ namespace caravan::mpi
     /** Plan local collective initiation order independently of predecessor readiness.
      *
      * Every rank must reserve and start the same sequence on this communicator, and
-     * each corresponding predecessor must complete with the same value/error/stopped
-     * decision. Abandonment must also match across ranks. Violating this distributed
+     * each corresponding predecessor must complete with the same value/error decision.
+     * Abandonment must also match across ranks. Violating this distributed
      * contract can mismatch collectives or hang MPI.
      *
      * A value successor must be an immediate Caravan MPI collective on this lane's
-     * context and communicator. Failed/stopped predecessors forward their terminal
-     * completion without initiating MPI. MpiContext must outlive all entries.
+     * context and communicator. Failed predecessors forward their terminal completion
+     * without initiating MPI. MpiContext must outlive all entries.
      */
     class CollectiveLane
     {

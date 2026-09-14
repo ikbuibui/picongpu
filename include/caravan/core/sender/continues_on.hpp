@@ -32,11 +32,6 @@ namespace caravan
                     owner->transferError(std::move(error));
                 }
 
-                void set_stopped() noexcept
-                {
-                    owner->transferStopped();
-                }
-
                 decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
                     requires requires(T_Receiver const& receiver) { receiver.get_env(); }
                 {
@@ -56,11 +51,6 @@ namespace caravan
                 void set_error(std::exception_ptr error) noexcept
                 {
                     owner->m_receiver.set_error(std::move(error));
-                }
-
-                void set_stopped() noexcept
-                {
-                    owner->m_receiver.set_stopped();
                 }
 
                 decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
@@ -112,20 +102,12 @@ namespace caravan
                 m_scheduled.start();
             }
 
-            void transferStopped() noexcept
-            {
-                m_stopped = true;
-                m_scheduled.start();
-            }
-
             void complete() noexcept
             {
                 if(m_values)
                     std::apply(
                         [this](auto&&... values) { m_receiver.set_value(std::forward<decltype(values)>(values)...); },
                         std::move(*m_values));
-                else if(m_stopped)
-                    m_receiver.set_stopped();
                 else
                     m_receiver.set_error(std::move(m_error));
             }
@@ -133,7 +115,6 @@ namespace caravan
             T_Receiver m_receiver;
             std::optional<StoredValueTuple<T_Sender>> m_values;
             std::exception_ptr m_error;
-            bool m_stopped = false;
             decltype(std::declval<T_Scheduler&>().schedule().connect(std::declval<ScheduleReceiver>())) m_scheduled;
             decltype(std::declval<T_Sender&&>().connect(std::declval<TransferReceiver>())) m_upstream;
         };

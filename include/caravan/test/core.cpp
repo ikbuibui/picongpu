@@ -30,22 +30,19 @@ namespace
         using completion_signatures = caravan::CompletionSignatures<
             caravan::ValueSignature<int>,
             caravan::ValueSignature<double>,
-            caravan::ErrorSignature<std::exception_ptr>,
-            caravan::StoppedSignature>;
+            caravan::ErrorSignature<std::exception_ptr>>;
     };
 
     struct UnsupportedErrorSender
     {
-        using completion_signatures = caravan::
-            CompletionSignatures<caravan::ValueSignature<>, caravan::ErrorSignature<int>, caravan::StoppedSignature>;
+        using completion_signatures
+            = caravan::CompletionSignatures<caravan::ValueSignature<>, caravan::ErrorSignature<int>>;
     };
 
     struct UnsupportedReferenceSender
     {
-        using completion_signatures = caravan::CompletionSignatures<
-            caravan::ValueSignature<int&>,
-            caravan::ErrorSignature<std::exception_ptr>,
-            caravan::StoppedSignature>;
+        using completion_signatures = caravan::
+            CompletionSignatures<caravan::ValueSignature<int&>, caravan::ErrorSignature<std::exception_ptr>>;
     };
 
     struct EventReceiver
@@ -60,24 +57,16 @@ namespace
             *failure = std::move(error);
         }
 
-        void set_stopped() noexcept
-        {
-            *stopped = true;
-        }
-
         bool* value;
         std::exception_ptr* failure;
-        bool* stopped;
     };
 
     template<typename T>
     class AsyncValueSender
     {
     public:
-        using completion_signatures = caravan::CompletionSignatures<
-            caravan::ValueSignature<T>,
-            caravan::ErrorSignature<std::exception_ptr>,
-            caravan::StoppedSignature>;
+        using completion_signatures
+            = caravan::CompletionSignatures<caravan::ValueSignature<T>, caravan::ErrorSignature<std::exception_ptr>>;
 
         AsyncValueSender(caravan::Event ready, T value) : m_ready(std::move(ready)), m_value(std::move(value))
         {
@@ -96,11 +85,6 @@ namespace
                 void set_error(std::exception_ptr error) noexcept
                 {
                     owner->m_receiver.set_error(std::move(error));
-                }
-
-                void set_stopped() noexcept
-                {
-                    owner->m_receiver.set_stopped();
                 }
 
                 Operation* owner;
@@ -231,11 +215,6 @@ namespace
         }
 
         void set_error(std::exception_ptr) noexcept
-        {
-            assert(false);
-        }
-
-        void set_stopped() noexcept
         {
             assert(false);
         }
@@ -437,11 +416,10 @@ namespace
         caravan::InlineScheduler scheduler;
         bool completed = false;
         std::exception_ptr failure;
-        bool stopped = false;
-        auto operation = scheduler.schedule().connect(EventReceiver{&completed, &failure, &stopped});
+        auto operation = scheduler.schedule().connect(EventReceiver{&completed, &failure});
         assert(!completed);
         operation.start();
-        assert(completed && !failure && !stopped);
+        assert(completed && !failure);
     }
 
     void testCompletionAndContinuations()
@@ -572,46 +550,6 @@ namespace
             assert(std::string_view{error.what()} == "joined failure");
         }
 
-        caravan::EventSource stoppedInput;
-        caravan::EventSource readyInput;
-        std::array stoppedEvents{stoppedInput.event(), readyInput.event()};
-        auto stoppedJoin = caravan::whenAll(stoppedEvents);
-        stoppedInput.setStopped();
-        assert(stoppedJoin.state() == caravan::CompletionState::pending);
-        readyInput.setReady();
-        assert(stoppedJoin.state() == caravan::CompletionState::stopped);
-
-        for(bool stopFirst : {false, true})
-        {
-            caravan::EventSource failed;
-            caravan::EventSource stopped;
-            std::array precedenceEvents{failed.event(), stopped.event()};
-            auto precedenceJoin = caravan::whenAll(precedenceEvents);
-            if(stopFirst)
-                stopped.setStopped();
-            else
-                failed.setFailed(std::make_exception_ptr(std::runtime_error("precedence failure")));
-            assert(precedenceJoin.state() == caravan::CompletionState::pending);
-            if(stopFirst)
-                failed.setFailed(std::make_exception_ptr(std::runtime_error("precedence failure")));
-            else
-                stopped.setStopped();
-            assert(precedenceJoin.state() == caravan::CompletionState::failed);
-        }
-
-        for(unsigned i = 0u; i < 100u; ++i)
-        {
-            caravan::EventSource failed;
-            caravan::EventSource stopped;
-            std::array concurrentEvents{failed.event(), stopped.event()};
-            auto concurrentJoin = caravan::whenAll(concurrentEvents);
-            std::thread failer(
-                [&] { failed.setFailed(std::make_exception_ptr(std::runtime_error("concurrent failure"))); });
-            std::thread stopper([&] { stopped.setStopped(); });
-            failer.join();
-            stopper.join();
-            assert(concurrentJoin.state() == caravan::CompletionState::failed);
-        }
 
         caravan::InlineScheduler executor;
         caravan::EventSource failed;
@@ -669,21 +607,13 @@ namespace
     {
         caravan::EventSource source;
         bool value = false;
-        bool stopped = false;
         std::exception_ptr failure;
-        auto operation = caravan::asSender(source.event()).connect(EventReceiver{&value, &failure, &stopped});
+        auto operation = caravan::asSender(source.event()).connect(EventReceiver{&value, &failure});
 
         source.setReady();
         assert(!value);
         operation.start();
-        assert(value && !failure && !stopped);
-
-        caravan::EventSource stoppedSource;
-        auto stoppedOperation
-            = caravan::asSender(stoppedSource.event()).connect(EventReceiver{&value, &failure, &stopped});
-        stoppedOperation.start();
-        stoppedSource.setStopped();
-        assert(stopped);
+        assert(value && !failure);
     }
 
     void testSyncWait()
@@ -800,12 +730,11 @@ namespace
         caravan::EventSource thenReady;
         auto doubled
             = AsyncValueSender<int>{thenReady.event(), 21} | caravan::then([](int value) { return value * 2; });
-        static_assert(std::is_same_v<
-                      caravan::CompletionSignaturesOf<decltype(doubled)>,
-                      caravan::CompletionSignatures<
-                          caravan::ValueSignature<int>,
-                          caravan::ErrorSignature<std::exception_ptr>,
-                          caravan::StoppedSignature>>);
+        static_assert(
+            std::is_same_v<
+                caravan::CompletionSignaturesOf<decltype(doubled)>,
+                caravan::
+                    CompletionSignatures<caravan::ValueSignature<int>, caravan::ErrorSignature<std::exception_ptr>>>);
         caravan::AsyncScope thenScope;
         auto doubledResult = thenScope.spawnFuture<int>(std::move(doubled));
         thenReady.setReady();
@@ -867,19 +796,6 @@ namespace
         assert(failed.state() == caravan::CompletionState::failed);
         assert(!continuationCalled);
         failureScope.join().wait();
-
-        caravan::EventSource stoppedReady;
-        caravan::EventSource stoppedPeerReady;
-        caravan::AsyncScope stoppedScope;
-        auto stopped = stoppedScope.spawn(
-            caravan::whenAll(
-                AsyncValueSender<int>{stoppedReady.event(), 1},
-                AsyncValueSender<int>{stoppedPeerReady.event(), 2}));
-        stoppedReady.setStopped();
-        assert(stopped.state() == caravan::CompletionState::pending);
-        stoppedPeerReady.setReady();
-        assert(stopped.state() == caravan::CompletionState::stopped);
-        stoppedScope.join().wait();
     }
 
     void testEagerSenderBridgesAndOperationLifetime()
@@ -900,18 +816,6 @@ namespace
             assert(false);
         }
         catch(std::runtime_error const&)
-        {
-        }
-
-        caravan::EventSource stoppedReady;
-        auto stopped = scope.spawnFuture<int>(AsyncValueSender<int>{stoppedReady.event(), 0});
-        stoppedReady.setStopped();
-        try
-        {
-            static_cast<void>(stopped.result());
-            assert(false);
-        }
-        catch(caravan::StoppedError const&)
         {
         }
 
@@ -950,10 +854,6 @@ namespace
         failedPromise.setFailed(std::make_exception_ptr(std::runtime_error("future bridge failure")));
         assert(failedBridge.state() == caravan::CompletionState::failed);
 
-        caravan::Promise<int> stoppedPromise;
-        auto stoppedBridge = scope.spawn(caravan::consumeAsSender(stoppedPromise.future()));
-        stoppedPromise.setStopped();
-        assert(stoppedBridge.state() == caravan::CompletionState::stopped);
         scope.join().wait();
     }
 
@@ -975,11 +875,10 @@ namespace
         transferred.wait();
         joined.wait();
         bool rejectedValue = false;
-        bool rejectedStop = false;
         std::exception_ptr rejectedError;
-        auto rejected = scheduler.schedule().connect(EventReceiver{&rejectedValue, &rejectedError, &rejectedStop});
+        auto rejected = scheduler.schedule().connect(EventReceiver{&rejectedValue, &rejectedError});
         rejected.start();
-        assert(!rejectedValue && rejectedError && !rejectedStop);
+        assert(!rejectedValue && rejectedError);
 
         caravan::RunLoop polledLoop;
         caravan::AsyncScope polledScope;
@@ -1057,30 +956,16 @@ namespace
         context.wait(checked);
         assert(rejected);
 
-        for(bool stop : {false, true})
+        caravan::EventSource failed;
+        try
         {
-            caravan::EventSource source;
-            try
-            {
-                context.wait(
-                    source.event(),
-                    [&]
-                    {
-                        if(stop)
-                            source.setStopped();
-                        else
-                            source.setFailed(std::make_exception_ptr(std::runtime_error("backend failure")));
-                    });
-                assert(false);
-            }
-            catch(caravan::StoppedError const&)
-            {
-                assert(stop);
-            }
-            catch(std::runtime_error const&)
-            {
-                assert(!stop);
-            }
+            context.wait(
+                failed.event(),
+                [&] { failed.setFailed(std::make_exception_ptr(std::runtime_error("backend failure"))); });
+            assert(false);
+        }
+        catch(std::runtime_error const&)
+        {
         }
 
         try
@@ -1100,9 +985,9 @@ namespace
     {
         using State = caravan::CompletionState;
 
-        // This scheduler has no post(). Both stages must be lazy, and all three
+        // This scheduler has no post(). Both stages must be lazy, and both
         // upstream channels must wait for successful scheduling before delivery.
-        for(auto state : {State::ready, State::failed, State::stopped})
+        for(auto state : {State::ready, State::failed})
         {
             caravan::EventSource upstream;
             caravan::EventSource scheduled;
@@ -1112,10 +997,8 @@ namespace
                 = caravan::asSender(upstream.event()) | caravan::continuesOn(EventScheduler{scheduled.event()});
             if(state == State::ready)
                 upstream.setReady();
-            else if(state == State::failed)
-                upstream.setFailed(error);
             else
-                upstream.setStopped();
+                upstream.setFailed(error);
             auto result = scope.spawn(std::move(sender));
             assert(result.state() == State::pending);
             scheduled.setReady();
@@ -1125,28 +1008,20 @@ namespace
             scope.join().wait();
         }
 
-        // A scheduler's own error/stopped completion overrides the stored value.
-        for(bool stop : {false, true})
-        {
-            caravan::EventSource scheduled;
-            caravan::AsyncScope scope;
-            auto error = std::make_exception_ptr(std::runtime_error("scheduler"));
-            auto retained = std::make_shared<int>(42);
-            std::weak_ptr<int> lifetime = retained;
-            auto result = scope.spawn(
-                AsyncValueSender<std::shared_ptr<int>>{caravan::readyEvent(), std::move(retained)}
-                | caravan::continuesOn(EventScheduler{scheduled.event()}));
-            assert(!lifetime.expired());
-            if(stop)
-                scheduled.setStopped();
-            else
-                scheduled.setFailed(error);
-            assert(result.state() == (stop ? State::stopped : State::failed));
-            if(!stop)
-                assert(result.error() == error);
-            assert(lifetime.expired());
-            scope.join().wait();
-        }
+        // A scheduler's own error completion overrides the stored value.
+        caravan::EventSource scheduled;
+        caravan::AsyncScope schedulingScope;
+        auto error = std::make_exception_ptr(std::runtime_error("scheduler"));
+        auto retained = std::make_shared<int>(42);
+        std::weak_ptr<int> lifetime = retained;
+        auto result = schedulingScope.spawn(
+            AsyncValueSender<std::shared_ptr<int>>{caravan::readyEvent(), std::move(retained)}
+            | caravan::continuesOn(EventScheduler{scheduled.event()}));
+        assert(!lifetime.expired());
+        scheduled.setFailed(error);
+        assert(result.state() == State::failed && result.error() == error);
+        assert(lifetime.expired());
+        schedulingScope.join().wait();
 
         caravan::RunLoop loop;
         caravan::AsyncScope scope;
@@ -1160,25 +1035,16 @@ namespace
 
         // Success-only composition does not attempt scheduling on upstream failure.
         loop.finish();
-        for(bool stop : {false, true})
-        {
-            caravan::EventSource upstream;
-            caravan::AsyncScope failureScope;
-            bool called = false;
-            auto error = std::make_exception_ptr(std::runtime_error("original failure"));
-            auto result = failureScope.spawn(
-                caravan::asSender(upstream.event())
-                | caravan::letValue([&]
-                                    { return loop.scheduler().schedule() | caravan::then([&] { called = true; }); }));
-            if(stop)
-                upstream.setStopped();
-            else
-                upstream.setFailed(error);
-            assert(!called && result.state() == (stop ? State::stopped : State::failed));
-            if(!stop)
-                assert(result.error() == error);
-            failureScope.join().wait();
-        }
+        caravan::EventSource upstream;
+        caravan::AsyncScope failureScope;
+        bool called = false;
+        auto original = std::make_exception_ptr(std::runtime_error("original failure"));
+        auto failed = failureScope.spawn(
+            caravan::asSender(upstream.event())
+            | caravan::letValue([&] { return loop.scheduler().schedule() | caravan::then([&] { called = true; }); }));
+        upstream.setFailed(original);
+        assert(!called && failed.state() == State::failed && failed.error() == original);
+        failureScope.join().wait();
     }
 
     void testStartsOn()
@@ -1218,25 +1084,17 @@ namespace
         assert(*std::move(result).takeResult() == 42);
         scope.join().wait();
 
-        for(bool stop : {false, true})
-        {
-            caravan::EventSource scheduling;
-            caravan::AsyncScope failedScope;
-            bool childStarted = false;
-            auto failed = failedScope.spawn(
-                caravan::startsOn(EventScheduler{scheduling.event()}, StartTrackingSender{&childStarted}));
-            auto error = std::make_exception_ptr(std::runtime_error("start scheduling"));
-            assert(!childStarted && failed.state() == caravan::CompletionState::pending);
-            if(stop)
-                scheduling.setStopped();
-            else
-                scheduling.setFailed(error);
-            assert(!childStarted);
-            assert(failed.state() == (stop ? caravan::CompletionState::stopped : caravan::CompletionState::failed));
-            if(!stop)
-                assert(failed.error() == error);
-            failedScope.join().wait();
-        }
+        caravan::EventSource scheduling;
+        caravan::AsyncScope failedScope;
+        bool childStarted = false;
+        auto failed = failedScope.spawn(
+            caravan::startsOn(EventScheduler{scheduling.event()}, StartTrackingSender{&childStarted}));
+        auto error = std::make_exception_ptr(std::runtime_error("start scheduling"));
+        assert(!childStarted && failed.state() == caravan::CompletionState::pending);
+        scheduling.setFailed(error);
+        assert(!childStarted && failed.state() == caravan::CompletionState::failed);
+        assert(failed.error() == error);
+        failedScope.join().wait();
 
         // Inline completion may immediately destroy both connected operations.
         bool destroyed = false;
@@ -1274,7 +1132,6 @@ namespace
         static_assert(!caravan::SenderTo<Unscoped, EventReceiver>); // No implicit restoration scheduler.
 
         bool value = false;
-        bool stopped = false;
         std::exception_ptr error;
         int observations = 0;
         QueryEnvironment environment;
@@ -1285,10 +1142,10 @@ namespace
                 caravan::on(TaggedScheduler{2}, QuerySender{2, &observations} | caravan::then([] {})))
                 | caravan::letValue([&] { return QuerySender{1, &observations}; })
                 | caravan::continuesOn(caravan::InlineScheduler{}));
-        auto operation = std::move(work).connect(QueryReceiver{{&value, &error, &stopped}, &environment});
+        auto operation = std::move(work).connect(QueryReceiver{{&value, &error}, &environment});
         assert(observations == 2 && !value);
         operation.start();
-        assert(observations == 6 && value && !error && !stopped);
+        assert(observations == 6 && value && !error);
     }
 
     void testOnRestoration()
@@ -1387,7 +1244,7 @@ namespace
     void testOnCompletionChannels()
     {
         using State = caravan::CompletionState;
-        for(auto state : {State::ready, State::failed, State::stopped})
+        for(auto state : {State::ready, State::failed})
         {
             caravan::RunLoop app;
             caravan::EventSource native;
@@ -1401,67 +1258,47 @@ namespace
             app.runReady();
             if(state == State::ready)
                 native.setReady();
-            else if(state == State::failed)
-                native.setFailed(error);
             else
-                native.setStopped();
+                native.setFailed(error);
             assert(result.state() == State::pending);
             app.runReady();
             assert(result.state() == state);
             if(state == State::ready)
                 assert(*std::move(result).takeResult() == 42);
-            else if(state == State::failed)
+            else
                 assert(result.event().error() == error);
             scope.join().wait();
         }
 
-        for(bool stop : {false, true})
-        {
-            caravan::RunLoop app;
-            caravan::EventSource scheduling;
-            caravan::AsyncScope scope;
-            bool started = false;
-            auto error = std::make_exception_ptr(std::runtime_error("initial scheduling"));
-            auto result = scope.spawn(
-                caravan::startsOn(
-                    app.scheduler(),
-                    caravan::on(EventScheduler{scheduling.event()}, StartTrackingSender{&started})));
-            app.runReady();
-            if(stop)
-                scheduling.setStopped();
-            else
-                scheduling.setFailed(error);
-            assert(!started && result.state() == State::pending);
-            app.runReady();
-            assert(result.state() == (stop ? State::stopped : State::failed));
-            if(!stop)
-                assert(result.error() == error);
-            scope.join().wait();
-        }
+        caravan::RunLoop schedulingApp;
+        caravan::EventSource scheduling;
+        caravan::AsyncScope schedulingScope;
+        bool started = false;
+        auto schedulingError = std::make_exception_ptr(std::runtime_error("initial scheduling"));
+        auto schedulingResult = schedulingScope.spawn(
+            caravan::startsOn(
+                schedulingApp.scheduler(),
+                caravan::on(EventScheduler{scheduling.event()}, StartTrackingSender{&started})));
+        schedulingApp.runReady();
+        scheduling.setFailed(schedulingError);
+        assert(!started && schedulingResult.state() == State::pending);
+        schedulingApp.runReady();
+        assert(schedulingResult.state() == State::failed && schedulingResult.error() == schedulingError);
+        schedulingScope.join().wait();
 
-        // Explicit receiver environments work without an outer startsOn. A
-        // stopped/failed restoration replaces the original completion.
-        for(bool stop : {false, true})
-        {
-            caravan::EventSource restore;
-            bool value = false;
-            bool stopped = false;
-            std::exception_ptr error;
-            auto operation = caravan::on(caravan::InlineScheduler{}, caravan::asSender(caravan::readyEvent()))
-                                 .connect(
-                                     SchedulerReceiver<EventScheduler>{
-                                         {&value, &error, &stopped},
-                                         EventScheduler{restore.event()}});
-            operation.start();
-            assert(!value && !error && !stopped);
-            auto failure = std::make_exception_ptr(std::runtime_error("restoration"));
-            if(stop)
-                restore.setStopped();
-            else
-                restore.setFailed(failure);
-            assert(!value && stopped == stop);
-            assert(error == (stop ? std::exception_ptr{} : failure));
-        }
+        // Explicit receiver environments work without an outer startsOn.
+        caravan::EventSource restore;
+        bool value = false;
+        std::exception_ptr restorationError;
+        auto operation
+            = caravan::on(caravan::InlineScheduler{}, caravan::asSender(caravan::readyEvent()))
+                  .connect(
+                      SchedulerReceiver<EventScheduler>{{&value, &restorationError}, EventScheduler{restore.event()}});
+        operation.start();
+        assert(!value && !restorationError);
+        auto failure = std::make_exception_ptr(std::runtime_error("restoration"));
+        restore.setFailed(failure);
+        assert(!value && restorationError == failure);
 
         // Failure while storing a value for restoration must also take the return
         // hop, rather than bypassing the requested scheduler.
@@ -1514,22 +1351,18 @@ namespace
         assert(scope.status() == caravan::AsyncScopeStatus::open);
         caravan::EventSource readySource;
         caravan::EventSource failedSource;
-        caravan::EventSource stoppedSource;
         auto ready = scope.spawn(caravan::asSender(readySource.event()));
         auto failed = scope.spawn(caravan::asSender(failedSource.event()));
-        auto stopped = scope.spawn(caravan::asSender(stoppedSource.event()));
         auto joined = scope.join();
 
         assert(scope.status() == caravan::AsyncScopeStatus::joining);
         assert(joined.state() == caravan::CompletionState::pending);
         readySource.setReady();
         failedSource.setFailed(std::make_exception_ptr(std::runtime_error("scope failure")));
-        stoppedSource.setStopped();
         joined.wait();
         assert(scope.status() == caravan::AsyncScopeStatus::joined);
         assert(ready.isReady());
         assert(failed.state() == caravan::CompletionState::failed && failed.error());
-        assert(stopped.state() == caravan::CompletionState::stopped);
 
         try
         {

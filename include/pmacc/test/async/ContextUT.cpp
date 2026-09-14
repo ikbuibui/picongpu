@@ -65,24 +65,15 @@ TEST_CASE("PMacc async context owns work and drives host continuations", "[async
     context.wait(checked);
 }
 
-TEST_CASE("PMacc wait wakes for every terminal channel and survives progress errors", "[async]")
+TEST_CASE("PMacc wait wakes for failures and survives progress errors", "[async]")
 {
     caravan::ControlContext context;
-    for(bool stop : {false, true})
-    {
-        caravan::EventSource source;
-        auto complete = [&]
-        {
-            if(stop)
-                source.setStopped();
-            else
-                source.setFailed(std::make_exception_ptr(std::runtime_error("backend failure")));
-        };
-        if(stop)
-            CHECK_THROWS_AS(context.wait(source.event(), complete), caravan::StoppedError);
-        else
-            CHECK_THROWS_AS(context.wait(source.event(), complete), std::runtime_error);
-    }
+    caravan::EventSource source;
+    CHECK_THROWS_AS(
+        context.wait(
+            source.event(),
+            [&] { source.setFailed(std::make_exception_ptr(std::runtime_error("backend failure"))); }),
+        std::runtime_error);
 
     caravan::EventSource pending;
     CHECK_THROWS_AS(

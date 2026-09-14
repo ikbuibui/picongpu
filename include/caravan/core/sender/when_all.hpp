@@ -32,11 +32,6 @@ namespace caravan
                 owner->setError(std::move(error));
             }
 
-            void set_stopped() noexcept
-            {
-                owner->setStopped();
-            }
-
             decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Environment const&>().get_env()))
                 requires requires(T_Environment const& value) { value.get_env(); }
             {
@@ -151,29 +146,12 @@ namespace caravan
                     finish();
             }
 
-            void setStopped() noexcept
-            {
-                bool complete;
-                {
-                    std::lock_guard lock(m_mutex);
-                    m_stopped = true;
-                    complete = --m_remaining == 0u;
-                }
-                if(complete)
-                    finish();
-            }
-
         private:
             void finish() noexcept
             {
                 if(m_error)
                 {
                     this->m_receiver.set_error(std::move(m_error));
-                    return;
-                }
-                if(m_stopped)
-                {
-                    this->m_receiver.set_stopped();
                     return;
                 }
 
@@ -196,7 +174,6 @@ namespace caravan
             std::size_t m_remaining = sizeof...(T_Senders);
             std::tuple<std::optional<ValueTupleOf<T_Senders>>...> m_values;
             std::exception_ptr m_error;
-            bool m_stopped = false;
         };
     } // namespace detail
 

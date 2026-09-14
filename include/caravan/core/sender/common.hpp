@@ -26,10 +26,6 @@ namespace caravan
     {
     };
 
-    struct StoppedSignature
-    {
-    };
-
     template<typename... T_Signatures>
     struct CompletionSignatures
     {
@@ -42,16 +38,15 @@ namespace caravan
     inline constexpr bool isSupportedCompletionSignatures = false;
 
     template<typename... T>
-    inline constexpr bool isSupportedCompletionSignatures<
-        CompletionSignatures<ValueSignature<T...>, ErrorSignature<std::exception_ptr>, StoppedSignature>>
+    inline constexpr bool
+        isSupportedCompletionSignatures<CompletionSignatures<ValueSignature<T...>, ErrorSignature<std::exception_ptr>>>
         = ((!std::is_reference_v<T> && std::is_same_v<T, std::remove_cv_t<T>>) && ...);
 
     /** The deliberately narrow Caravan migration-sender profile.
      *
-     * A sender has exactly one alternative of owned values, an exception_ptr
-     * error channel, and a stopped channel. Stopped completion is propagated but
-     * does not imply cancellation support. Receiver environments are forwarded
-     * by composition; scoped placement queries the logical current scheduler.
+     * A sender has exactly one alternative of owned values and an exception_ptr
+     * error channel. Receiver environments are forwarded by composition; scoped
+     * placement queries the logical current scheduler.
      */
     template<typename T_Sender>
     concept Sender = requires { typename CompletionSignaturesOf<T_Sender>; }
@@ -91,8 +86,7 @@ namespace caravan
         struct ValueTuple;
 
         template<typename... T>
-        struct ValueTuple<
-            CompletionSignatures<ValueSignature<T...>, ErrorSignature<std::exception_ptr>, StoppedSignature>>
+        struct ValueTuple<CompletionSignatures<ValueSignature<T...>, ErrorSignature<std::exception_ptr>>>
         {
             using type = std::tuple<T...>;
         };
@@ -144,8 +138,7 @@ namespace caravan
             conditional_t<std::is_void_v<T_Result>, ValueSignature<>, ValueSignature<std::remove_cvref_t<T_Result>>>;
 
         template<typename T_ValueSignature>
-        using DefaultCompletionSignatures
-            = CompletionSignatures<T_ValueSignature, ErrorSignature<std::exception_ptr>, StoppedSignature>;
+        using DefaultCompletionSignatures = CompletionSignatures<T_ValueSignature, ErrorSignature<std::exception_ptr>>;
 
         template<typename T_Sender, typename T_Function>
         using ThenCompletionSignatures = DefaultCompletionSignatures<
@@ -176,11 +169,6 @@ namespace caravan
                 void set_error(std::exception_ptr error) noexcept
                 {
                     receiver->set_error(std::move(error));
-                }
-
-                void set_stopped() noexcept
-                {
-                    receiver->set_stopped();
                 }
 
                 decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))

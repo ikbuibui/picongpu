@@ -27,11 +27,6 @@ namespace caravan
                     receiver->set_error(std::move(error));
                 }
 
-                void set_stopped() noexcept
-                {
-                    receiver->set_stopped();
-                }
-
                 auto get_env() const noexcept
                 {
                     return SchedulerEnvironment<T_Scheduler, T_Receiver>{scheduler, receiver};
@@ -51,11 +46,6 @@ namespace caravan
                 void set_error(std::exception_ptr error) noexcept
                 {
                     receiver->set_error(std::move(error));
-                }
-
-                void set_stopped() noexcept
-                {
-                    receiver->set_stopped();
                 }
 
                 decltype(auto) get_env() const noexcept(noexcept(getEnvironment(std::declval<T_Receiver const&>())))
@@ -125,7 +115,7 @@ namespace caravan
      * The child sees this scheduler through getScheduler(receiver.get_env()), even
      * if it later completes on another thread. Unrelated environment queries are
      * forwarded. Both operations connect before start; connection failures throw.
-     * Failed/stopped scheduling skips child start and forwards that completion.
+     * Failed scheduling skips child start and forwards that completion.
      * Scheduler resources must outlive the operation; no worker or queue is added.
      */
     template<typename T_Scheduler, Sender T_Sender>

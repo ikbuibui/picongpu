@@ -36,11 +36,6 @@ namespace
             output.setFailed(std::move(error));
         }
 
-        void set_stopped() noexcept
-        {
-            output.setStopped();
-        }
-
         caravan::Promise<T> output;
     };
 
@@ -54,11 +49,6 @@ namespace
         void set_error(std::exception_ptr error) noexcept
         {
             output.setFailed(std::move(error));
-        }
-
-        void set_stopped() noexcept
-        {
-            output.setStopped();
         }
 
         caravan::EventSource output;
@@ -80,11 +70,6 @@ namespace
         }
 
         void set_error(std::exception_ptr) noexcept
-        {
-            finish();
-        }
-
-        void set_stopped() noexcept
         {
             finish();
         }
@@ -438,24 +423,6 @@ int main(int argc, char** argv)
             {
             }
             followingFailure.wait();
-
-            caravan::EventSource stoppedCollectiveReady;
-            auto stoppedCollective = collectiveScope.spawn(collectiveLane.submit(
-                caravan::asSender(stoppedCollectiveReady.event()),
-                [&mpi, communicator = cartesian.communicator] { return caravan::mpi::barrier(mpi, communicator); }));
-            auto followingStop = collectiveScope.spawn(collectiveLane.submit(
-                caravan::asSender(caravan::readyEvent()),
-                [&mpi, communicator = cartesian.communicator] { return caravan::mpi::barrier(mpi, communicator); }));
-            stoppedCollectiveReady.setStopped();
-            try
-            {
-                stoppedCollective.wait();
-                assert(false);
-            }
-            catch(caravan::StoppedError const&)
-            {
-            }
-            followingStop.wait();
 
             auto throwingCollective = collectiveScope.spawn(collectiveLane.submit(
                 caravan::asSender(caravan::readyEvent()),

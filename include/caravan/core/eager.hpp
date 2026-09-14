@@ -27,16 +27,7 @@ namespace caravan
     {
         pending,
         ready,
-        failed,
-        stopped
-    };
-
-    class StoppedError : public std::runtime_error
-    {
-    public:
-        StoppedError() : std::runtime_error("Caravan operation was stopped")
-        {
-        }
+        failed
     };
 
     class ExecutorThreadGuard
@@ -259,11 +250,11 @@ namespace caravan
             reportFailure();
         }
 
-        /** Eager all-channel observation for runtime wait/wakeup boundaries.
+        /** Eager observation for runtime wait/wakeup boundaries.
          *
-         * Unlike sender then(), this observes failed and stopped predecessors too.
-         * The subscription and queued callback own their captures independently of
-         * the returned Event, including when a progress hook throws during wait.
+         * Unlike sender then(), this observes failed predecessors too. The subscription
+         * and queued callback own their captures independently of the returned Event,
+         * including when a progress hook throws during wait.
          */
         template<typename T_Executor, typename T_Continuation>
         Event continueWith(T_Executor executor, T_Continuation&& continuation) const;
@@ -285,8 +276,6 @@ namespace caravan
         {
             if(state() == CompletionState::failed)
                 std::rethrow_exception(error());
-            if(state() == CompletionState::stopped)
-                throw StoppedError{};
         }
 
         std::shared_ptr<detail::State> m_state;
@@ -321,11 +310,6 @@ namespace caravan
             if(!error)
                 error = std::make_exception_ptr(std::runtime_error("Caravan operation failed without an error"));
             return m_state->complete(CompletionState::failed, std::move(error));
-        }
-
-        bool setStopped() const
-        {
-            return m_state->complete(CompletionState::stopped);
         }
 
     private:
@@ -390,8 +374,6 @@ namespace caravan
                         m_result = CompletionState::failed;
                         m_error = event.error();
                     }
-                    else if(event.state() == CompletionState::stopped && m_result == CompletionState::ready)
-                        m_result = CompletionState::stopped;
                 }
 
                 if(m_remaining.fetch_sub(1u, std::memory_order_acq_rel) == 1u)
@@ -510,11 +492,6 @@ namespace caravan
             return m_state->complete(CompletionState::failed, std::move(error));
         }
 
-        bool setStopped() const
-        {
-            return m_state->complete(CompletionState::stopped);
-        }
-
     private:
         std::shared_ptr<detail::FutureState<T>> m_state;
     };
@@ -559,9 +536,6 @@ namespace caravan
                 break;
             case CompletionState::failed:
                 m_receiver.set_error(m_event.error());
-                break;
-            case CompletionState::stopped:
-                m_receiver.set_stopped();
                 break;
             case CompletionState::pending:
                 std::terminate();
@@ -634,11 +608,6 @@ namespace caravan
                 output.setFailed(std::move(error));
             }
 
-            void set_stopped() noexcept
-            {
-                output.setStopped();
-            }
-
             Promise<T> output;
         };
 
@@ -652,11 +621,6 @@ namespace caravan
             void set_error(std::exception_ptr error) noexcept
             {
                 output.setFailed(std::move(error));
-            }
-
-            void set_stopped() noexcept
-            {
-                output.setStopped();
             }
 
             EventSource output;

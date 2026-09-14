@@ -46,11 +46,6 @@ namespace
             output.setFailed(std::move(error));
         }
 
-        void set_stopped() noexcept
-        {
-            output.setStopped();
-        }
-
         caravan::EventSource output;
     };
 } // namespace

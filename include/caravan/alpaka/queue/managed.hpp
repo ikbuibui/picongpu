@@ -76,11 +76,6 @@ namespace caravan::alpaka
                 receiver.set_error(std::move(error));
             }
 
-            void set_stopped() noexcept
-            {
-                receiver.set_stopped();
-            }
-
             auto get_env() const noexcept
             {
                 return DeviceContextEnvironment<T_Context, T_Receiver>{context, &receiver};
@@ -140,8 +135,7 @@ namespace caravan::alpaka
         static_assert(stageCount > 0u, "An alpaka submission chain must contain at least one stage");
 
     public:
-        using completion_signatures
-            = CompletionSignatures<ValueSignature<>, ErrorSignature<std::exception_ptr>, StoppedSignature>;
+        using completion_signatures = CompletionSignatures<ValueSignature<>, ErrorSignature<std::exception_ptr>>;
 
         ManagedSubmitSender(
             std::tuple<T_Submits...> submits,
