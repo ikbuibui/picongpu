@@ -174,8 +174,9 @@ namespace pmacc::particles
                 auto completion = context.spawn(
                     caravan::alpaka::withDevice(
                         device,
-                        caravan::asSender(caravan::whenAll(dependencies))
-                            | caravan::letValue([&particles, exchange] { return sendChunks(particles, exchange); })));
+                        caravan::sequence(
+                            caravan::asSender(caravan::whenAll(dependencies)),
+                            sendChunks(particles, exchange))));
                 buffer.setSendCompletion(exchange, completion);
                 sends.push_back(std::move(completion));
             }
@@ -183,10 +184,9 @@ namespace pmacc::particles
                 sends.push_back(context.spawn(
                     caravan::alpaka::withDevice(
                         device,
-                        caravan::asSender(previous)
-                            | caravan::letValue(
-                                [&particles, exchange]
-                                { return HandleNotExchanged{}.handleOutgoingAsync(particles, exchange); }))));
+                        caravan::sequence(
+                            caravan::asSender(previous),
+                            HandleNotExchanged{}.handleOutgoingAsync(particles, exchange)))));
 
             if(buffer.hasReceiveExchange(exchange))
             {
@@ -194,9 +194,9 @@ namespace pmacc::particles
                 auto completion = context.spawn(
                     caravan::alpaka::withDevice(
                         device,
-                        caravan::asSender(caravan::whenAll(dependencies))
-                            | caravan::letValue([&particles, exchange]
-                                                { return receiveChunks(particles, exchange); })));
+                        caravan::sequence(
+                            caravan::asSender(caravan::whenAll(dependencies)),
+                            receiveChunks(particles, exchange))));
                 buffer.setReceiveCompletion(exchange, completion);
                 receives.push_back(std::move(completion));
             }
@@ -204,18 +204,16 @@ namespace pmacc::particles
                 receives.push_back(context.spawn(
                     caravan::alpaka::withDevice(
                         device,
-                        caravan::asSender(previous)
-                            | caravan::letValue(
-                                [&particles, exchange]
-                                { return HandleNotExchanged{}.handleIncomingAsync(particles, exchange); }))));
+                        caravan::sequence(
+                            caravan::asSender(previous),
+                            HandleNotExchanged{}.handleIncomingAsync(particles, exchange)))));
         }
 
         auto received = caravan::whenAll(receives);
         auto filled = context.spawn(
             caravan::alpaka::withDevice(
                 device,
-                caravan::asSender(std::move(received))
-                    | caravan::letValue([&particles] { return particles.fillBorderGapsAsync(); })));
+                caravan::sequence(caravan::asSender(std::move(received)), particles.fillBorderGapsAsync())));
         sends.push_back(std::move(filled));
         return caravan::whenAll(sends);
     }

@@ -160,9 +160,7 @@ namespace pmacc
                                             numIdsPerThread);
                     auto copy = idBuf.deviceToHost();
                     context.wait(context.spawn(
-                        caravan::alpaka::withDevice(
-                            device,
-                            caravan::alpaka::sequence(std::move(generate), std::move(copy)))));
+                        caravan::alpaka::withDevice(device, caravan::sequence(std::move(generate), std::move(copy)))));
                     REQUIRE(numIds == ids.size());
                     auto hostBox = idBuf.getHostBuffer().getDataBox();
                     // Make sure they are the same

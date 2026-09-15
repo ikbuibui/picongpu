@@ -21,10 +21,9 @@ namespace pmacc::fields
     {
         using SuperCellSize = typename T_Field::MappingDesc::SuperCellSize;
         auto& buffer = field.getGridBuffer();
-        return buffer.receive(exchange)
-               | caravan::letValue(
-                   [&buffer, exchange](auto const&)
-                   { return operations::AddExchangeToBorder{}.sender(buffer, SuperCellSize{}, exchange); });
+        return caravan::sequence(
+            buffer.receive(exchange),
+            operations::AddExchangeToBorder{}.sender(buffer, SuperCellSize{}, exchange));
     }
 
     /** Describe one lazy field pack/send branch. */
@@ -33,8 +32,9 @@ namespace pmacc::fields
     {
         using SuperCellSize = typename T_Field::MappingDesc::SuperCellSize;
         auto& buffer = field.getGridBuffer();
-        return operations::CopyGuardToExchange{}.sender(buffer, SuperCellSize{}, exchange)
-               | caravan::letValue([&buffer, exchange] { return buffer.send(exchange); });
+        return caravan::sequence(
+            operations::CopyGuardToExchange{}.sender(buffer, SuperCellSize{}, exchange),
+            buffer.send(exchange));
     }
 
     /** Eager runtime-sized adapter for additive guard-to-border field communication. */
@@ -55,10 +55,11 @@ namespace pmacc::fields
                 auto completion = context.spawn(
                     caravan::alpaka::withDevice(
                         device,
-                        caravan::whenAll(
-                            caravan::asSender(receivePrevious),
-                            caravan::asSender(buffer.receiveCompletion(exchange)))
-                            | caravan::letValue([&field, exchange] { return receiveExchange(field, exchange); })));
+                        caravan::sequence(
+                            caravan::whenAll(
+                                caravan::asSender(receivePrevious),
+                                caravan::asSender(buffer.receiveCompletion(exchange))),
+                            receiveExchange(field, exchange))));
                 buffer.setReceiveCompletion(exchange, completion);
                 receivePrevious = completion;
                 branches.front() = std::move(completion);
@@ -69,10 +70,11 @@ namespace pmacc::fields
                 auto completion = context.spawn(
                     caravan::alpaka::withDevice(
                         device,
-                        caravan::whenAll(
-                            caravan::asSender(previous),
-                            caravan::asSender(buffer.sendCompletion(exchange)))
-                            | caravan::letValue([&field, exchange] { return sendExchange(field, exchange); })));
+                        caravan::sequence(
+                            caravan::whenAll(
+                                caravan::asSender(previous),
+                                caravan::asSender(buffer.sendCompletion(exchange))),
+                            sendExchange(field, exchange))));
                 buffer.setSendCompletion(exchange, completion);
                 branches[exchange] = std::move(completion);
             }
