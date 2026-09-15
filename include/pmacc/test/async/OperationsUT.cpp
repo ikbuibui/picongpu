@@ -12,6 +12,7 @@
 #include <pmacc/memory/buffers/HostBuffer.hpp>
 #include <pmacc/memory/buffers/HostDeviceBuffer.hpp>
 #include <pmacc/particles/memory/buffers/StackExchangeBuffer.hpp>
+#include <pmacc/traits/GetUniqueTypeId.hpp>
 
 #include <alpaka/alpaka.hpp>
 
@@ -35,7 +36,8 @@ namespace
             return buffer;
         }
 
-        pmacc::GridBuffer<int, TEST_DIM> buffer{pmacc::DataSpace<TEST_DIM>::create(1)};
+        pmacc::GridBuffer<int, TEST_DIM> buffer{
+            pmacc::GridLayout<TEST_DIM>{pmacc::DataSpace<TEST_DIM>::create(2), pmacc::DataSpace<TEST_DIM>::create(1)}};
     };
 
     struct Increment
@@ -193,4 +195,74 @@ TEST_CASE("Host-device buffer queue overloads return lazy copies", "[async][memo
     CHECK(buffer.getHostBuffer().size() == 1u);
     CHECK(buffer.getHostBuffer().data()[0] == 41);
     CHECK(buffer.getHostBuffer().data()[1] == 77);
+}
+
+TEST_CASE("Field communication preserves overwrite and additive semantics", "[async][fields]")
+{
+    bool additive = false;
+    SECTION("Border-to-guard halo overwrites")
+    {
+    }
+    SECTION("Guard-to-border scatter adds")
+    {
+        additive = true;
+    }
+
+    MockField field;
+    auto& buffer = field.getGridBuffer();
+    auto const tag = pmacc::traits::getUniqueId<uint32_t>();
+    for(uint32_t exchange = 1u; exchange < pmacc::traits::NumberOfExchanges<TEST_DIM>::value; ++exchange)
+    {
+        auto const direction = pmacc::Mask::getRelativeDirections<TEST_DIM>(exchange);
+        auto extent = pmacc::DataSpace<TEST_DIM>::create(1);
+        if(additive)
+        {
+            for(uint32_t d = 0u; d < TEST_DIM; ++d)
+                if(direction[d] == 0)
+                    extent[d] = 2;
+            buffer.addExchangeBuffer(exchange, extent, tag);
+        }
+        else
+            buffer.addExchange(pmacc::GUARD, exchange, extent, tag);
+    }
+
+    auto& device = pmacc::Environment<>::get().DeviceContext();
+    auto const topology = pmacc::Environment<>::get().getMpiContext().topology();
+    auto const extent = buffer.getGridLayout().sizeND();
+    auto box = buffer.getHostBuffer().getDataBox();
+    caravan::ControlContext context;
+    for(int step = 0; step < 2; ++step)
+    {
+        for(int i = 0; i < extent.productOfComponents(); ++i)
+        {
+            auto const cell = pmacc::math::mapToND(extent, i);
+            bool guard = false;
+            for(uint32_t d = 0u; d < TEST_DIM; ++d)
+                guard = guard || cell[d] == 0 || cell[d] == 3;
+            box(cell) = guard ? (additive ? 1 : -100) : (additive ? 10 : topology.rank + 1 + step * 10);
+        }
+        context.wait(context.spawn(caravan::alpaka::withDevice(device, buffer.hostToDevice())));
+        context.wait(
+            additive ? pmacc::fields::spawnCommunication(context, field) : buffer.spawnCommunication(context));
+        context.wait(context.spawn(caravan::alpaka::withDevice(device, buffer.deviceToHost())));
+
+        for(int i = 0; i < extent.productOfComponents(); ++i)
+        {
+            auto const cell = pmacc::math::mapToND(extent, i);
+            bool guard = false;
+            for(uint32_t d = 0u; d < TEST_DIM; ++d)
+                guard = guard || cell[d] == 0 || cell[d] == 3;
+            auto const neighbor
+                = (topology.rank + (cell.x() == 0 ? -1 : (cell.x() == 3 ? 1 : 0)) + topology.size) % topology.size;
+            CHECK(box(cell) == (additive ? (guard ? 1 : 10 + (1 << TEST_DIM) - 1) : neighbor + 1 + step * 10));
+        }
+    }
+}
+
+TEST_CASE("Field communication without exchanges does not wait for previous work", "[async][fields]")
+{
+    MockField field;
+    caravan::ControlContext context;
+    caravan::EventSource previous;
+    CHECK(pmacc::fields::spawnCommunication(context, field, previous.event()).isReady());
 }

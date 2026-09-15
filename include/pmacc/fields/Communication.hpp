@@ -10,7 +10,6 @@
 #include "pmacc/traits/NumberOfExchanges.hpp"
 
 #include <array>
-#include <vector>
 
 #include <caravan/core.hpp>
 
@@ -38,14 +37,14 @@ namespace pmacc::fields
                | caravan::letValue([&buffer, exchange] { return buffer.send(exchange); });
     }
 
-    /** Eager runtime-sized adapter for field communication. */
+    /** Eager runtime-sized adapter for additive guard-to-border field communication. */
     template<typename T_Field>
     caravan::Event spawnCommunication(caravan::ControlContext& context, T_Field& field, caravan::Event previous = {})
     {
         auto& buffer = field.getGridBuffer();
         auto& device = Environment<>::get().DeviceContext();
-        std::vector<caravan::Event> branches;
-        branches.reserve(traits::NumberOfExchanges<T_Field::dim>::value * 2u);
+        // Keep only the tail of the ordered receives, plus the independent sends.
+        std::array<caravan::Event, traits::NumberOfExchanges<T_Field::dim>::value> branches{};
         auto receivePrevious = previous;
 
         for(uint32_t exchange = 1u; exchange < traits::NumberOfExchanges<T_Field::dim>::value; ++exchange)
@@ -53,27 +52,29 @@ namespace pmacc::fields
             if(buffer.hasReceiveExchange(exchange))
             {
                 // Inserts use += and neighboring directions overlap at edges; retain their former FIFO ordering.
-                std::array dependencies{receivePrevious, buffer.receiveCompletion(exchange)};
                 auto completion = context.spawn(
                     caravan::alpaka::withDevice(
                         device,
-                        caravan::asSender(caravan::whenAll(dependencies))
+                        caravan::whenAll(
+                            caravan::asSender(receivePrevious),
+                            caravan::asSender(buffer.receiveCompletion(exchange)))
                             | caravan::letValue([&field, exchange] { return receiveExchange(field, exchange); })));
                 buffer.setReceiveCompletion(exchange, completion);
                 receivePrevious = completion;
-                branches.push_back(std::move(completion));
+                branches.front() = std::move(completion);
             }
 
             if(buffer.hasSendExchange(exchange))
             {
-                std::array dependencies{previous, buffer.sendCompletion(exchange)};
                 auto completion = context.spawn(
                     caravan::alpaka::withDevice(
                         device,
-                        caravan::asSender(caravan::whenAll(dependencies))
+                        caravan::whenAll(
+                            caravan::asSender(previous),
+                            caravan::asSender(buffer.sendCompletion(exchange)))
                             | caravan::letValue([&field, exchange] { return sendExchange(field, exchange); })));
                 buffer.setSendCompletion(exchange, completion);
-                branches.push_back(std::move(completion));
+                branches[exchange] = std::move(completion);
             }
         }
         return caravan::whenAll(branches);
