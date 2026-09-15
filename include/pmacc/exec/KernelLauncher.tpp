@@ -91,9 +91,13 @@ namespace pmacc::exec::detail
             auto const elemExtent = math::Vector<IdxType, T_dim>::create(1).toAlpakaKernelVec();
             auto const workDiv
                 = ::alpaka::WorkDivMembers<::alpaka::DimInt<T_dim>, IdxType>(gridExtent, blockExtent, elemExtent);
-            ::alpaka::exec<Acc<T_dim>>(queue, workDiv, m_kernel, caravan::unwrap(args)...);
 #if defined(PMACC_SYNC_KERNEL) && PMACC_SYNC_KERNEL == 1
+            PMACC_CHECK_ALPAKA_CALL_MSG(
+                ::alpaka::exec<Acc<T_dim>>(queue, workDiv, m_kernel, caravan::unwrap(args)...),
+                "Crash during kernel launch " + kernelInfo);
             PMACC_CHECK_ALPAKA_CALL_MSG(::alpaka::wait(queue), "Crash after kernel call " + kernelInfo);
+#else
+            ::alpaka::exec<Acc<T_dim>>(queue, workDiv, m_kernel, caravan::unwrap(args)...);
 #endif
         }
 

@@ -275,9 +275,21 @@ TEST_CASE("blocking kernel diagnostics", "[lockstep]")
     std::ostringstream diagnostics;
     auto* const previousBuffer = std::cerr.rdbuf(diagnostics.rdbuf());
     auto const sourceLine = __LINE__ + 1u;
-    PMACC_LOCKSTEP_KERNEL(ThrowingKernel{}).config<1>(1u).enqueueNative(queue);
+    auto kernel = PMACC_LOCKSTEP_KERNEL(ThrowingKernel{}).config<1>(1u)(queue);
+    bool continuationRan = false;
+    bool failed = false;
+    try
+    {
+        caravan::syncWait(std::move(kernel) | caravan::then([&] { continuationRan = true; }));
+    }
+    catch(std::exception const&)
+    {
+        failed = true;
+    }
     std::cerr.rdbuf(previousBuffer);
 
+    CHECK(failed);
+    CHECK_FALSE(continuationRan);
     CHECK(diagnostics.str().find("Crash after kernel call") != std::string::npos);
     CHECK(diagnostics.str().find(std::string(__FILE__) + ":" + std::to_string(sourceLine)) != std::string::npos);
 }
