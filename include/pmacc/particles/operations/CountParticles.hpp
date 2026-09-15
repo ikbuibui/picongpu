@@ -143,7 +143,7 @@ namespace pmacc
                                  mapper,
                                  parFilter);
             auto copy = counter->deviceToHost();
-            return caravan::sequence(caravan::sequence(std::move(initialize), std::move(count)), std::move(copy))
+            return std::move(initialize) | caravan::sequence(std::move(count)) | caravan::sequence(std::move(copy))
                    | caravan::then([counter] { return *(counter->getHostBuffer().getDataBox()); });
         }
 

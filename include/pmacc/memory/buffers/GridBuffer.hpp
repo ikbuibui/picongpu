@@ -497,7 +497,7 @@ namespace pmacc
                     auto completion = context.spawn(
                         caravan::alpaka::withDevice(
                             Environment<>::get().DeviceContext(),
-                            caravan::sequence(caravan::asSender(receiveCompletions[i]), receive(i))));
+                            caravan::asSender(receiveCompletions[i]) | caravan::sequence(receive(i))));
                     receiveCompletions[i] = completion;
                     branches.push_back(std::move(completion));
                 }

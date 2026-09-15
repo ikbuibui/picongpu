@@ -73,9 +73,8 @@ namespace picongpu
                 caravan::syncWait(
                     caravan::alpaka::withDevice(
                         device,
-                        caravan::alpaka::sequence(
-                            caravan::alpaka::sequence(std::move(initialize), std::move(kernel)),
-                            std::move(copy))));
+                        std::move(initialize) | caravan::alpaka::sequence(std::move(kernel))
+                            | caravan::alpaka::sequence(std::move(copy))));
                 return hostBox(0);
             }
 

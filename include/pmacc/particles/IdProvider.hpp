@@ -102,7 +102,7 @@ namespace pmacc
             auto fetch = PMACC_LOCKSTEP_KERNEL(FetchId{}).template config<1>(
                 1)(getDeviceGenerator(), caravan::retain(deviceBuffer.data(), deviceBuffer.getOwnedAlpakaView()));
             auto copy = newIdBuffer->deviceToHost();
-            return caravan::sequence(std::move(fetch), std::move(copy))
+            return std::move(fetch) | caravan::sequence(std::move(copy))
                    | caravan::then([newIdBuffer] { return *newIdBuffer->getHostBuffer().data(); });
         }
 

@@ -21,9 +21,8 @@ namespace pmacc::fields
     {
         using SuperCellSize = typename T_Field::MappingDesc::SuperCellSize;
         auto& buffer = field.getGridBuffer();
-        return caravan::sequence(
-            buffer.receive(exchange),
-            operations::AddExchangeToBorder{}.sender(buffer, SuperCellSize{}, exchange));
+        return buffer.receive(exchange)
+               | caravan::sequence(operations::AddExchangeToBorder{}.sender(buffer, SuperCellSize{}, exchange));
     }
 
     /** Describe one lazy field pack/send branch. */
@@ -32,9 +31,8 @@ namespace pmacc::fields
     {
         using SuperCellSize = typename T_Field::MappingDesc::SuperCellSize;
         auto& buffer = field.getGridBuffer();
-        return caravan::sequence(
-            operations::CopyGuardToExchange{}.sender(buffer, SuperCellSize{}, exchange),
-            buffer.send(exchange));
+        return operations::CopyGuardToExchange{}.sender(buffer, SuperCellSize{}, exchange)
+               | caravan::sequence(buffer.send(exchange));
     }
 
     /** Eager runtime-sized adapter for additive guard-to-border field communication. */
@@ -55,11 +53,10 @@ namespace pmacc::fields
                 auto completion = context.spawn(
                     caravan::alpaka::withDevice(
                         device,
-                        caravan::sequence(
-                            caravan::whenAll(
-                                caravan::asSender(receivePrevious),
-                                caravan::asSender(buffer.receiveCompletion(exchange))),
-                            receiveExchange(field, exchange))));
+                        caravan::whenAll(
+                            caravan::asSender(receivePrevious),
+                            caravan::asSender(buffer.receiveCompletion(exchange)))
+                            | caravan::sequence(receiveExchange(field, exchange))));
                 buffer.setReceiveCompletion(exchange, completion);
                 receivePrevious = completion;
                 branches.front() = std::move(completion);
@@ -70,11 +67,10 @@ namespace pmacc::fields
                 auto completion = context.spawn(
                     caravan::alpaka::withDevice(
                         device,
-                        caravan::sequence(
-                            caravan::whenAll(
-                                caravan::asSender(previous),
-                                caravan::asSender(buffer.sendCompletion(exchange))),
-                            sendExchange(field, exchange))));
+                        caravan::whenAll(
+                            caravan::asSender(previous),
+                            caravan::asSender(buffer.sendCompletion(exchange)))
+                            | caravan::sequence(sendExchange(field, exchange))));
                 buffer.setSendCompletion(exchange, completion);
                 branches[exchange] = std::move(completion);
             }

@@ -163,9 +163,8 @@ namespace pmacc
 
         auto resetAsync()
         {
-            return caravan::sequence(
-                deleteParticlesInAreaAsync<CORE + BORDER + GUARD>(),
-                particlesBuffer->resetAsync());
+            return deleteParticlesInAreaAsync<CORE + BORDER + GUARD>()
+                   | caravan::sequence(particlesBuffer->resetAsync());
         }
 
     private:
