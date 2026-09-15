@@ -59,7 +59,6 @@
 
 #include <pmacc/assert.hpp>
 #include <pmacc/dimensions/GridLayout.hpp>
-#include <pmacc/fields/Communication.hpp>
 #include <pmacc/mappings/kernel/MappingDescription.hpp>
 #include <pmacc/mappings/simulation/GridController.hpp>
 #include <pmacc/mappings/simulation/SubGrid.hpp>
@@ -484,8 +483,8 @@ namespace picongpu
             // generate valid GUARDS (overwrite)
             eventSystem::getTransactionEvent().waitForFinished();
             std::array communications{
-                pmacc::fields::spawnCommunication(asyncContext, *fieldE),
-                pmacc::fields::spawnCommunication(asyncContext, *fieldB)};
+                fieldE->getGridBuffer().spawnCommunication(asyncContext),
+                fieldB->getGridBuffer().spawnCommunication(asyncContext)};
             asyncContext.wait(caravan::whenAll(communications));
 
             log<picLog::SIMULATION_STATE>("Starting simulation from timestep 0");

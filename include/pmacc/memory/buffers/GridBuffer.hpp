@@ -494,13 +494,13 @@ namespace pmacc
             {
                 if(hasReceiveExchange(i))
                 {
-                    auto completion = context.spawnFuture<typename Exchange<BORDERTYPE, DIM>::ReceiveMetadata>(
+                    auto completion = context.spawn(
                         caravan::alpaka::withDevice(
                             Environment<>::get().DeviceContext(),
                             caravan::asSender(receiveCompletions[i])
                                 | caravan::letValue([this, i] { return receive(i); })));
-                    receiveCompletions[i] = completion.event();
-                    branches.push_back(completion.event());
+                    receiveCompletions[i] = completion;
+                    branches.push_back(std::move(completion));
                 }
 
                 auto const sendEx = Mask::getMirroredExchangeType(i);
