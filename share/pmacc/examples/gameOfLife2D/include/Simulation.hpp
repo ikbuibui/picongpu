@@ -186,13 +186,12 @@ namespace gol
             /* Calls kernel to initialize random generator. Game of Life is then  *
              * initialized using uniform random numbers. With 10% (second arg)    *
              * white points. World will be written to buffer in first argument    */
-            auto initialization = caravan::alpaka::sequence(
-                caravan::alpaka::sequence(
-                    caravan::alpaka::fill(buff1->getDeviceBuffer().getOwnedAlpakaView(), 0u),
-                    caravan::alpaka::fill(buff2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
-                evo.initEvolution(buff1->getDeviceBuffer().getOwnedDataBox(), 0.1));
+            auto initialization
+                = caravan::alpaka::fill(buff1->getDeviceBuffer().getOwnedAlpakaView(), 0u)
+                  | caravan::alpaka::sequence(caravan::alpaka::fill(buff2->getDeviceBuffer().getOwnedAlpakaView(), 0u))
+                  | caravan::alpaka::sequence(evo.initEvolution(buff1->getDeviceBuffer().getOwnedDataBox(), 0.1));
             asyncContext.wait(asyncContext.spawn(
-                caravan::alpaka::withDevice(Environment<>::get().DeviceContext(), std::move(initialization))));
+                std::move(initialization) | caravan::alpaka::withDevice(Environment<>::get().DeviceContext())));
         }
 
         void start()
@@ -221,7 +220,7 @@ namespace gol
                                     write->getDeviceBuffer().getOwnedDataBox());
                             });
             asyncContext.wait(asyncContext.spawn(
-                caravan::alpaka::withDevice(Environment<>::get().DeviceContext(), std::move(step))));
+                std::move(step) | caravan::alpaka::withDevice(Environment<>::get().DeviceContext())));
 
             /* gather::operator() gathers all the buffers and assembles those to  *
              * a complete picture discarding the guards.                          */
@@ -241,7 +240,7 @@ namespace gol
                     view->getOwnedAlpakaView(),
                     localDataExtents.toAlpakaMemVec());
                 asyncContext.wait(asyncContext.spawn(
-                    caravan::alpaka::withDevice(Environment<>::get().DeviceContext(), std::move(copy))));
+                    std::move(copy) | caravan::alpaka::withDevice(Environment<>::get().DeviceContext())));
                 auto picture = gather->gatherSliceExplicit(
                     *dataWithoutGuard,
                     subGrid.getGlobalDomain().size,
