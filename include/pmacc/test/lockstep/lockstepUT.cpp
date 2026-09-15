@@ -322,9 +322,7 @@ TEST_CASE("lockstep kernel", "[iota]")
         context.wait(context.spawn(
             caravan::alpaka::withDevice(
                 device,
-                caravan::alpaka::sequence(
-                    caravan::alpaka::sequence(std::move(initialize), std::move(kernel)),
-                    std::move(copy)))));
+                caravan::sequence(caravan::sequence(std::move(initialize), std::move(kernel)), std::move(copy)))));
         validate(hostDeviceBuffer.getHostBuffer(), referenceBuffer);
     };
 

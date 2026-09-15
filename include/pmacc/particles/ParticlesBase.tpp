@@ -63,9 +63,7 @@ namespace pmacc
                             particlesBuffer->getDeviceParticleBox(),
                             stack.getDeviceExchangePushDataBox(),
                             mapper);
-        return caravan::alpaka::sequence(
-            caravan::alpaka::sequence(std::move(reset), std::move(copy)),
-            stack.publishDeviceSizes());
+        return caravan::sequence(caravan::sequence(std::move(reset), std::move(copy)), stack.publishDeviceSizes());
     }
 
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
