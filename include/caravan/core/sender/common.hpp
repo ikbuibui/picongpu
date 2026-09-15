@@ -66,6 +66,10 @@ namespace caravan
     {
     };
 
+    struct SequenceTag
+    {
+    };
+
     namespace detail
     {
         inline DefaultDomain commonDomain()

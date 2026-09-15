@@ -704,6 +704,63 @@ namespace
         valueScope.join().wait();
     }
 
+    void testSequence()
+    {
+        caravan::EventSource predecessor, successor;
+        bool started = false;
+        auto work = AsyncValueSender<std::unique_ptr<int>>{predecessor.event(), std::make_unique<int>(1)}
+                    | caravan::sequence(
+                        caravan::sequence(
+                            StartTrackingSender{&started},
+                            AsyncValueSender<std::unique_ptr<int>>{successor.event(), std::make_unique<int>(42)}));
+        static_assert(std::is_same_v<
+                      caravan::CompletionSignaturesOf<decltype(work)>,
+                      caravan::CompletionSignaturesOf<AsyncValueSender<std::unique_ptr<int>>>>);
+        assert(!started);
+        caravan::AsyncScope scope;
+        auto result = scope.spawnFuture<std::unique_ptr<int>>(std::move(work));
+        assert(!started);
+        predecessor.setReady();
+        assert(started && result.state() == caravan::CompletionState::pending);
+        successor.setReady();
+        assert(*std::move(result).takeResult() == 42);
+
+        // Join failure drains every branch and never starts the successor.
+        caravan::EventSource failed, pending;
+        started = false;
+        auto error = std::make_exception_ptr(std::runtime_error("sequence predecessor"));
+        auto failure = scope.spawn(
+            caravan::whenAll(caravan::asSender(failed.event()), caravan::asSender(pending.event()))
+            | caravan::sequence(StartTrackingSender{&started}));
+        failed.setFailed(error);
+        assert(failure.state() == caravan::CompletionState::pending && !started);
+        pending.setReady();
+        assert(failure.state() == caravan::CompletionState::failed && failure.error() == error && !started);
+
+        // Connecting the successor is deferred; connection errors use the error channel.
+        auto connectFailure
+            = scope.spawn(caravan::sequence(caravan::asSender(caravan::readyEvent()), ThrowingConnectSender{}));
+        assert(connectFailure.state() == caravan::CompletionState::failed);
+        try
+        {
+            connectFailure.wait();
+            assert(false);
+        }
+        catch(std::runtime_error const& failure)
+        {
+            assert(std::string_view{failure.what()} == "connect failed");
+        }
+        scope.join().wait();
+
+        int observations = 0, output = 0;
+        auto environmentWork
+            = caravan::sequence(EnvironmentSender{1, &observations}, EnvironmentSender{42, &observations});
+        auto operation = std::move(environmentWork).connect(EnvironmentReceiver{&output});
+        assert(observations == 10 && output == 0);
+        operation.start();
+        assert(observations == 20 && output == 42);
+    }
+
     void testRepeatUntil()
     {
         // A move-only factory owns iteration state. Completed children must be reclaimed before reuse.
@@ -1632,6 +1689,7 @@ int main()
     testEventSenderBridge();
     testSyncWait();
     testLetValue();
+    testSequence();
     testRepeatUntil();
     testTypedSenderVocabulary();
     testEagerSenderBridgesAndOperationLifetime();
