@@ -141,6 +141,12 @@ namespace pmacc
             return caravan::Retained{*view, *devBuffer};
         }
 
+        /** Data box retaining the underlying allocation for asynchronous operation state. */
+        auto getOwnedDataBox()
+        {
+            return caravan::retain(getDataBox(), getOwnedAlpakaView());
+        }
+
         /** Lazily fill every current element with a value. */
         auto setValueAsync(T_Type const& value)
         {
