@@ -72,7 +72,7 @@ inline auto createPng(
             view->getOwnedAlpakaView(),
             localDataExtents.toAlpakaMemVec());
         asyncContext.wait(asyncContext.spawn(
-            caravan::alpaka::withDevice(pmacc::Environment<>::get().DeviceContext(), std::move(copy))));
+            std::move(copy) | caravan::alpaka::withDevice(pmacc::Environment<>::get().DeviceContext())));
         auto picture = gather->gatherSliceExplicit(
             *dataWithoutGuard,
             subGrid.getGlobalDomain().size,
@@ -147,29 +147,27 @@ auto run(caravan::MpiContext& mpi) -> int
 
     auto boundaryKernel
         = PMACC_LOCKSTEP_KERNEL(SetBoundaryConditions{}).config(borderMapper.getGridDim(), SuperCell{});
-    auto initialValues = caravan::alpaka::sequence(
-        caravan::alpaka::sequence(
-            caravan::alpaka::fill(buff1->getDeviceBuffer().getOwnedAlpakaView(), 0u),
-            caravan::alpaka::fill(buff2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
-        caravan::alpaka::fill(residualBuffer->getDeviceBuffer().getOwnedAlpakaView(), 0u));
-    auto initialBoundaries = caravan::alpaka::sequence(
-        caravan::alpaka::sequence(
-            std::move(initialValues),
-            boundaryKernel(
-                buff1->getDeviceBuffer().getOwnedDataBox(),
-                NUM_DEVICES_PER_DIM,
-                gc.getPosition(),
-                subGrid.getLocalDomain().offset,
-                gridSize,
-                borderMapper)),
-        boundaryKernel(
-            buff2->getDeviceBuffer().getOwnedDataBox(),
-            NUM_DEVICES_PER_DIM,
-            gc.getPosition(),
-            subGrid.getLocalDomain().offset,
-            gridSize,
-            borderMapper));
-    asyncContext.wait(asyncContext.spawn(caravan::alpaka::withDevice(device, std::move(initialBoundaries))));
+    auto initialValues
+        = caravan::alpaka::fill(buff1->getDeviceBuffer().getOwnedAlpakaView(), 0u)
+          | caravan::alpaka::sequence(caravan::alpaka::fill(buff2->getDeviceBuffer().getOwnedAlpakaView(), 0u))
+          | caravan::alpaka::sequence(
+              caravan::alpaka::fill(residualBuffer->getDeviceBuffer().getOwnedAlpakaView(), 0u));
+    auto initialBoundaries = std::move(initialValues)
+                             | caravan::alpaka::sequence(boundaryKernel(
+                                 buff1->getDeviceBuffer().getOwnedDataBox(),
+                                 NUM_DEVICES_PER_DIM,
+                                 gc.getPosition(),
+                                 subGrid.getLocalDomain().offset,
+                                 gridSize,
+                                 borderMapper))
+                             | caravan::alpaka::sequence(boundaryKernel(
+                                 buff2->getDeviceBuffer().getOwnedDataBox(),
+                                 NUM_DEVICES_PER_DIM,
+                                 gc.getPosition(),
+                                 subGrid.getLocalDomain().offset,
+                                 gridSize,
+                                 borderMapper));
+    asyncContext.wait(asyncContext.spawn(std::move(initialBoundaries) | caravan::alpaka::withDevice(device)));
 
     auto gather = std::make_unique<pmacc::mpi::GatherSlice>();
     createPng(0u, gather, buff1, asyncContext);
@@ -218,11 +216,9 @@ auto run(caravan::MpiContext& mpi) -> int
                           residualView,
                           pmacc::DataSpace<DIM1>::create(1).toAlpakaMemVec());
                       auto resetResidual = caravan::alpaka::fill(std::move(residualView), 0u);
-                      return caravan::alpaka::sequence(
-                          caravan::alpaka::sequence(
-                              caravan::alpaka::sequence(std::move(boundary), std::move(border)),
-                              std::move(copyResidual)),
-                          std::move(resetResidual));
+                      return std::move(boundary) | caravan::alpaka::sequence(std::move(border))
+                             | caravan::alpaka::sequence(std::move(copyResidual))
+                             | caravan::alpaka::sequence(std::move(resetResidual));
                   });
         auto step = asyncContext.onControl(std::move(deviceStep))
                     | caravan::letValue(
@@ -240,7 +236,7 @@ auto run(caravan::MpiContext& mpi) -> int
                                 caravan::ReduceOperation::sum,
                                 caravan::Peer{0});
                         });
-        asyncContext.wait(asyncContext.spawn(caravan::alpaka::withDevice(device, std::move(step))));
+        asyncContext.wait(asyncContext.spawn(std::move(step) | caravan::alpaka::withDevice(device)));
 
         std::swap(buff1, buff2);
         createPng(i + 1u, gather, buff1, asyncContext);
