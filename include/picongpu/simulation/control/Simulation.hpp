@@ -514,7 +514,12 @@ namespace picongpu
             eventSystem::setTransactionEvent(commEvent);
             (*currentBackground)(currentStep);
             CurrentDeposition{}(currentStep);
-            (*currentInterpolationAndAdditionToEMF)(currentStep, *myFieldSolver);
+            // Bridge the remaining legacy current producers into the Caravan graph.
+            eventSystem::getTransactionEvent().waitForFinished();
+            auto currentAdded
+                = (*currentInterpolationAndAdditionToEMF)(asyncContext, caravan::readyEvent(), *myFieldSolver);
+            // The following field-solver stage still has a synchronous signature.
+            asyncContext.wait(currentAdded);
             myFieldSolver->update_afterCurrent(currentStep);
         }
 

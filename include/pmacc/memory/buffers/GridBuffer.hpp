@@ -485,11 +485,15 @@ namespace pmacc
             return receiveExchanges[exchange]->receive();
         }
 
-        /** Eager runtime-sized boundary for dynamically selected exchange directions. */
-        caravan::Event spawnCommunication(caravan::ControlContext& context)
+        /** Eager runtime-sized boundary for dynamically selected exchange directions.
+         *
+         * The returned event includes previous, even when this rank has no active exchanges.
+         */
+        caravan::Event spawnCommunication(caravan::ControlContext& context, caravan::Event previous = {})
         {
             std::vector<caravan::Event> branches;
-            branches.reserve(maxExchange * 2u);
+            branches.reserve(maxExchange * 2u + 1u);
+            branches.push_back(previous);
             for(uint32_t i = 0; i < maxExchange; ++i)
             {
                 if(hasReceiveExchange(i))
@@ -497,7 +501,8 @@ namespace pmacc
                     auto completion = context.spawn(
                         caravan::alpaka::withDevice(
                             Environment<>::get().DeviceContext(),
-                            caravan::asSender(receiveCompletions[i]) | caravan::sequence(receive(i))));
+                            caravan::whenAll(caravan::asSender(previous), caravan::asSender(receiveCompletions[i]))
+                                | caravan::sequence(receive(i))));
                     receiveCompletions[i] = completion;
                     branches.push_back(std::move(completion));
                 }
@@ -506,7 +511,10 @@ namespace pmacc
                 if(hasSendExchange(sendEx))
                 {
                     auto completion = context.spawn(
-                        caravan::alpaka::withDevice(Environment<>::get().DeviceContext(), send(sendEx)));
+                        caravan::alpaka::withDevice(
+                            Environment<>::get().DeviceContext(),
+                            caravan::whenAll(caravan::asSender(previous), caravan::asSender(sendCompletions[sendEx]))
+                                | caravan::sequence(send(sendEx))));
                     sendCompletions[sendEx] = completion;
                     branches.push_back(std::move(completion));
                 }

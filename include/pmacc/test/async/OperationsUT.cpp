@@ -259,10 +259,23 @@ TEST_CASE("Field communication preserves overwrite and additive semantics", "[as
     }
 }
 
-TEST_CASE("Field communication without exchanges does not wait for previous work", "[async][fields]")
+TEST_CASE("Field communication without exchanges preserves previous work", "[async][fields]")
 {
+    bool additive = false;
+    SECTION("overwrite")
+    {
+    }
+    SECTION("additive")
+    {
+        additive = true;
+    }
+
     MockField field;
     caravan::ControlContext context;
     caravan::EventSource previous;
-    CHECK(pmacc::fields::spawnCommunication(context, field, previous.event()).isReady());
+    auto communication = additive ? pmacc::fields::spawnCommunication(context, field, previous.event())
+                                  : field.buffer.spawnCommunication(context, previous.event());
+    CHECK_FALSE(communication.isReady());
+    previous.setReady();
+    context.wait(communication);
 }

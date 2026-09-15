@@ -35,7 +35,10 @@ namespace pmacc::fields
                | caravan::sequence(buffer.send(exchange));
     }
 
-    /** Eager runtime-sized adapter for additive guard-to-border field communication. */
+    /** Eager runtime-sized adapter for additive guard-to-border field communication.
+     *
+     * The returned event includes previous, even when this rank has no active exchanges.
+     */
     template<typename T_Field>
     caravan::Event spawnCommunication(caravan::ControlContext& context, T_Field& field, caravan::Event previous = {})
     {
@@ -43,6 +46,7 @@ namespace pmacc::fields
         auto& device = Environment<>::get().DeviceContext();
         // Keep only the tail of the ordered receives, plus the independent sends.
         std::array<caravan::Event, traits::NumberOfExchanges<T_Field::dim>::value> branches{};
+        branches.front() = previous;
         auto receivePrevious = previous;
 
         for(uint32_t exchange = 1u; exchange < traits::NumberOfExchanges<T_Field::dim>::value; ++exchange)
