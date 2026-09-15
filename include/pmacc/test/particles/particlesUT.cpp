@@ -31,6 +31,7 @@
 
 #include <exception>
 #include <stdexcept>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -123,14 +124,19 @@ namespace
 
         auto sendParticles(uint32_t)
         {
-            return caravan::alpaka::submit(
+            auto sent = caravan::alpaka::submit(
                 [this](auto&)
                 {
                     if(failure == FailurePoint::sendInitiation)
                         throw std::runtime_error("injected particle send initiation failure");
                     if(failure == FailurePoint::sendCompletion)
                         throw std::runtime_error("injected particle send completion failure");
+                    sentChunks.push_back(sendSize);
                 });
+            // Particle data and frame indices each produce MPI send metadata.
+            return caravan::whenAll(
+                std::move(sent) | caravan::then([] { return caravan::SendResult{0u}; }),
+                caravan::InlineScheduler{}.schedule() | caravan::then([] { return caravan::SendResult{0u}; }));
         }
 
         auto receiveParticles(uint32_t)
@@ -146,8 +152,9 @@ namespace
                 });
         }
 
-        std::array<size_t, 2u> sendChunks{2u, 1u};
-        std::array<size_t, 2u> receiveChunks{2u, 1u};
+        std::vector<size_t> sendChunks{2u, 1u};
+        std::vector<size_t> receiveChunks{2u, 1u};
+        std::vector<size_t> sentChunks;
         size_t sendChunk = 0u;
         size_t receiveChunk = 0u;
         size_t sendSize = 0u;
@@ -190,6 +197,7 @@ namespace
             if(buffer.failure == FailurePoint::insertion)
                 return caravan::asSender(failedEvent());
             inserted += count;
+            insertedChunks.push_back(count);
             return caravan::asSender(caravan::readyEvent());
         }
 
@@ -200,6 +208,7 @@ namespace
 
         MockParticlesBuffer buffer;
         size_t inserted = 0u;
+        std::vector<size_t> insertedChunks;
         bool gapsFilled = false;
     };
 } // namespace
@@ -225,6 +234,8 @@ TEST_CASE("Particle communication handles exact and partial chunks", "[particles
     CHECK(particles.buffer.sendChunk == 2u);
     CHECK(particles.buffer.receiveChunk == 2u);
     CHECK(particles.inserted == 3u);
+    CHECK(particles.buffer.sentChunks == std::vector<size_t>{2u, 1u});
+    CHECK(particles.insertedChunks == std::vector<size_t>{2u, 1u});
     CHECK(particles.gapsFilled);
 }
 
@@ -238,7 +249,28 @@ TEST_CASE("Particle communication handles empty chunks", "[particles][async]")
     CHECK(particles.buffer.sendChunk == 1u);
     CHECK(particles.buffer.receiveChunk == 1u);
     CHECK(particles.inserted == 0u);
+    CHECK(particles.buffer.sentChunks == std::vector<size_t>{0u});
+    CHECK(particles.insertedChunks.empty());
     CHECK(particles.gapsFilled);
+}
+
+TEST_CASE("Full particle chunks require an empty terminator", "[particles][async]")
+{
+    for(size_t fullChunks : {1u, 32u})
+    {
+        caravan::ControlContext context;
+        MockParticles particles;
+        particles.buffer.sendChunks.assign(fullChunks, 2u);
+        particles.buffer.sendChunks.push_back(0u);
+        particles.buffer.receiveChunks = particles.buffer.sendChunks;
+        context.wait(pmacc::particles::spawnCommunication(context, particles));
+        CHECK(particles.buffer.sendChunk == fullChunks + 1u);
+        CHECK(particles.buffer.receiveChunk == fullChunks + 1u);
+        CHECK(particles.buffer.sentChunks == particles.buffer.sendChunks);
+        CHECK(particles.insertedChunks == std::vector<size_t>(fullChunks, 2u));
+        CHECK(particles.inserted == fullChunks * 2u);
+        CHECK(particles.gapsFilled);
+    }
 }
 
 TEST_CASE("Particle communication forwards callback failures", "[particles][async]")
