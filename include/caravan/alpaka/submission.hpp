@@ -290,6 +290,13 @@ namespace caravan::alpaka
     template<typename T_Queue>
     struct SubmissionDomain
     {
+        template<typename... T_Left, typename... T_Right>
+        auto transform(SequenceTag, SubmitSender<T_Queue, T_Left...> left, SubmitSender<T_Queue, T_Right...> right)
+            const
+        {
+            return std::move(left).template compose<true>(std::move(right));
+        }
+
         template<typename... T_Submits>
         auto transform(WhenAllTag, SubmitSender<T_Queue, T_Submits...> sender) const
         {
@@ -327,7 +334,8 @@ namespace caravan::alpaka
     template<typename T_Queue, typename... T_Submits>
     auto sequence(SubmitSender<T_Queue, T_Submits...> next)
     {
-        return caravan::detail::SenderAdaptorClosure{[next = std::move(next)](auto previous) mutable
-                                                     { return sequence(std::move(previous), std::move(next)); }};
+        return caravan::detail::SenderAdaptorClosure{
+            [next = std::move(next)](auto previous) mutable
+            { return caravan::alpaka::sequence(std::move(previous), std::move(next)); }};
     }
 } // namespace caravan::alpaka

@@ -117,33 +117,25 @@ int main(int argc, char** argv)
                     values[index] = seed + static_cast<int>(index);
                 });
         };
-        auto work = caravan::alpaka::enqueue([&] { seed = 42; })
-                    | caravan::alpaka::sequence(
-                        caravan::whenAll(
-                            branch(0u),
-                            branch(1u) | caravan::alpaka::sequence(caravan::whenAll(branch(2u), branch(3u)))))
-                    | caravan::alpaka::sequence(
-                        caravan::alpaka::enqueue([&] { assert((values == std::array{42, 43, 44, 45})); }));
+        auto work
+            = caravan::alpaka::enqueue([&] { seed = 42; })
+              | caravan::sequence(
+                  caravan::whenAll(
+                      branch(0u),
+                      branch(1u) | caravan::alpaka::sequence(caravan::whenAll(branch(2u), branch(3u)))))
+              | caravan::sequence(caravan::alpaka::enqueue([&] { assert((values == std::array{42, 43, 44, 45})); }));
         static_assert(caravan::Sender<decltype(work)>);
+        static_assert(std::is_same_v<decltype(caravan::getDomain(work)), caravan::alpaka::ManagedSubmissionDomain>);
         caravan::syncWait(caravan::alpaka::withDevice(pool, std::move(work)));
 
         int stage = 0;
         caravan::syncWait(
             caravan::alpaka::withDevice(
                 pool,
-                caravan::alpaka::enqueue([&] { stage = 1; })
-                    | caravan::letValue(
-                        [&]
-                        {
-                            assert(stage == 1);
-                            return caravan::alpaka::enqueue([&] { stage = 2; });
-                        })
-                    | caravan::letValue(
-                        [&]
-                        {
-                            assert(stage == 2);
-                            return caravan::alpaka::enqueue([&] { stage = 3; });
-                        })));
+                caravan::alpaka::enqueue([&] { stage = 1; }) | caravan::then([&] { assert(stage == 1); })
+                    | caravan::sequence(caravan::alpaka::enqueue([&] { stage = 2; }))
+                    | caravan::then([&] { assert(stage == 2); })
+                    | caravan::sequence(caravan::alpaka::enqueue([&] { stage = 3; }))));
         assert(stage == 3);
 
         auto failed = scope.spawn(
@@ -177,6 +169,19 @@ int main(int argc, char** argv)
         busy.join();
     }
 
+    // Pool-bound senders use the same native dispatch and retain queue affinity.
+    {
+        caravan::alpaka::QueuePool<Queue> pool{device};
+        auto submissions = pool.submissions();
+        int value = 0;
+        auto work = caravan::sequence(
+            submissions.submit([&](Queue& q) { alpaka::enqueue(q, [&] { value = 42; }); }),
+            submissions.submit([&](Queue& q) { alpaka::enqueue(q, [&] { assert(value == 42); }); }));
+        static_assert(
+            std::is_same_v<decltype(caravan::getDomain(work)), caravan::alpaka::PooledSubmissionDomain<Queue>>);
+        caravan::syncWait(std::move(work));
+    }
+
     // Independently bound contexts join through ordinary sender composition.
     {
         caravan::alpaka::QueuePool<Queue> firstPool{device}, secondPool{device};
@@ -201,7 +206,7 @@ int main(int argc, char** argv)
         static_assert(
             std::is_same_v<decltype(caravan::getDomain(seedWork)), caravan::alpaka::SubmissionDomain<Queue>>);
         auto work = std::move(seedWork)
-                    | caravan::alpaka::sequence(
+                    | caravan::sequence(
                         caravan::whenAll(
                             caravan::alpaka::submit(
                                 queue,
@@ -230,7 +235,7 @@ int main(int argc, char** argv)
                                             });
                                     }),
                                 caravan::alpaka::submit(blockerQueue, [](Queue&) {}))))
-                    | caravan::alpaka::sequence(
+                    | caravan::sequence(
                         caravan::alpaka::submit(
                             queue,
                             [&, owner = std::make_unique<int>(42)](Queue& q)
@@ -254,18 +259,30 @@ int main(int argc, char** argv)
         assert(hostCompleted);
     }
 
-    // A mixed join uses letValue to start the next submission after host completion.
+    // A mixed join falls back to host completion, waiting for both native work and the event.
+    for(bool fail : {false, true})
     {
         caravan::EventSource release;
+        std::promise<void> nativeRelease;
+        auto gate = nativeRelease.get_future().share();
         std::atomic<bool> submitted = false;
         auto done = scope.spawn(
-            caravan::whenAll(caravan::alpaka::submit(queue, [](Queue&) {}), caravan::asSender(release.event()))
-            | caravan::letValue([&]
-                                { return caravan::alpaka::submit(secondQueue, [&](Queue&) { submitted = true; }); }));
+            caravan::whenAll(
+                caravan::alpaka::submit(queue, [gate](Queue& q) { alpaka::enqueue(q, [gate] { gate.wait(); }); }),
+                caravan::asSender(release.event()))
+            | caravan::sequence(caravan::alpaka::submit(secondQueue, [&](Queue&) { submitted = true; })));
         assert(!submitted);
-        release.setReady();
-        done.wait();
-        assert(submitted);
+        if(fail)
+            release.setFailed(std::make_exception_ptr(std::runtime_error("mixed join")));
+        else
+            release.setReady();
+        assert(!submitted && done.state() == caravan::CompletionState::pending);
+        nativeRelease.set_value();
+        if(fail)
+            expectFailed(done);
+        else
+            done.wait();
+        assert(submitted == !fail);
     }
 
     // Neither an ordinary host callback nor explicit placement can be fused away.
@@ -276,8 +293,7 @@ int main(int argc, char** argv)
         auto done = scope.spawn(
             caravan::alpaka::submit(queue, [gate](Queue& q) { alpaka::enqueue(q, [gate] { gate.wait(); }); })
             | caravan::then([] { assert(caravan::isExecutorThread()); })
-            | caravan::letValue([&]
-                                { return caravan::alpaka::submit(secondQueue, [&](Queue&) { submitted = true; }); }));
+            | caravan::sequence(caravan::alpaka::submit(secondQueue, [&](Queue&) { submitted = true; })));
         assert(!submitted);
         release.set_value();
         done.wait();
@@ -287,8 +303,7 @@ int main(int argc, char** argv)
         caravan::RunLoop loop;
         auto placed = scope.spawn(
             caravan::alpaka::submit(queue, [](Queue&) {}) | caravan::continuesOn(loop.scheduler())
-            | caravan::letValue([&]
-                                { return caravan::alpaka::submit(secondQueue, [&](Queue&) { submitted = true; }); }));
+            | caravan::sequence(caravan::alpaka::submit(secondQueue, [&](Queue&) { submitted = true; })));
         assert(!submitted);
         while(placed.state() == caravan::CompletionState::pending)
         {
