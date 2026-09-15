@@ -704,6 +704,123 @@ namespace
         valueScope.join().wait();
     }
 
+    void testRepeatUntil()
+    {
+        // A move-only factory owns iteration state. Completed children must be reclaimed before reuse.
+        bool destroyed = true;
+        unsigned calls = 0u;
+        unsigned depth = 0u;
+        unsigned maxDepth = 0u;
+        auto sender = caravan::repeatUntil(
+            [&, count = std::make_unique<unsigned>(0u)]
+            {
+                assert(destroyed);
+                destroyed = false;
+                ++calls;
+                return caravan::whenAll(
+                           ScopeOperationTrackingSender{&destroyed},
+                           RecursionTrackingScheduler{&depth, &maxDepth}.schedule())
+                       | caravan::then([value = count.get()] { return ++*value == 100000u; });
+            });
+        static_assert(caravan::SenderTo<decltype(sender), EventReceiver>);
+        assert(calls == 0u);
+        caravan::AsyncScope scope;
+        auto result = scope.spawn(std::move(sender)); // Terminal completion destroys the loop inline.
+        scope.join().wait();
+        assert(result.isReady() && calls == 100000u && destroyed && maxDepth == 1u && depth == 0u);
+
+        bool value = false;
+        std::exception_ptr error;
+        int observations = 0;
+        unsigned iterations = 0u;
+        QueryEnvironment environment;
+        auto work = caravan::startsOn(
+            TaggedScheduler{1},
+            caravan::repeatUntil(
+                [&] { return QuerySender{1, &observations} | caravan::then([&] { return ++iterations == 3u; }); }));
+        auto operation = std::move(work).connect(QueryReceiver{{&value, &error}, &environment});
+        assert(iterations == 0u && observations == 0);
+        operation.start();
+        assert(value && !error && iterations == 3u && observations == 6);
+
+        for(unsigned failureAt : {1u, 3u})
+        {
+            unsigned attempts = 0u;
+            auto failing = caravan::repeatUntil(
+                [&]
+                {
+                    if(++attempts == failureAt)
+                        throw std::runtime_error("repeat factory");
+                    return caravan::InlineScheduler{}.schedule() | caravan::then([] { return false; });
+                });
+            try
+            {
+                caravan::syncWait(std::move(failing));
+                assert(false);
+            }
+            catch(std::runtime_error const& failure)
+            {
+                assert(std::string_view{failure.what()} == "repeat factory" && attempts == failureAt);
+            }
+        }
+
+        try
+        {
+            caravan::syncWait(
+                caravan::repeatUntil([] { return ThrowingConnectSender{} | caravan::then([] { return true; }); }));
+            assert(false);
+        }
+        catch(std::runtime_error const& failure)
+        {
+            assert(std::string_view{failure.what()} == "connect failed");
+        }
+
+        for(bool asynchronous : {false, true})
+        {
+            caravan::EventSource failed;
+            auto expected = std::make_exception_ptr(std::runtime_error("repeat child"));
+            if(!asynchronous)
+                failed.setFailed(expected);
+            unsigned attempts = 0u;
+            caravan::AsyncScope failureScope;
+            auto failure = failureScope.spawn(
+                caravan::repeatUntil(
+                    [&]
+                    {
+                        return caravan::asSender(++attempts == 1u ? caravan::readyEvent() : failed.event())
+                               | caravan::then([] { return false; });
+                    }));
+            if(asynchronous)
+            {
+                assert(failure.state() == caravan::CompletionState::pending && attempts == 2u);
+                failed.setFailed(expected);
+            }
+            failureScope.join().wait();
+            assert(failure.state() == caravan::CompletionState::failed && failure.error() == expected);
+            assert(attempts == 2u);
+        }
+
+        // Alternate completion threads so completion can race with start() returning on the other thread.
+        std::array<caravan::RunLoop, 2u> loops;
+        std::thread first([&] { loops[0].run(); });
+        std::thread second([&] { loops[1].run(); });
+        unsigned steps = 0u;
+        caravan::AsyncScope threadedScope;
+        auto threaded = threadedScope.spawn(
+            caravan::repeatUntil(
+                [&]
+                {
+                    auto const step = ++steps;
+                    return loops[step % 2u].scheduler().schedule() | caravan::then([step] { return step == 10000u; });
+                }));
+        threadedScope.join().wait();
+        loops[0].finish();
+        loops[1].finish();
+        first.join();
+        second.join();
+        assert(threaded.isReady() && steps == 10000u);
+    }
+
     void testTypedSenderVocabulary()
     {
         static_assert(!caravan::Sender<UnsupportedMultiValueSender>);
@@ -1515,6 +1632,7 @@ int main()
     testEventSenderBridge();
     testSyncWait();
     testLetValue();
+    testRepeatUntil();
     testTypedSenderVocabulary();
     testEagerSenderBridgesAndOperationLifetime();
     testContinuesOnRunLoop();

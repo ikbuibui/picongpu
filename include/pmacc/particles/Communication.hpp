@@ -12,7 +12,7 @@
 #include <array>
 #include <exception>
 #include <iostream>
-#include <list>
+#include <optional>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -23,419 +23,130 @@ namespace pmacc::particles
 {
     namespace detail
     {
-        template<typename T_Particles, typename T_Receiver>
-        class SendChunksOperation
+        /** Skip empty chunks without constructing or launching a zero-sized insertion kernel. */
+        template<typename T_Particles>
+        struct InsertNonEmptySender
         {
-            struct PackReceiver
+            using completion_signatures = caravan::
+                CompletionSignatures<caravan::ValueSignature<>, caravan::ErrorSignature<std::exception_ptr>>;
+
+            template<typename T_Receiver>
+            class Operation
             {
-                template<typename... T>
-                void set_value(T&&...) noexcept
-                {
-                    owner->afterPack();
-                }
+                using InsertSender = decltype(std::declval<T_Particles&>().insertParticlesAsync(
+                    std::declval<uint32_t>(),
+                    std::declval<size_t>()));
 
-                void set_error(std::exception_ptr error) noexcept
-                {
-                    owner->fail(std::move(error));
-                }
-
-                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
-                    requires requires(T_Receiver const& output) { output.get_env(); }
-                {
-                    return std::as_const(owner->receiver).get_env();
-                }
-
-                SendChunksOperation* owner;
-            };
-
-            struct SendReceiver
-            {
-                template<typename... T>
-                void set_value(T&&...) noexcept
-                {
-                    owner->afterSend();
-                }
-
-                void set_error(std::exception_ptr error) noexcept
-                {
-                    owner->fail(std::move(error));
-                }
-
-                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
-                    requires requires(T_Receiver const& output) { output.get_env(); }
-                {
-                    return std::as_const(owner->receiver).get_env();
-                }
-
-                SendChunksOperation* owner;
-            };
-
-            using PackSender
-                = decltype(std::declval<T_Particles&>().copyGuardToExchangeAsync(std::declval<uint32_t>()));
-            using SendSender
-                = decltype(std::declval<T_Particles&>().getParticlesBuffer().sendParticles(std::declval<uint32_t>()));
-
-            class PackOperation
-            {
             public:
-                PackOperation(PackSender sender, SendChunksOperation* owner)
-                    : operation(std::move(sender).connect(PackReceiver{owner}))
+                Operation(InsertNonEmptySender sender, T_Receiver receiver)
+                    : m_sender(sender)
+                    , m_receiver(std::move(receiver))
                 {
                 }
 
-                void start() noexcept
+                Operation(Operation const&) = delete;
+                Operation& operator=(Operation const&) = delete;
+                Operation(Operation&&) = delete;
+                Operation& operator=(Operation&&) = delete;
+
+                void start() & noexcept
                 {
-                    operation.start();
-                }
-
-            private:
-                decltype(std::declval<PackSender&&>().connect(std::declval<PackReceiver>())) operation;
-            };
-
-            class SendOperation
-            {
-            public:
-                SendOperation(SendSender sender, SendChunksOperation* owner)
-                    : operation(std::move(sender).connect(SendReceiver{owner}))
-                {
-                }
-
-                void start() noexcept
-                {
-                    operation.start();
-                }
-
-            private:
-                decltype(std::declval<SendSender&&>().connect(std::declval<SendReceiver>())) operation;
-            };
-
-        public:
-            SendChunksOperation(T_Particles& particles, uint32_t exchange, T_Receiver receiver)
-                : particles(particles)
-                , exchange(exchange)
-                , receiver(std::move(receiver))
-            {
-            }
-
-            SendChunksOperation(SendChunksOperation const&) = delete;
-            SendChunksOperation& operator=(SendChunksOperation const&) = delete;
-            SendChunksOperation(SendChunksOperation&&) = delete;
-            SendChunksOperation& operator=(SendChunksOperation&&) = delete;
-
-            void start() & noexcept
-            {
-                try
-                {
-                    maxSize = particles.getParticlesBuffer().getSendExchangeStack(exchange).getMaxParticlesCount();
-                    startPack();
-                }
-                catch(...)
-                {
-                    fail(std::current_exception());
-                }
-            }
-
-        private:
-            void startPack()
-            {
-                packs.emplace_back(particles.copyGuardToExchangeAsync(exchange), this);
-                packs.back().start();
-            }
-
-            void afterPack() noexcept
-            {
-                try
-                {
-                    lastSize = particles.getParticlesBuffer()
-                                   .getSendExchangeStack(exchange)
-                                   .getDeviceParticlesCurrentSize();
-                    PMACC_ASSERT(lastSize <= maxSize);
-                    sends.emplace_back(particles.getParticlesBuffer().sendParticles(exchange), this);
-                    sends.back().start();
-                }
-                catch(...)
-                {
-                    fail(std::current_exception());
-                }
-            }
-
-            void afterSend() noexcept
-            {
-                try
-                {
-                    if(lastSize == maxSize)
+                    if(m_sender.count == 0u)
                     {
-                        ++retries;
-                        startPack();
+                        m_receiver.set_value();
                         return;
                     }
-                    if(retries != 0u)
-                        std::cerr << "Performance warning: send/receive buffer for species "
-                                  << T_Particles::FrameType::getName() << " is too small (max: " << maxSize
-                                  << ", direction: " << exchange << " '" << ExchangeTypeNames{}[exchange]
-                                  << "', retries: " << retries
-                                  << "). To remove this warning consider increasing BYTES_EXCHANGE_{X,Y,Z} in "
-                                     "memory.param"
-                                  << std::endl;
-                    receiver.set_value();
+                    try
+                    {
+                        m_insert.emplace(
+                            m_sender.particles.insertParticlesAsync(m_sender.exchange, m_sender.count),
+                            m_receiver);
+                        m_insert->start();
+                    }
+                    catch(...)
+                    {
+                        m_receiver.set_error(std::current_exception());
+                    }
                 }
-                catch(...)
-                {
-                    fail(std::current_exception());
-                }
-            }
 
-            void fail(std::exception_ptr error) noexcept
+            private:
+                InsertNonEmptySender m_sender;
+                T_Receiver m_receiver;
+                std::optional<caravan::detail::ConnectedOperation<InsertSender, T_Receiver>> m_insert;
+            };
+
+            template<typename T_Receiver>
+            auto connect(T_Receiver&& receiver) &&
             {
-                receiver.set_error(std::move(error));
+                return Operation<std::decay_t<T_Receiver>>{*this, std::forward<T_Receiver>(receiver)};
             }
 
             T_Particles& particles;
             uint32_t exchange;
-            T_Receiver receiver;
-            size_t maxSize = 0u;
-            size_t lastSize = 0u;
-            size_t retries = 0u;
-            // retain stage states for synchronous completion; reuse slots if P1 shows this allocation
-            // matters.
-            std::list<PackOperation> packs;
-            std::list<SendOperation> sends;
-        };
-
-        template<typename T_Particles, typename T_Receiver>
-        class ReceiveChunksOperation
-        {
-            struct ReceiveReceiver
-            {
-                template<typename... T>
-                void set_value(T&&...) noexcept
-                {
-                    owner->afterReceive();
-                }
-
-                void set_error(std::exception_ptr error) noexcept
-                {
-                    owner->fail(std::move(error));
-                }
-
-                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
-                    requires requires(T_Receiver const& output) { output.get_env(); }
-                {
-                    return std::as_const(owner->receiver).get_env();
-                }
-
-                ReceiveChunksOperation* owner;
-            };
-
-            struct InsertReceiver
-            {
-                template<typename... T>
-                void set_value(T&&...) noexcept
-                {
-                    owner->afterInsert();
-                }
-
-                void set_error(std::exception_ptr error) noexcept
-                {
-                    owner->fail(std::move(error));
-                }
-
-                decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
-                    requires requires(T_Receiver const& output) { output.get_env(); }
-                {
-                    return std::as_const(owner->receiver).get_env();
-                }
-
-                ReceiveChunksOperation* owner;
-            };
-
-            using ReceiveSender = decltype(std::declval<T_Particles&>().getParticlesBuffer().receiveParticles(
-                std::declval<uint32_t>()));
-            using InsertSender = decltype(std::declval<T_Particles&>().insertParticlesAsync(
-                std::declval<uint32_t>(),
-                std::declval<size_t>()));
-
-            class ReceiveOperation
-            {
-            public:
-                ReceiveOperation(ReceiveSender sender, ReceiveChunksOperation* owner)
-                    : operation(std::move(sender).connect(ReceiveReceiver{owner}))
-                {
-                }
-
-                void start() noexcept
-                {
-                    operation.start();
-                }
-
-            private:
-                decltype(std::declval<ReceiveSender&&>().connect(std::declval<ReceiveReceiver>())) operation;
-            };
-
-            class InsertOperation
-            {
-            public:
-                InsertOperation(InsertSender sender, ReceiveChunksOperation* owner)
-                    : operation(std::move(sender).connect(InsertReceiver{owner}))
-                {
-                }
-
-                void start() noexcept
-                {
-                    operation.start();
-                }
-
-            private:
-                decltype(std::declval<InsertSender&&>().connect(std::declval<InsertReceiver>())) operation;
-            };
-
-        public:
-            ReceiveChunksOperation(T_Particles& particles, uint32_t exchange, T_Receiver receiver)
-                : particles(particles)
-                , exchange(exchange)
-                , receiver(std::move(receiver))
-            {
-            }
-
-            ReceiveChunksOperation(ReceiveChunksOperation const&) = delete;
-            ReceiveChunksOperation& operator=(ReceiveChunksOperation const&) = delete;
-            ReceiveChunksOperation(ReceiveChunksOperation&&) = delete;
-            ReceiveChunksOperation& operator=(ReceiveChunksOperation&&) = delete;
-
-            void start() & noexcept
-            {
-                try
-                {
-                    maxSize = particles.getParticlesBuffer().getReceiveExchangeStack(exchange).getMaxParticlesCount();
-                    startReceive();
-                }
-                catch(...)
-                {
-                    fail(std::current_exception());
-                }
-            }
-
-        private:
-            void startReceive()
-            {
-                receives.emplace_back(particles.getParticlesBuffer().receiveParticles(exchange), this);
-                receives.back().start();
-            }
-
-            void afterReceive() noexcept
-            {
-                try
-                {
-                    lastSize = particles.getParticlesBuffer()
-                                   .getReceiveExchangeStack(exchange)
-                                   .getHostParticlesCurrentSize();
-                    PMACC_ASSERT(lastSize <= maxSize);
-                    if(lastSize == 0u)
-                    {
-                        receiver.set_value();
-                        return;
-                    }
-                    inserts.emplace_back(particles.insertParticlesAsync(exchange, lastSize), this);
-                    inserts.back().start();
-                }
-                catch(...)
-                {
-                    fail(std::current_exception());
-                }
-            }
-
-            void afterInsert() noexcept
-            {
-                try
-                {
-                    if(lastSize == maxSize)
-                        startReceive();
-                    else
-                        receiver.set_value();
-                }
-                catch(...)
-                {
-                    fail(std::current_exception());
-                }
-            }
-
-            void fail(std::exception_ptr error) noexcept
-            {
-                receiver.set_error(std::move(error));
-            }
-
-            T_Particles& particles;
-            uint32_t exchange;
-            T_Receiver receiver;
-            size_t maxSize = 0u;
-            size_t lastSize = 0u;
-            // ponytail: retain stage states for synchronous completion; reuse slots if P1 shows this allocation
-            // matters.
-            std::list<ReceiveOperation> receives;
-            std::list<InsertOperation> inserts;
+            size_t count;
         };
     } // namespace detail
 
     template<typename T_Particles>
-    class SendChunksSender
-    {
-    public:
-        using completion_signatures
-            = caravan::CompletionSignatures<caravan::ValueSignature<>, caravan::ErrorSignature<std::exception_ptr>>;
-
-        SendChunksSender(T_Particles& particles, uint32_t exchange) : particles(&particles), exchange(exchange)
-        {
-        }
-
-        template<typename T_Receiver>
-        auto connect(T_Receiver&& receiver) &&
-        {
-            return detail::SendChunksOperation<T_Particles, std::decay_t<T_Receiver>>{
-                *particles,
-                exchange,
-                std::forward<T_Receiver>(receiver)};
-        }
-
-    private:
-        T_Particles* particles;
-        uint32_t exchange;
-    };
-
-    template<typename T_Particles>
     auto sendChunks(T_Particles& particles, uint32_t exchange)
     {
-        return SendChunksSender<T_Particles>{particles, exchange};
+        return caravan::repeatUntil(
+            [&particles, exchange, retries = size_t{0u}, lastSize = size_t{0u}]() mutable
+            {
+                auto const maxSize
+                    = particles.getParticlesBuffer().getSendExchangeStack(exchange).getMaxParticlesCount();
+                return particles.copyGuardToExchangeAsync(exchange)
+                       | caravan::letValue(
+                           [&particles, exchange, maxSize, &lastSize]
+                           {
+                               lastSize = particles.getParticlesBuffer()
+                                              .getSendExchangeStack(exchange)
+                                              .getDeviceParticlesCurrentSize();
+                               PMACC_ASSERT(lastSize <= maxSize);
+                               return particles.getParticlesBuffer().sendParticles(exchange);
+                           })
+                       | caravan::then(
+                           [exchange, maxSize, &lastSize, &retries](auto&&...)
+                           {
+                               if(lastSize == maxSize)
+                               {
+                                   ++retries;
+                                   return false;
+                               }
+                               if(retries != 0u)
+                                   std::cerr << "Performance warning: send/receive buffer for species "
+                                             << T_Particles::FrameType::getName() << " is too small (max: " << maxSize
+                                             << ", direction: " << exchange << " '" << ExchangeTypeNames{}[exchange]
+                                             << "', retries: " << retries
+                                             << "). To remove this warning consider increasing BYTES_EXCHANGE_{X,Y,Z} "
+                                                "in memory.param"
+                                             << std::endl;
+                               return true;
+                           });
+            });
     }
-
-    template<typename T_Particles>
-    class ReceiveChunksSender
-    {
-    public:
-        using completion_signatures
-            = caravan::CompletionSignatures<caravan::ValueSignature<>, caravan::ErrorSignature<std::exception_ptr>>;
-
-        ReceiveChunksSender(T_Particles& particles, uint32_t exchange) : particles(&particles), exchange(exchange)
-        {
-        }
-
-        template<typename T_Receiver>
-        auto connect(T_Receiver&& receiver) &&
-        {
-            return detail::ReceiveChunksOperation<T_Particles, std::decay_t<T_Receiver>>{
-                *particles,
-                exchange,
-                std::forward<T_Receiver>(receiver)};
-        }
-
-    private:
-        T_Particles* particles;
-        uint32_t exchange;
-    };
 
     template<typename T_Particles>
     auto receiveChunks(T_Particles& particles, uint32_t exchange)
     {
-        return ReceiveChunksSender<T_Particles>{particles, exchange};
+        return caravan::repeatUntil(
+            [&particles, exchange]
+            {
+                auto const maxSize
+                    = particles.getParticlesBuffer().getReceiveExchangeStack(exchange).getMaxParticlesCount();
+                return particles.getParticlesBuffer().receiveParticles(exchange)
+                       | caravan::letValue(
+                           [&particles, exchange, maxSize]
+                           {
+                               auto const lastSize = particles.getParticlesBuffer()
+                                                         .getReceiveExchangeStack(exchange)
+                                                         .getHostParticlesCurrentSize();
+                               PMACC_ASSERT(lastSize <= maxSize);
+                               return detail::InsertNonEmptySender<T_Particles>{particles, exchange, lastSize}
+                                      | caravan::then([lastSize, maxSize]
+                                                      { return lastSize == 0u || lastSize < maxSize; });
+                           });
+            });
     }
 
     /** Eager runtime-sized adapter for all particle exchange directions. */
