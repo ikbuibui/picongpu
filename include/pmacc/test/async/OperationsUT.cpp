@@ -68,7 +68,7 @@ namespace
 
     [[maybe_unused]] auto compileParticleStackSizes(pmacc::StackExchangeBuffer<int, int, DIM1>& stack)
     {
-        return caravan::sequence(stack.resetAsync(), stack.publishDeviceSizes());
+        return stack.resetAsync() | caravan::sequence(stack.publishDeviceSizes());
     }
 } // namespace
 
@@ -87,19 +87,19 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
     pmacc::HostBuffer<int, DIM1> output(one);
     input->data()[0] = 41;
 
-    auto step = caravan::sequence(
-        caravan::sequence(
-            caravan::sequence(
-                caravan::alpaka::fill(queue, device->getOwnedAlpakaView(), 0u),
-                caravan::alpaka::copy(queue, device->getOwnedAlpakaView(), input->getOwnedAlpakaView(), extent)),
-            caravan::alpaka::kernel<pmacc::Acc<DIM1>>(
-                queue,
-                workDiv,
-                Increment{},
-                caravan::retain(device->data(), device->getOwnedAlpakaView()))),
-        caravan::sequence(
-            caravan::alpaka::size(queue, device->sizeOnDeviceBuffer(), device->sizeHostSideBuffer()),
-            caravan::alpaka::copy(queue, output.getOwnedAlpakaView(), device->getOwnedAlpakaView(), extent)));
+    auto step
+        = caravan::alpaka::fill(queue, device->getOwnedAlpakaView(), 0u)
+          | caravan::sequence(
+              caravan::alpaka::copy(queue, device->getOwnedAlpakaView(), input->getOwnedAlpakaView(), extent))
+          | caravan::sequence(
+              caravan::alpaka::kernel<pmacc::Acc<DIM1>>(
+                  queue,
+                  workDiv,
+                  Increment{},
+                  caravan::retain(device->data(), device->getOwnedAlpakaView())))
+          | caravan::sequence(caravan::alpaka::size(queue, device->sizeOnDeviceBuffer(), device->sizeHostSideBuffer()))
+          | caravan::sequence(
+              caravan::alpaka::copy(queue, output.getOwnedAlpakaView(), device->getOwnedAlpakaView(), extent));
 
     caravan::ControlContext context;
     auto const applicationThread = std::this_thread::get_id();

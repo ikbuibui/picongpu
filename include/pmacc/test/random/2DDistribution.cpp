@@ -195,9 +195,9 @@ namespace pmacc
                 pmacc::Environment<>::get().DataConnector().share(rngProvider);
                 auto& device = Environment<>::get().DeviceContext();
                 caravan::ControlContext context;
-                auto initialize = caravan::sequence(
-                    rngProvider->init(0x4213'3742),
-                    caravan::alpaka::fill(detector.getDeviceBuffer().getOwnedAlpakaView(), 0u));
+                auto initialize
+                    = rngProvider->init(0x4213'3742)
+                      | caravan::sequence(caravan::alpaka::fill(detector.getDeviceBuffer().getOwnedAlpakaView(), 0u));
                 auto generate
                     = generateRandomNumbers(rngSize, numSamples, detector.getDeviceBuffer(), GetRanidx<RNGProvider>());
                 auto copy = detector.deviceToHost();
@@ -207,9 +207,8 @@ namespace pmacc
                 context.wait(context.spawn(
                     caravan::alpaka::withDevice(
                         device,
-                        caravan::sequence(
-                            caravan::sequence(std::move(initialize), std::move(generate)),
-                            std::move(copy)))));
+                        std::move(initialize) | caravan::sequence(std::move(generate))
+                            | caravan::sequence(std::move(copy)))));
                 timer.toggleEnd();
                 std::cout << "Done in " << timer.getInterval() << "ms" << std::endl;
                 auto box = detector.getHostBuffer().getDataBox();

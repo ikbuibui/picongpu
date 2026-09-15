@@ -106,7 +106,7 @@ namespace pmacc
             auto indexSize = caravan::alpaka::size(
                 stackIndexer.getDeviceBuffer().sizeOnDeviceBuffer(),
                 stackIndexer.getDeviceBuffer().sizeHostSideBuffer());
-            return caravan::sequence(std::move(stackSize), std::move(indexSize));
+            return std::move(stackSize) | caravan::sequence(std::move(indexSize));
         }
 
         auto publishDeviceSizes()
@@ -117,7 +117,7 @@ namespace pmacc
             auto indexSize = caravan::alpaka::size(
                 stackIndexer.getDeviceBuffer().sizeHostSideBuffer(),
                 stackIndexer.getDeviceBuffer().sizeOnDeviceBuffer());
-            return caravan::sequence(std::move(stackSize), std::move(indexSize));
+            return std::move(stackSize) | caravan::sequence(std::move(indexSize));
         }
 
         size_t getHostCurrentSize()

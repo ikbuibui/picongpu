@@ -449,13 +449,13 @@ namespace picongpu
 
             auto binaryKernel = [&](auto filter)
             {
-                auto initialize = caravan::alpaka::sequence(
-                    caravan::alpaka::sequence(
-                        caravan::alpaka::fill(gSumMom2->getDeviceBuffer().getOwnedAlpakaView(), 0u),
-                        caravan::alpaka::fill(gSumPos2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
-                    caravan::alpaka::sequence(
-                        caravan::alpaka::fill(gSumMomPos->getDeviceBuffer().getOwnedAlpakaView(), 0u),
-                        caravan::alpaka::fill(gCount_e->getDeviceBuffer().getOwnedAlpakaView(), 0u)));
+                auto initialize = caravan::alpaka::fill(gSumMom2->getDeviceBuffer().getOwnedAlpakaView(), 0u)
+                                  | caravan::alpaka::sequence(
+                                      caravan::alpaka::fill(gSumPos2->getDeviceBuffer().getOwnedAlpakaView(), 0u))
+                                  | caravan::alpaka::sequence(
+                                      caravan::alpaka::fill(gSumMomPos->getDeviceBuffer().getOwnedAlpakaView(), 0u))
+                                  | caravan::alpaka::sequence(
+                                      caravan::alpaka::fill(gCount_e->getDeviceBuffer().getOwnedAlpakaView(), 0u));
                 auto kernel = PMACC_LOCKSTEP_KERNEL(KernelCalcEmittance{})
                                   .config(mapper.getGridDim(), *particles)(
                                       particles->getDeviceParticlesBox(),
@@ -469,7 +469,7 @@ namespace picongpu
                 caravan::syncWait(
                     caravan::alpaka::withDevice(
                         device,
-                        caravan::alpaka::sequence(std::move(initialize), std::move(kernel))));
+                        std::move(initialize) | caravan::alpaka::sequence(std::move(kernel))));
             };
 
             auto idProvider = dc.get<IdProvider>("globalId");
@@ -479,9 +479,9 @@ namespace picongpu
                 idProvider->getDeviceGenerator(),
                 binaryKernel);
 
-            auto copies = caravan::alpaka::sequence(
-                caravan::alpaka::sequence(gSumMom2->deviceToHost(), gSumPos2->deviceToHost()),
-                caravan::alpaka::sequence(gSumMomPos->deviceToHost(), gCount_e->deviceToHost()));
+            auto copies = gSumMom2->deviceToHost() | caravan::alpaka::sequence(gSumPos2->deviceToHost())
+                          | caravan::alpaka::sequence(gSumMomPos->deviceToHost())
+                          | caravan::alpaka::sequence(gCount_e->deviceToHost());
             caravan::syncWait(caravan::alpaka::withDevice(device, std::move(copies)));
 
             auto const localDomSizeY = subGrid.getLocalDomain().size.y();
