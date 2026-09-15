@@ -173,15 +173,11 @@ namespace pmacc
                     ExchangeMapping<GUARD, MappingDesc> mapper(mappingDesc, exchangeType);
 
                     DataSpace<dim> const direction = Mask::getRelativeDirections<dim>(mapper.getExchangeType());
-                    auto destination = destBuffer.getDeviceBuffer().getOwnedAlpakaView();
-                    auto exchange = destBuffer.getReceiveExchange(exchangeType).getDeviceBuffer().getOwnedAlpakaView();
 
                     return PMACC_LOCKSTEP_KERNEL(KernelAddExchangeToBorder{})
                         .config(mapper.getGridDim(), SuperCellSize{})(
-                            caravan::retain(destBuffer.getDeviceBuffer().getDataBox(), destination),
-                            caravan::retain(
-                                destBuffer.getReceiveExchange(exchangeType).getDeviceBuffer().getDataBox(),
-                                exchange),
+                            destBuffer.getDeviceBuffer().getOwnedDataBox(),
+                            destBuffer.getReceiveExchange(exchangeType).getDeviceBuffer().getOwnedDataBox(),
                             destBuffer.getReceiveExchange(exchangeType).getDeviceBuffer().capacityND(),
                             direction,
                             mapper);

@@ -80,6 +80,12 @@ namespace pmacc
             return caravan::Retained{*view, *hostBuffer};
         }
 
+        /** Data box retaining the underlying allocation for asynchronous operation state. */
+        auto getOwnedDataBox()
+        {
+            return caravan::retain(getDataBox(), getOwnedAlpakaView());
+        }
+
         /** Allocate uninitialized data accessible from the host.
          *
          * @param size extent for each dimension (in elements)

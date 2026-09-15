@@ -190,11 +190,7 @@ namespace gol
                 caravan::alpaka::sequence(
                     caravan::alpaka::fill(buff1->getDeviceBuffer().getOwnedAlpakaView(), 0u),
                     caravan::alpaka::fill(buff2->getDeviceBuffer().getOwnedAlpakaView(), 0u)),
-                evo.initEvolution(
-                    caravan::retain(
-                        buff1->getDeviceBuffer().getDataBox(),
-                        buff1->getDeviceBuffer().getOwnedAlpakaView()),
-                    0.1));
+                evo.initEvolution(buff1->getDeviceBuffer().getOwnedDataBox(), 0.1));
             asyncContext.wait(asyncContext.spawn(
                 caravan::alpaka::withDevice(Environment<>::get().DeviceContext(), std::move(initialization))));
         }
@@ -213,18 +209,16 @@ namespace gol
         {
             auto communication = read->spawnCommunication(asyncContext);
             auto core = evo.runAsync<CORE>(
-                caravan::retain(read->getDeviceBuffer().getDataBox(), read->getDeviceBuffer().getOwnedAlpakaView()),
-                caravan::retain(write->getDeviceBuffer().getDataBox(), write->getDeviceBuffer().getOwnedAlpakaView()));
+                read->getDeviceBuffer().getOwnedDataBox(),
+                write->getDeviceBuffer().getOwnedDataBox());
 
             auto step = caravan::whenAll(std::move(core), caravan::asSender(std::move(communication)))
                         | caravan::letValue(
-                            [&,
-                             readView = read->getDeviceBuffer().getOwnedAlpakaView(),
-                             writeView = write->getDeviceBuffer().getOwnedAlpakaView()]() mutable
+                            [&]
                             {
                                 return evo.runAsync<BORDER>(
-                                    caravan::retain(read->getDeviceBuffer().getDataBox(), readView),
-                                    caravan::retain(write->getDeviceBuffer().getDataBox(), writeView));
+                                    read->getDeviceBuffer().getOwnedDataBox(),
+                                    write->getDeviceBuffer().getOwnedDataBox());
                             });
             asyncContext.wait(asyncContext.spawn(
                 caravan::alpaka::withDevice(Environment<>::get().DeviceContext(), std::move(step))));
