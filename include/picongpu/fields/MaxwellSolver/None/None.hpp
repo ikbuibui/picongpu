@@ -31,6 +31,8 @@
 #include <cstdint>
 #include <limits>
 
+#include <caravan/core.hpp>
+
 namespace picongpu
 {
     namespace fields
@@ -53,9 +55,10 @@ namespace picongpu
                 {
                 }
 
-                template<uint32_t T_area>
-                void addCurrent()
+                template<uint32_t T_area, typename T_CurrentInterpolation>
+                auto addCurrent(T_CurrentInterpolation)
                 {
+                    return caravan::whenAll();
                 }
 
                 void update_afterCurrent(uint32_t)

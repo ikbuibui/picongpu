@@ -59,7 +59,7 @@ namespace picongpu::fields::maxwellSolver
          * @param coeff coefficient to be used in the current interpolation functor
          */
         template<typename T_JBox, typename T_CurrentInterpolationFunctor>
-        HINLINE void operator()(
+        [[nodiscard]] HINLINE auto operator()(
             T_JBox dataBoxJ,
             T_CurrentInterpolationFunctor currentInterpolationFunctor,
             float_X coeff) const
@@ -69,7 +69,7 @@ namespace picongpu::fields::maxwellSolver
             auto fieldB = dc.get<FieldB>(FieldB::getName());
             auto const mapper = makeAreaMapper<T_area>(cellDescription);
 
-            PMACC_LOCKSTEP_KERNEL(KernelAddCurrentDensity{})
+            return PMACC_LOCKSTEP_KERNEL(KernelAddCurrentDensity{})
                 .config(mapper.getGridDim(), SuperCellSize{})(
                     fieldE->getDeviceDataBox(),
                     fieldB->getDeviceDataBox(),

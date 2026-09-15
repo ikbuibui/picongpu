@@ -35,10 +35,15 @@
 
 #include <boost/program_options/options_description.hpp>
 
+#include <array>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
+
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 
 namespace picongpu
 {
@@ -90,60 +95,95 @@ namespace picongpu
                         throw std::runtime_error("Unsupported current interpolation type");
                 }
 
-                /** Compute the current created by particles and add it to the current density
+                /** Add completed current density to the electromagnetic field.
                  *
-                 * @param step index of time iteration
+                 * Dependency contract:
+                 * - reads FieldJ and writes FieldE in the selected areas;
+                 * - requires particle deposition and current-background completion;
+                 * - produces completion of all current additions;
+                 * - performs no host access; and
+                 * - borrows FieldJ, the field solver, and PMacc's device queues until completion.
+                 *
+                 * Without interpolation margins, CORE addition overlaps current communication and
+                 * BORDER addition follows it. With margins, one CORE+BORDER addition follows communication.
+                 *
+                 * @param context simulation-owned operation scope and control loop
+                 * @param currentReady completion of all FieldJ producers
                  * @param fieldSolver field solver
                  */
-                void operator()(uint32_t const step, fields::Solver& fieldSolver) const
+                caravan::Event operator()(
+                    caravan::ControlContext& context,
+                    caravan::Event currentReady,
+                    fields::Solver& fieldSolver) const
                 {
                     using namespace pmacc;
                     using SpeciesWithCurrentSolver =
                         typename pmacc::particles::traits::FilterByFlag<VectorAllSpecies, current<>>::type;
-                    auto const numSpeciesWithCurrentSolver = pmacc::mp_size<SpeciesWithCurrentSolver>::value;
-                    auto const existsParticleCurrent = numSpeciesWithCurrentSolver > 0;
-                    if(existsParticleCurrent)
+                    constexpr auto existsParticleCurrent = pmacc::mp_size<SpeciesWithCurrentSolver>::value > 0;
+                    auto& device = Environment<>::get().DeviceContext();
+                    auto addCurrent = [&]<uint32_t T_Area>(caravan::Event previous, auto interpolation)
+                    {
+                        return context.spawn(
+                            caravan::alpaka::withDevice(
+                                device,
+                                caravan::asSender(std::move(previous))
+                                    | caravan::sequence(fieldSolver.template addCurrent<T_Area>(interpolation))));
+                    };
+
+                    if constexpr(existsParticleCurrent)
                     {
                         DataConnector& dc = Environment<>::get().DataConnector();
                         auto& fieldJ = *dc.get<FieldJ>(FieldJ::getName());
-                        auto eRecvCurrent = fieldJ.asyncCommunication(eventSystem::getTransactionEvent());
-                        auto& interpolation = fields::currentInterpolation::CurrentInterpolation::get();
-                        auto const currentRecvLower = interpolation.getLowerMargin();
-                        auto const currentRecvUpper = interpolation.getUpperMargin();
+                        auto communicated = fieldJ.spawnCommunication(context, currentReady);
+                        auto const& interpolation = fields::currentInterpolation::CurrentInterpolation::get();
+                        auto const zero = DataSpace<simDim>::create(0);
 
-                        /* without interpolation, we do not need to access the FieldJ GUARD
-                         * and can therefore overlap communication of GUARD->(ADD)BORDER & computation of CORE
+                        /* Without interpolation, we do not need to access the FieldJ GUARD and can therefore overlap
+                         * communication of GUARD->(ADD)BORDER with computation of CORE.
                          */
-                        if(currentRecvLower == DataSpace<simDim>::create(0)
-                           && currentRecvUpper == DataSpace<simDim>::create(0))
+                        if(interpolation.getLowerMargin() == zero && interpolation.getUpperMargin() == zero)
                         {
-                            fieldSolver.addCurrent<type::CORE>();
-                            eventSystem::setTransactionEvent(eRecvCurrent);
-                            fieldSolver.addCurrent<type::BORDER>();
+                            auto requiresPreparation = []<typename T_Solver>(T_Solver& solver)
+                            {
+                                if constexpr(requires { solver.requiresCurrentPreparation(); })
+                                    return solver.requiresCurrentPreparation();
+                                else
+                                    return false;
+                            };
+                            if(requiresPreparation(fieldSolver))
+                                return addCurrent.template operator()<type::CORE + type::BORDER>(
+                                    std::move(communicated),
+                                    fields::currentInterpolation::None{});
+
+                            auto coreAdded = addCurrent.template operator()<type::CORE>(
+                                std::move(currentReady),
+                                fields::currentInterpolation::None{});
+                            std::array borderDependencies{std::move(coreAdded), std::move(communicated)};
+                            return addCurrent.template operator()<type::BORDER>(
+                                caravan::whenAll(borderDependencies),
+                                fields::currentInterpolation::None{});
                         }
-                        else
-                        {
-                            /* in case we perform a current interpolation/filter, we need
-                             * to access the BORDER area from the CORE (and the GUARD area
-                             * from the BORDER)
-                             * `fieldJ->asyncCommunication` first adds the neighbors' values
-                             * to BORDER (send) and then updates the GUARD (receive)
-                             * \todo split the last `receive` part in a separate method to
-                             *       allow already a computation of CORE */
-                            eventSystem::setTransactionEvent(eRecvCurrent);
-                            fieldSolver.addCurrent<type::CORE + type::BORDER>();
-                        }
+
+                        /* In case we perform a current interpolation/filter, we need to access the BORDER area from
+                         * the CORE (and the GUARD area from the BORDER). FieldJ::spawnCommunication first adds the
+                         * neighbors' values to BORDER (send) and then updates the GUARD (receive).
+                         * \todo Split the last receive part into a separate method to allow CORE computation earlier.
+                         */
+                        return addCurrent.template operator()<type::CORE + type::BORDER>(
+                            std::move(communicated),
+                            fields::currentInterpolation::Binomial{});
+                    }
+                    else if constexpr(hasCurrentBackground)
+                    {
+                        /* With no current from macroparticles, there is no need for communication. However, we may
+                         * still have J from the background (if it is activated) in CORE and BORDER.
+                         */
+                        return addCurrent.template operator()<type::CORE + type::BORDER>(
+                            std::move(currentReady),
+                            fields::currentInterpolation::None{});
                     }
                     else
-                    {
-                        /* With no current from macroparticles, there is no need for communication.
-                         * However we may still have J from the background (if it is activated) in CORE and BORDER.
-                         */
-                        if(hasCurrentBackground)
-                        {
-                            fieldSolver.addCurrent<type::CORE + type::BORDER>();
-                        }
-                    }
+                        return currentReady;
                 }
 
                 /** Name of the solver which can be used to share this class via DataConnector */

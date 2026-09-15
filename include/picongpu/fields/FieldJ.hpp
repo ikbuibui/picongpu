@@ -37,6 +37,8 @@
 #include <string>
 #include <vector>
 
+#include <caravan/core.hpp>
+
 namespace picongpu
 {
     /** Representation of the current density field
@@ -94,11 +96,12 @@ namespace picongpu
             return buffer.getDeviceBuffer().getDataBox();
         }
 
-        /** Start asynchronous communication of field values
+        /** Start communication of current values after their producers complete.
          *
-         * @param serialEvent event to depend on
+         * The returned event covers additive guard-to-border exchange and, when
+         * interpolation needs it, the following border-to-guard exchange.
          */
-        virtual EventTask asyncCommunication(EventTask serialEvent);
+        caravan::Event spawnCommunication(caravan::ControlContext& context, caravan::Event previous = {});
 
         /** Reset the host-device buffer for field values
          *

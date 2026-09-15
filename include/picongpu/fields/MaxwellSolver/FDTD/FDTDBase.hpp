@@ -37,6 +37,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <utility>
 
 namespace picongpu
 {
@@ -127,15 +128,14 @@ namespace picongpu
                      * @param dataBoxJ device data box with current density values
                      * @param coeff coefficient value
                      */
-                    template<uint32_t T_area, typename T_JBox>
-                    void addCurrentImpl(T_JBox dataBoxJ, float_X const coeff)
+                    template<uint32_t T_area, typename T_JBox, typename T_CurrentInterpolation>
+                    auto addCurrentImpl(
+                        T_JBox dataBoxJ,
+                        T_CurrentInterpolation currentInterpolation,
+                        float_X const coeff)
                     {
-                        auto const addCurrentDensity = AddCurrentDensity<T_area>{cellDescription};
-                        auto const kind = currentInterpolation::CurrentInterpolation::get().kind;
-                        if(kind == currentInterpolation::CurrentInterpolation::Kind::None)
-                            addCurrentDensity(dataBoxJ, currentInterpolation::None{}, coeff);
-                        else
-                            addCurrentDensity(dataBoxJ, currentInterpolation::Binomial{}, coeff);
+                        return AddCurrentDensity<T_area>{
+                            cellDescription}(dataBoxJ, std::move(currentInterpolation), coeff);
                     }
 
                     /** Perform the last part of E and B propagation

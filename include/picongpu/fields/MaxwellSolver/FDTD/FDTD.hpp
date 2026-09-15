@@ -32,6 +32,7 @@
 #include <pmacc/traits/GetStringProperties.hpp>
 
 #include <cstdint>
+#include <utility>
 
 namespace picongpu
 {
@@ -75,14 +76,17 @@ namespace picongpu
                  *
                  * @tparam T_area area to operate on
                  */
-                template<uint32_t T_area>
-                void addCurrent()
+                template<uint32_t T_area, typename T_CurrentInterpolation>
+                auto addCurrent(T_CurrentInterpolation currentInterpolation)
                 {
                     DataConnector& dc = Environment<>::get().DataConnector();
                     auto& fieldJ = *dc.get<FieldJ>(FieldJ::getName());
                     // Coefficient in front of J in Ampere's law
                     constexpr float_X coeff = -(1.0_X / sim.pic.getEps0()) * sim.pic.getDt();
-                    this->template addCurrentImpl<T_area>(fieldJ.getDeviceDataBox(), coeff);
+                    return this->template addCurrentImpl<T_area>(
+                        fieldJ.getDeviceDataBox(),
+                        std::move(currentInterpolation),
+                        coeff);
                 }
 
                 /** Perform the last part of E and B propagation by a PIC time step
