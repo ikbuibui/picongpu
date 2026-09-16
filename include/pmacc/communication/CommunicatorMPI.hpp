@@ -26,6 +26,7 @@
 #include "pmacc/memory/dataTypes/Mask.hpp"
 #include "pmacc/types.hpp"
 
+#include <cstddef>
 #include <utility>
 
 #include <caravan/core.hpp>
@@ -101,36 +102,46 @@ namespace pmacc
             return this->coordinates;
         }
 
-        using SendSender = decltype(caravan::mpi::send(
-            std::declval<caravan::MpiContext&>(),
-            std::declval<caravan::ConstMpiBuffer>(),
-            caravan::Peer{},
-            caravan::MessageTag{}));
-        using ReceiveSender = decltype(caravan::mpi::receive(
-            std::declval<caravan::MpiContext&>(),
-            std::declval<caravan::MpiBuffer>(),
-            caravan::Peer{},
-            caravan::MessageTag{}));
-        using AllReduceSender = decltype(caravan::mpi::allReduce(
-            std::declval<caravan::MpiContext&>(),
-            std::declval<caravan::ConstMpiBuffer>(),
-            std::declval<caravan::MpiBuffer>(),
-            caravan::ScalarType{},
-            caravan::ReduceOperation{}));
-        using BarrierSender = decltype(caravan::mpi::barrier(std::declval<caravan::MpiContext&>()));
+        auto send(uint32_t ex, char const* sendData, size_t sendBytes, uint32_t tag)
+        {
+            return caravan::mpi::send(
+                *mpiContext,
+                std::span<std::byte const>{reinterpret_cast<std::byte const*>(sendData), sendBytes},
+                caravan::Peer{ExchangeTypeToRank(ex)},
+                caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
+                communicatorId);
+        }
 
-        SendSender send(uint32_t ex, char const* sendData, size_t sendBytes, uint32_t tag);
+        auto receive(uint32_t ex, char* receiveData, size_t receiveBytes, uint32_t tag)
+        {
+            return caravan::mpi::receive(
+                *mpiContext,
+                std::span<std::byte>{reinterpret_cast<std::byte*>(receiveData), receiveBytes},
+                caravan::Peer{ExchangeTypeToRank(ex)},
+                caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
+                communicatorId);
+        }
 
-        ReceiveSender receive(uint32_t ex, char* receiveData, size_t receiveBytes, uint32_t tag);
-
-        AllReduceSender signalAllReduce(
+        auto signalAllReduce(
             void const* input,
             void* output,
             size_t bytes,
             caravan::ScalarType type,
-            caravan::ReduceOperation operation);
+            caravan::ReduceOperation operation)
+        {
+            return caravan::mpi::allReduce(
+                *mpiContext,
+                std::span<std::byte const>{static_cast<std::byte const*>(input), bytes},
+                std::span<std::byte>{static_cast<std::byte*>(output), bytes},
+                type,
+                operation,
+                signalCommunicatorId);
+        }
 
-        BarrierSender barrier();
+        auto barrier()
+        {
+            return caravan::mpi::barrier(*mpiContext, communicatorId);
+        }
 
         bool slide();
 
