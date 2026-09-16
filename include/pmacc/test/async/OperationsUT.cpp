@@ -11,6 +11,7 @@
 #include <pmacc/memory/buffers/GridBuffer.hpp>
 #include <pmacc/memory/buffers/HostBuffer.hpp>
 #include <pmacc/memory/buffers/HostDeviceBuffer.hpp>
+#include <pmacc/memory/buffers/size.hpp>
 #include <pmacc/particles/memory/buffers/StackExchangeBuffer.hpp>
 #include <pmacc/traits/GetUniqueTypeId.hpp>
 
@@ -87,19 +88,18 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
     pmacc::HostBuffer<int, DIM1> output(one);
     input->data()[0] = 41;
 
-    auto step
-        = caravan::alpaka::fill(queue, device->getOwnedAlpakaView(), 0u)
-          | caravan::sequence(
-              caravan::alpaka::copy(queue, device->getOwnedAlpakaView(), input->getOwnedAlpakaView(), extent))
-          | caravan::sequence(
-              caravan::alpaka::kernel<pmacc::Acc<DIM1>>(
-                  queue,
-                  workDiv,
-                  Increment{},
-                  caravan::retain(device->data(), device->getOwnedAlpakaView())))
-          | caravan::sequence(caravan::alpaka::size(queue, device->sizeOnDeviceBuffer(), device->sizeHostSideBuffer()))
-          | caravan::sequence(
-              caravan::alpaka::copy(queue, output.getOwnedAlpakaView(), device->getOwnedAlpakaView(), extent));
+    auto step = caravan::alpaka::fill(queue, device->getOwnedAlpakaView(), 0u)
+                | caravan::sequence(
+                    caravan::alpaka::copy(queue, device->getOwnedAlpakaView(), input->getOwnedAlpakaView(), extent))
+                | caravan::sequence(
+                    caravan::alpaka::kernel<pmacc::Acc<DIM1>>(
+                        queue,
+                        workDiv,
+                        Increment{},
+                        caravan::retain(device->data(), device->getOwnedAlpakaView())))
+                | caravan::sequence(pmacc::size(queue, device->sizeOnDeviceBuffer(), device->sizeHostSideBuffer()))
+                | caravan::sequence(
+                    caravan::alpaka::copy(queue, output.getOwnedAlpakaView(), device->getOwnedAlpakaView(), extent));
 
     caravan::ControlContext context;
     auto const applicationThread = std::this_thread::get_id();
@@ -118,6 +118,34 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
 
     CHECK(output.data()[0] == 42);
     CHECK(continued);
+}
+
+TEST_CASE("PMacc size copies synchronize buffer size storage", "[async][memory]")
+{
+    auto& device = pmacc::Environment<>::get().DeviceContext();
+    pmacc::ComputeDeviceQueue queue(pmacc::manager::Device<pmacc::ComputeDevice>::get().current());
+    pmacc::DeviceBuffer<int, DIM1> buffer(pmacc::MemSpace<DIM1>{128u}, true);
+    pmacc::HostBuffer<int, DIM1> output(pmacc::MemSpace<DIM1>{128u});
+    buffer.setSizeHostSide(123u);
+    output.setSizeHostSide(0u);
+
+    SECTION("Explicit queue")
+    {
+        caravan::syncWait(
+            pmacc::size(queue, buffer.sizeOnDeviceBuffer(), buffer.sizeHostSideBuffer())
+            | caravan::alpaka::sequence(
+                pmacc::size(queue, output.getOwnedSizeHostBuffer(), buffer.sizeOnDeviceBuffer())));
+    }
+    SECTION("Managed queue")
+    {
+        caravan::syncWait(
+            caravan::alpaka::withDevice(
+                device,
+                pmacc::size(buffer.sizeOnDeviceBuffer(), buffer.sizeHostSideBuffer())
+                    | caravan::alpaka::sequence(
+                        pmacc::size(output.getOwnedSizeHostBuffer(), buffer.sizeOnDeviceBuffer()))));
+    }
+    CHECK(output.size() == 123u);
 }
 
 TEST_CASE("DeviceBuffer value fill is a lazy sender", "[async][memory]")
@@ -184,7 +212,7 @@ TEST_CASE("Host-device buffer queue overloads return lazy copies", "[async][memo
     context.wait(context.spawn(
         caravan::alpaka::withDevice(
             device,
-            caravan::alpaka::size(
+            pmacc::size(
                 buffer.getDeviceBuffer().sizeHostSideBuffer(),
                 buffer.getDeviceBuffer().sizeOnDeviceBuffer()))));
     CHECK(buffer.getDeviceBuffer().size() == 1u);

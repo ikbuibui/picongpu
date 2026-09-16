@@ -23,6 +23,7 @@
 
 #include "pmacc/assert.hpp"
 #include "pmacc/memory/buffers/Exchange.hpp"
+#include "pmacc/memory/buffers/size.hpp"
 #include "pmacc/particles/memory/boxes/ExchangePopDataBox.hpp"
 #include "pmacc/particles/memory/boxes/ExchangePushDataBox.hpp"
 
@@ -100,10 +101,10 @@ namespace pmacc
         {
             stack.getDeviceBuffer().setSizeHostSide(0u);
             stackIndexer.getDeviceBuffer().setSizeHostSide(0u);
-            auto stackSize = caravan::alpaka::size(
+            auto stackSize = pmacc::size(
                 stack.getDeviceBuffer().sizeOnDeviceBuffer(),
                 stack.getDeviceBuffer().sizeHostSideBuffer());
-            auto indexSize = caravan::alpaka::size(
+            auto indexSize = pmacc::size(
                 stackIndexer.getDeviceBuffer().sizeOnDeviceBuffer(),
                 stackIndexer.getDeviceBuffer().sizeHostSideBuffer());
             return std::move(stackSize) | caravan::sequence(std::move(indexSize));
@@ -111,10 +112,10 @@ namespace pmacc
 
         auto publishDeviceSizes()
         {
-            auto stackSize = caravan::alpaka::size(
+            auto stackSize = pmacc::size(
                 stack.getDeviceBuffer().sizeHostSideBuffer(),
                 stack.getDeviceBuffer().sizeOnDeviceBuffer());
-            auto indexSize = caravan::alpaka::size(
+            auto indexSize = pmacc::size(
                 stackIndexer.getDeviceBuffer().sizeHostSideBuffer(),
                 stackIndexer.getDeviceBuffer().sizeOnDeviceBuffer());
             return std::move(stackSize) | caravan::sequence(std::move(indexSize));
