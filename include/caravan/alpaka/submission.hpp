@@ -24,6 +24,9 @@ namespace caravan::alpaka
     template<typename T_Queue>
     struct SubmissionDomain;
 
+    template<typename T_Queue, typename... T_Submits>
+    class SubmitSender;
+
     namespace detail
     {
         template<std::size_t T_Count>
@@ -40,6 +43,12 @@ namespace caravan::alpaka
                 return result;
             }
         };
+
+        template<typename T, typename T_Queue>
+        inline constexpr bool isSubmitSenderFor = false;
+
+        template<typename T_Queue, typename... T_Submits>
+        inline constexpr bool isSubmitSenderFor<SubmitSender<T_Queue, T_Submits...>, T_Queue> = true;
 
         template<bool T_Ordered, std::size_t T_LeftCount, std::size_t T_RightCount>
         auto composeDependencies(
@@ -69,6 +78,39 @@ namespace caravan::alpaka
                         std::copy(tails.begin(), tails.end(), dependencies.predecessors[T_LeftCount + i].begin());
             }
             return dependencies;
+        }
+
+        template<typename T_Topology, std::size_t T_NodeCount, std::size_t T_StageCount>
+        void addGraphDependencies(
+            SubmissionDependencies<T_StageCount>& dependencies,
+            std::array<std::size_t, T_NodeCount> const& counts)
+        {
+            std::array<std::size_t, T_NodeCount + 1u> offsets{};
+            for(std::size_t node = 0u; node < T_NodeCount; ++node)
+                offsets[node + 1u] = offsets[node] + counts[node];
+
+            for(std::size_t node = 0u; node < T_NodeCount; ++node)
+                for(std::size_t predecessor = 0u; predecessor < node; ++predecessor)
+                    if(T_Topology::predecessors[node][predecessor])
+                        for(std::size_t root = offsets[node]; root < offsets[node + 1u]; ++root)
+                        {
+                            bool isRoot = true;
+                            for(std::size_t candidate = offsets[node]; candidate < offsets[node + 1u]; ++candidate)
+                                isRoot = isRoot && !dependencies.predecessors[root][candidate];
+                            if(!isRoot)
+                                continue;
+
+                            for(std::size_t tail = offsets[predecessor]; tail < offsets[predecessor + 1u]; ++tail)
+                            {
+                                bool isTail = true;
+                                for(std::size_t candidate = offsets[predecessor];
+                                    candidate < offsets[predecessor + 1u];
+                                    ++candidate)
+                                    isTail = isTail && !dependencies.predecessors[candidate][tail];
+                                if(isTail)
+                                    dependencies.predecessors[root][tail] = true;
+                            }
+                        }
         }
 
         template<typename T_Queue, typename T_Receiver, typename... T_Submits>
@@ -231,6 +273,7 @@ namespace caravan::alpaka
         static_assert(stageCount > 0u, "An alpaka submission chain must contain at least one stage");
 
     public:
+        static constexpr auto stage_count = stageCount;
         using completion_signatures = CompletionSignatures<ValueSignature<>, ErrorSignature<std::exception_ptr>>;
 
         SubmitSender(
@@ -311,6 +354,30 @@ namespace caravan::alpaka
             T_Rest... rest) const
         {
             return transform(tag, std::move(left).template compose<false>(std::move(right)), std::move(rest)...);
+        }
+
+        template<caravan::detail::GraphNodeType... T_Nodes>
+        requires(detail::isSubmitSenderFor<typename T_Nodes::sender_type, T_Queue> && ...)
+        auto transform(GraphTag, T_Nodes... nodes) const
+        {
+            auto flattened = merge(std::move(nodes).releaseSender()...);
+            detail::addGraphDependencies<caravan::detail::GraphTopology<T_Nodes...>>(
+                flattened.m_dependencies,
+                std::array<std::size_t, sizeof...(T_Nodes)>{T_Nodes::sender_type::stage_count...});
+            return flattened;
+        }
+
+    private:
+        template<typename T_First>
+        static auto merge(T_First first)
+        {
+            return first;
+        }
+
+        template<typename T_First, typename T_Second, typename... T_Rest>
+        static auto merge(T_First first, T_Second second, T_Rest... rest)
+        {
+            return merge(std::move(first).template compose<false>(std::move(second)), std::move(rest)...);
         }
     };
 

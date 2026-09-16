@@ -41,6 +41,12 @@ namespace caravan::alpaka
 
     namespace detail
     {
+        template<typename T>
+        inline constexpr bool isManagedSubmitSender = false;
+
+        template<typename... T_Submits>
+        inline constexpr bool isManagedSubmitSender<ManagedSubmitSender<T_Submits...>> = true;
+
         template<typename T_Context, typename T_Receiver>
         struct DeviceContextEnvironment
         {
@@ -135,6 +141,7 @@ namespace caravan::alpaka
         static_assert(stageCount > 0u, "An alpaka submission chain must contain at least one stage");
 
     public:
+        static constexpr auto stage_count = stageCount;
         using completion_signatures = CompletionSignatures<ValueSignature<>, ErrorSignature<std::exception_ptr>>;
 
         ManagedSubmitSender(
@@ -228,6 +235,30 @@ namespace caravan::alpaka
             T_Rest... rest) const
         {
             return transform(tag, std::move(left).template compose<false>(std::move(right)), std::move(rest)...);
+        }
+
+        template<caravan::detail::GraphNodeType... T_Nodes>
+        requires(detail::isManagedSubmitSender<typename T_Nodes::sender_type> && ...)
+        auto transform(GraphTag, T_Nodes... nodes) const
+        {
+            auto flattened = merge(std::move(nodes).releaseSender()...);
+            detail::addGraphDependencies<caravan::detail::GraphTopology<T_Nodes...>>(
+                flattened.m_dependencies,
+                std::array<std::size_t, sizeof...(T_Nodes)>{T_Nodes::sender_type::stage_count...});
+            return flattened;
+        }
+
+    private:
+        template<typename T_First>
+        static auto merge(T_First first)
+        {
+            return first;
+        }
+
+        template<typename T_First, typename T_Second, typename... T_Rest>
+        static auto merge(T_First first, T_Second second, T_Rest... rest)
+        {
+            return merge(std::move(first).template compose<false>(std::move(second)), std::move(rest)...);
         }
     };
 

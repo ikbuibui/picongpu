@@ -191,6 +191,109 @@ int main()
         .wait();
     assert(crossOutput[0] == 73);
 
+    // Explicit graph edges lower to native queue ordering without adding the false A -> D dependency.
+    std::atomic<unsigned> graphA = 0u, graphB = 0u, graphC = 0u, graphD = 0u;
+    auto graphNodeA = caravan::node<"a">(
+        caravan::alpaka::submit(queue, [&](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [&] { ++graphA; }); })
+        | caravan::alpaka::sequence(
+            caravan::alpaka::submit(
+                queue,
+                [&](Queue& nativeQueue)
+                {
+                    alpaka::enqueue(
+                        nativeQueue,
+                        [&]
+                        {
+                            assert(graphA == 1u);
+                            ++graphA;
+                        });
+                })));
+    auto graphNodeB = caravan::node<"b">(caravan::alpaka::submit(
+        secondQueue,
+        [&](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [&] { ++graphB; }); }));
+    auto graphNodeC = caravan::node<"c">(
+        caravan::alpaka::submit(
+            queue,
+            [&](Queue& nativeQueue)
+            {
+                alpaka::enqueue(
+                    nativeQueue,
+                    [&]
+                    {
+                        assert(graphA == 2u && graphB == 1u);
+                        ++graphC;
+                    });
+            })
+            | caravan::alpaka::sequence(
+                caravan::alpaka::submit(
+                    queue,
+                    [&](Queue& nativeQueue)
+                    {
+                        alpaka::enqueue(
+                            nativeQueue,
+                            [&]
+                            {
+                                assert(graphC == 1u);
+                                ++graphC;
+                            });
+                    })),
+        caravan::after(graphNodeA, graphNodeB));
+    auto graphNodeD = caravan::node<"d">(
+        caravan::alpaka::submit(
+            secondQueue,
+            [&](Queue& nativeQueue)
+            {
+                alpaka::enqueue(
+                    nativeQueue,
+                    [&]
+                    {
+                        assert(graphB == 1u);
+                        ++graphD;
+                    });
+            }),
+        caravan::after(graphNodeB));
+    caravan::syncWait(
+        caravan::graph(std::move(graphNodeA), std::move(graphNodeB), std::move(graphNodeC), std::move(graphNodeD)));
+    assert(graphA == 2u && graphB == 1u && graphC == 2u && graphD == 1u);
+
+    bool independentGraphNodeRan = false;
+    bool failedGraphDescendantSubmitted = false;
+    auto graphFailure = caravan::node<"failure">(
+        caravan::alpaka::submit(queue, [](Queue&) { throw std::runtime_error("graph submission failed"); }));
+    auto graphIndependent = caravan::node<"independent">(caravan::alpaka::submit(
+        secondQueue,
+        [&](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [&] { independentGraphNodeRan = true; }); }));
+    auto graphSkipped = caravan::node<"skipped">(
+        caravan::alpaka::submit(queue, [&](Queue&) { failedGraphDescendantSubmitted = true; }),
+        caravan::after(graphFailure));
+    try
+    {
+        caravan::syncWait(
+            caravan::graph(std::move(graphFailure), std::move(graphIndependent), std::move(graphSkipped)));
+        assert(false);
+    }
+    catch(std::runtime_error const&)
+    {
+    }
+    assert(independentGraphNodeRan && !failedGraphDescendantSubmitted);
+
+    bool mixedNativeRan = false;
+    bool mixedHostRan = false;
+    auto mixedNative = caravan::node<"native">(caravan::alpaka::submit(
+        queue,
+        [&](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [&] { mixedNativeRan = true; }); }));
+    auto mixedHost = caravan::node<"host">(
+        caravan::InlineScheduler{}.schedule()
+            | caravan::then(
+                [&]
+                {
+                    assert(mixedNativeRan);
+                    mixedHostRan = true;
+                }),
+        caravan::after(mixedNative));
+    caravan::syncWait(caravan::graph(std::move(mixedNative), std::move(mixedHost)));
+    assert(mixedNativeRan && mixedHostRan);
+
     // whenAll and sequence remain native across independent queues and join before the final copy.
     caravan::syncWait(
         caravan::whenAll(

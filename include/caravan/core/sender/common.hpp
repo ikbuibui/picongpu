@@ -70,6 +70,10 @@ namespace caravan
     {
     };
 
+    struct GraphTag
+    {
+    };
+
     namespace detail
     {
         inline DefaultDomain commonDomain()
