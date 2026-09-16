@@ -101,59 +101,6 @@ namespace pmacc
     }
 
     template<unsigned DIM>
-    typename CommunicatorMPI<DIM>::SendSender CommunicatorMPI<DIM>::send(
-        uint32_t ex,
-        char const* sendData,
-        size_t sendBytes,
-        uint32_t tag)
-    {
-        return caravan::mpi::send(
-            *mpiContext,
-            std::span<std::byte const>{reinterpret_cast<std::byte const*>(sendData), sendBytes},
-            caravan::Peer{ExchangeTypeToRank(ex)},
-            caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
-            communicatorId);
-    }
-
-    template<unsigned DIM>
-    typename CommunicatorMPI<DIM>::ReceiveSender CommunicatorMPI<DIM>::receive(
-        uint32_t ex,
-        char* receiveData,
-        size_t receiveBytes,
-        uint32_t tag)
-    {
-        return caravan::mpi::receive(
-            *mpiContext,
-            std::span<std::byte>{reinterpret_cast<std::byte*>(receiveData), receiveBytes},
-            caravan::Peer{ExchangeTypeToRank(ex)},
-            caravan::MessageTag{static_cast<int>(gridExchangeTag + tag)},
-            communicatorId);
-    }
-
-    template<unsigned DIM>
-    typename CommunicatorMPI<DIM>::AllReduceSender CommunicatorMPI<DIM>::signalAllReduce(
-        void const* input,
-        void* output,
-        size_t bytes,
-        caravan::ScalarType type,
-        caravan::ReduceOperation operation)
-    {
-        return caravan::mpi::allReduce(
-            *mpiContext,
-            std::span<std::byte const>{static_cast<std::byte const*>(input), bytes},
-            std::span<std::byte>{static_cast<std::byte*>(output), bytes},
-            type,
-            operation,
-            signalCommunicatorId);
-    }
-
-    template<unsigned DIM>
-    typename CommunicatorMPI<DIM>::BarrierSender CommunicatorMPI<DIM>::barrier()
-    {
-        return caravan::mpi::barrier(*mpiContext, communicatorId);
-    }
-
-    template<unsigned DIM>
     bool CommunicatorMPI<DIM>::slide()
     {
         // we can only slide in y direction right now
