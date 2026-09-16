@@ -124,7 +124,8 @@ namespace caravan::alpaka
                 std::array<T_Queue*, stageCount> queues,
                 std::tuple<T_Submits...> submits,
                 SubmissionDependencies<stageCount> dependencies,
-                T_Receiver receiver)
+                T_Receiver receiver,
+                EventPool<T_Queue>* eventPool = nullptr)
                 : m_completionThread(completionThread())
                 , m_queues(queues)
                 , m_submits(std::move(submits))
@@ -153,7 +154,7 @@ namespace caravan::alpaka
                     else
                     {
                         m_fenceIndices[i] = i;
-                        m_fences[i].emplace(*m_queues[i]);
+                        m_fences[i].emplace(*m_queues[i], eventPool);
                     }
                 }
             }
@@ -227,6 +228,9 @@ namespace caravan::alpaka
                         ready = false;
                 if(!ready)
                     return false;
+                // Return event leases only after the whole graph is quiescent, before a receiver starts more work.
+                for(auto& fence : m_fences)
+                    fence.reset();
                 if(m_error)
                     m_receiver.set_error(std::move(m_error));
                 else

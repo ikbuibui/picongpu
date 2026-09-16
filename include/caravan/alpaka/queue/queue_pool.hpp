@@ -53,7 +53,8 @@ namespace caravan::alpaka
      * submissions() returns a lightweight pool-bound factory. Sender construction remains lazy; connecting a
      * composed graph leases all of its logical queues together, growing the pool rather than waiting. A lease is
      * returned after native completion, or by destruction if its operation was never started. The pool must outlive
-     * its senders and connected operations.
+     * its senders and connected operations. Native completion events are pooled on the same device and returned
+     * before receiver delivery once the entire graph is quiescent.
      */
     template<typename T_Queue>
     class QueuePool
@@ -131,7 +132,7 @@ namespace caravan::alpaka
             QueuePool* m_pool;
         };
 
-        explicit QueuePool(::alpaka::Dev<T_Queue> device) : m_device(std::move(device))
+        explicit QueuePool(::alpaka::Dev<T_Queue> device) : m_device(std::move(device)), m_events(m_device)
         {
         }
 
@@ -175,6 +176,7 @@ namespace caravan::alpaka
         }
 
         ::alpaka::Dev<T_Queue> m_device;
+        detail::EventPool<T_Queue> m_events;
         std::mutex m_mutex;
         std::vector<std::unique_ptr<Entry>> m_entries;
     };
@@ -236,7 +238,8 @@ namespace caravan::alpaka
                       bindQueues(*m_binding, lanes),
                       std::move(submits),
                       dependencies,
-                      Receiver{&m_binding, std::move(receiver)})
+                      Receiver{&m_binding, std::move(receiver)},
+                      &pool.m_events)
             {
             }
 

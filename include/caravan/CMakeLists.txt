@@ -65,6 +65,11 @@ if(CARAVAN_BUILD_TESTING)
         add_test(NAME caravan-alpaka-fence-failure COMMAND caravan-alpaka-completion-test --fatal-fence)
         set_tests_properties(caravan-alpaka-completion caravan-alpaka-fence-failure PROPERTIES TIMEOUT 30)
 
+        alpaka_add_executable(caravan-event-pool-test test/event_pool.cpp)
+        target_link_libraries(caravan-event-pool-test PRIVATE caravan::alpaka)
+        add_test(NAME caravan-event-pool COMMAND caravan-event-pool-test)
+        set_tests_properties(caravan-event-pool PROPERTIES TIMEOUT 30)
+
         alpaka_add_executable(caravan-shared-queue-pool-test test/shared_queue_pool.cpp)
         target_link_libraries(caravan-shared-queue-pool-test PRIVATE caravan::alpaka)
         add_test(NAME caravan-shared-queue-pool COMMAND caravan-shared-queue-pool-test)

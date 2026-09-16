@@ -11,9 +11,11 @@
 #include <exception>
 #include <future>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <utility>
 
+#include <caravan/alpaka/event_pool.hpp>
 #include <caravan/core/eager.hpp>
 
 namespace caravan::alpaka::detail
@@ -23,7 +25,9 @@ namespace caravan::alpaka::detail
     class CompletionFence
     {
     public:
-        explicit CompletionFence(T_Queue const& queue) : m_event(::alpaka::getDev(queue))
+        explicit CompletionFence(T_Queue const& queue, EventPool<T_Queue>* pool = nullptr)
+            : m_lease(pool ? std::make_optional(pool->acquire()) : std::nullopt)
+            , m_event(m_lease ? m_lease->event() : ::alpaka::Event<T_Queue>{::alpaka::getDev(queue)})
         {
         }
 
@@ -58,6 +62,7 @@ namespace caravan::alpaka::detail
         }
 
     private:
+        std::optional<typename EventPool<T_Queue>::Lease> m_lease;
         ::alpaka::Event<T_Queue> m_event;
         bool m_recorded = false;
         bool m_complete = false;
@@ -70,7 +75,7 @@ namespace caravan::alpaka::detail
         using Queue = ::alpaka::QueueGenericThreadsNonBlocking<T_Dev>;
 
     public:
-        explicit CompletionFence(Queue const&)
+        explicit CompletionFence(Queue const&, EventPool<Queue>* = nullptr)
         {
         }
 
