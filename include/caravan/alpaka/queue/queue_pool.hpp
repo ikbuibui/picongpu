@@ -38,6 +38,12 @@ namespace caravan::alpaka
 
     namespace detail
     {
+        template<typename T, typename T_Pool>
+        inline constexpr bool isPoolSubmitSenderFor = false;
+
+        template<typename T_Pool, typename... T_Submits>
+        inline constexpr bool isPoolSubmitSenderFor<PoolSubmitSender<T_Pool, T_Submits...>, T_Pool> = true;
+
         template<typename T_Pool, typename T_Receiver, typename... T_Submits>
         class PooledSubmitOperation;
     } // namespace detail
@@ -262,6 +268,7 @@ namespace caravan::alpaka
         static_assert(stageCount > 0u, "An alpaka submission chain must contain at least one stage");
 
     public:
+        static constexpr auto stage_count = stageCount;
         using completion_signatures = CompletionSignatures<ValueSignature<>, ErrorSignature<std::exception_ptr>>;
 
         PoolSubmitSender(
@@ -368,6 +375,30 @@ namespace caravan::alpaka
             T_Rest... rest) const
         {
             return transform(tag, std::move(left).template compose<false>(std::move(right)), std::move(rest)...);
+        }
+
+        template<caravan::detail::GraphNodeType... T_Nodes>
+        requires(detail::isPoolSubmitSenderFor<typename T_Nodes::sender_type, T_Pool> && ...)
+        auto transform(GraphTag, T_Nodes... nodes) const
+        {
+            auto flattened = merge(std::move(nodes).releaseSender()...);
+            detail::addGraphDependencies<caravan::detail::GraphTopology<T_Nodes...>>(
+                flattened.m_dependencies,
+                std::array<std::size_t, sizeof...(T_Nodes)>{T_Nodes::sender_type::stage_count...});
+            return flattened;
+        }
+
+    private:
+        template<typename T_First>
+        static auto merge(T_First first)
+        {
+            return first;
+        }
+
+        template<typename T_First, typename T_Second, typename... T_Rest>
+        static auto merge(T_First first, T_Second second, T_Rest... rest)
+        {
+            return merge(std::move(first).template compose<false>(std::move(second)), std::move(rest)...);
         }
     };
 

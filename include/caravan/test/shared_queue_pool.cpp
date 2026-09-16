@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <future>
 #include <memory>
 #include <stdexcept>
@@ -69,6 +70,89 @@ int main()
                      | caravan::alpaka::sequence(
                          caravan::alpaka::enqueue([&] { assert((values == std::array{42, 42, 42, 42})); }));
         caravan::syncWait(caravan::alpaka::withDevice(pool, std::move(graph)));
+    }
+
+    // Arbitrary named graphs retain native dependencies when logical lanes alias physical queues.
+    for(std::size_t count : {1u, 2u, 3u})
+    {
+        caravan::alpaka::SharedQueuePool<Queue> pool{device, count};
+        std::array<std::atomic<unsigned>, 4u> ran{};
+        auto a = caravan::node<"a">(caravan::alpaka::enqueue([&] { ++ran[0]; }));
+        auto b = caravan::node<"b">(caravan::alpaka::enqueue([&] { ++ran[1]; }));
+        auto c = caravan::node<"c">(
+            caravan::alpaka::enqueue(
+                [&]
+                {
+                    assert(ran[0] == 1u && ran[1] == 1u);
+                    ++ran[2];
+                }),
+            caravan::after(a, b));
+        auto d = caravan::node<"d">(
+            caravan::alpaka::enqueue(
+                [&]
+                {
+                    assert(ran[1] == 1u);
+                    ++ran[3];
+                }),
+            caravan::after(b));
+        caravan::syncWait(
+            caravan::alpaka::withDevice(pool, caravan::graph(std::move(a), std::move(b), std::move(c), std::move(d))));
+        for(auto const& calls : ran)
+            assert(calls == 1u);
+    }
+
+    // D depends only on B and can finish while the independent A branch is still blocked.
+    {
+        using namespace std::chrono_literals;
+        caravan::alpaka::SharedQueuePool<Queue> pool{device, 2u};
+        caravan::AsyncScope scope;
+        std::promise<void> releaseA, dFinished;
+        auto aGate = releaseA.get_future().share();
+        auto dReady = dFinished.get_future();
+        std::atomic<bool> bRan = false;
+        auto a = caravan::node<"a">(caravan::alpaka::enqueue([aGate] { aGate.wait(); }));
+        auto b = caravan::node<"b">(caravan::alpaka::enqueue([&] { bRan = true; }));
+        auto c = caravan::node<"c">(caravan::alpaka::enqueue([&] { assert(bRan); }), caravan::after(a, b));
+        auto d = caravan::node<"d">(
+            caravan::alpaka::enqueue(
+                [&]
+                {
+                    assert(bRan);
+                    dFinished.set_value();
+                }),
+            caravan::after(b));
+        auto completion = scope.spawn(
+            caravan::alpaka::withDevice(pool, caravan::graph(std::move(a), std::move(b), std::move(c), std::move(d))));
+        auto const dDidNotWaitForA = dReady.wait_for(2s) == std::future_status::ready;
+        assert(completion.state() == caravan::CompletionState::pending);
+        releaseA.set_value();
+        completion.wait();
+        assert(dDidNotWaitForA);
+        scope.join().wait();
+    }
+
+    // The pool-bound factory uses the same graph lowering without a receiver environment.
+    {
+        caravan::alpaka::SharedQueuePool<Queue> pool{device, 2u};
+        auto submissions = pool.submissions();
+        std::atomic<unsigned> step = 0u;
+        auto first = caravan::node<"first">(
+            submissions.submit([&](Queue& queue) { alpaka::enqueue(queue, [&] { ++step; }); }));
+        auto second = caravan::node<"second">(
+            submissions.submit(
+                [&](Queue& queue)
+                {
+                    alpaka::enqueue(
+                        queue,
+                        [&]
+                        {
+                            assert(step == 1u);
+                            ++step;
+                        });
+                }),
+            caravan::after(first));
+        caravan::syncWait(caravan::graph(std::move(first), std::move(second)));
+        assert(step == 2u);
     }
 
     // The fixed cap allows two queues to run while further work aliases a busy queue.
