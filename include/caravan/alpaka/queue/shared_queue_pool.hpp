@@ -20,6 +20,7 @@ namespace caravan::alpaka
      * must only enqueue work on the supplied queue: no recursive graph starts, external queue submissions, or
      * blocking on other branches. Queue references must not escape for later use. The pool must outlive all its
      * senders and connected operations. Cross-pool native composition is rejected, as for QueuePool.
+     * Native completion events are pooled independently of the queue cap and reused after graph quiescence.
      */
     template<typename T_Queue>
     class SharedQueuePool
@@ -73,7 +74,7 @@ namespace caravan::alpaka
             SharedQueuePool* m_pool;
         };
 
-        SharedQueuePool(::alpaka::Dev<T_Queue> const& device, std::size_t queueCount)
+        SharedQueuePool(::alpaka::Dev<T_Queue> const& device, std::size_t queueCount) : m_events(device)
         {
             if(queueCount == 0u)
                 throw std::invalid_argument("SharedQueuePool requires at least one queue");
@@ -119,6 +120,7 @@ namespace caravan::alpaka
             return Binding{*this, base};
         }
 
+        detail::EventPool<T_Queue> m_events;
         std::vector<T_Queue> m_queues;
         // ponytail: serialize graph submission, not execution; use per-queue fence-run locking if contention matters.
         mutable std::mutex m_mutex;
