@@ -8,7 +8,6 @@
 
 #include <cstdint>
 #include <tuple>
-#include <type_traits>
 #include <utility>
 
 #include <caravan/alpaka/queue/managed.hpp>
@@ -60,29 +59,6 @@ namespace caravan::alpaka
         return detail::managedSubmit(
             [destination = std::move(destination), source = std::move(source), extent](auto& nativeQueue) mutable
             { ::alpaka::memcpy(nativeQueue, caravan::unwrap(destination), caravan::unwrap(source), extent); });
-    }
-
-    /** Lazy one-element copy for size values. */
-    template<typename T_Queue, typename T_Destination, typename T_Source>
-    auto size(T_Queue& queue, T_Destination destination, T_Source source)
-    {
-        using Source = std::remove_cvref_t<decltype(caravan::unwrap(source))>;
-        return copy(
-            queue,
-            std::move(destination),
-            std::move(source),
-            ::alpaka::Vec<::alpaka::Dim<Source>, ::alpaka::Idx<Source>>::ones());
-    }
-
-    /** Queue-free lazy one-element copy for size values. */
-    template<typename T_Destination, typename T_Source>
-    auto size(T_Destination destination, T_Source source)
-    {
-        using Source = std::remove_cvref_t<decltype(caravan::unwrap(source))>;
-        return caravan::alpaka::copy(
-            std::move(destination),
-            std::move(source),
-            ::alpaka::Vec<::alpaka::Dim<Source>, ::alpaka::Idx<Source>>::ones());
     }
 
     /** Lazy kernel launch retaining work division, kernel, arguments, and explicit owners. */

@@ -202,18 +202,6 @@ int main()
         | caravan::alpaka::sequence(caravan::alpaka::copy(queue, hostValue, deviceValue, one)));
     assert(hostValue[0] == 117); // (42 + 1) + (73 + 1)
 
-    auto deviceSize = alpaka::allocBuf<std::size_t, Idx>(device, one);
-    auto hostSize = alpaka::allocBuf<std::size_t, Idx>(host, one);
-    auto sizeInput = alpaka::allocBuf<std::size_t, Idx>(host, one);
-    sizeInput[0] = 123u;
-    scope
-        .spawn(
-            caravan::alpaka::sequence(
-                caravan::alpaka::copy(queue, deviceSize, sizeInput, one),
-                caravan::alpaka::size(queue, hostSize, deviceSize)))
-        .wait();
-    assert(hostSize[0] == 123u);
-
     bool callbackContextObserved = false;
     scope
         .spawn(
