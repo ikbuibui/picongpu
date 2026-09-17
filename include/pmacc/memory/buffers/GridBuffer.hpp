@@ -485,41 +485,61 @@ namespace pmacc
             return receiveExchanges[exchange]->receive();
         }
 
-        /** Eager runtime-sized boundary for dynamically selected exchange directions.
+        /** Describe all dynamically selected exchange directions as one lazy aggregate.
          *
-         * The returned event includes previous, even when this rank has no active exchanges.
+         * Direction retirement events still serialize staging-buffer reuse, but branch completion is joined
+         * directly instead of being transferred through ControlContext. The returned sender includes previous,
+         * even when this rank has no active exchanges. It must be started before another communication is created.
          */
-        caravan::Event spawnCommunication(caravan::ControlContext& context, caravan::Event previous = {})
+        auto communication(caravan::Event previous = {})
         {
-            std::vector<caravan::Event> branches;
-            branches.reserve(maxExchange * 2u + 1u);
-            branches.push_back(previous);
-            for(uint32_t i = 0; i < maxExchange; ++i)
-            {
-                if(hasReceiveExchange(i))
+            return caravan::defer(
+                [this, previous = std::move(previous)]() mutable
                 {
-                    auto completion = context.spawn(
-                        caravan::alpaka::withDevice(
-                            Environment<>::get().DeviceContext(),
-                            caravan::whenAll(caravan::asSender(previous), caravan::asSender(receiveCompletions[i]))
-                                | caravan::sequence(receive(i))));
-                    receiveCompletions[i] = completion;
-                    branches.push_back(std::move(completion));
-                }
+                    auto& device = Environment<>::get().DeviceContext();
+                    auto makeReceive = [this, &device, previous](uint32_t exchange)
+                    {
+                        auto predecessor = receiveCompletions[exchange];
+                        caravan::EventSource completion;
+                        receiveCompletions[exchange] = completion.event();
+                        auto branch = caravan::alpaka::withDevice(
+                            device,
+                            caravan::whenAll(caravan::asSender(previous), caravan::asSender(std::move(predecessor)))
+                                | caravan::sequence(receive(exchange)));
+                        return caravan::trackCompletion(std::move(branch), std::move(completion));
+                    };
+                    auto makeSend = [this, &device, previous](uint32_t exchange)
+                    {
+                        auto predecessor = sendCompletions[exchange];
+                        caravan::EventSource completion;
+                        sendCompletions[exchange] = completion.event();
+                        auto branch = caravan::alpaka::withDevice(
+                            device,
+                            caravan::whenAll(caravan::asSender(previous), caravan::asSender(std::move(predecessor)))
+                                | caravan::sequence(send(exchange)));
+                        return caravan::trackCompletion(std::move(branch), std::move(completion));
+                    };
 
-                auto const sendEx = Mask::getMirroredExchangeType(i);
-                if(hasSendExchange(sendEx))
-                {
-                    auto completion = context.spawn(
-                        caravan::alpaka::withDevice(
-                            Environment<>::get().DeviceContext(),
-                            caravan::whenAll(caravan::asSender(previous), caravan::asSender(sendCompletions[sendEx]))
-                                | caravan::sequence(send(sendEx))));
-                    sendCompletions[sendEx] = completion;
-                    branches.push_back(std::move(completion));
-                }
-            }
-            return caravan::whenAll(branches);
+                    using ReceiveBranch = decltype(makeReceive(0u));
+                    using SendBranch = decltype(makeSend(0u));
+                    std::vector<ReceiveBranch> receives;
+                    std::vector<SendBranch> sends;
+                    receives.reserve(maxExchange);
+                    sends.reserve(maxExchange);
+                    for(uint32_t i = 0; i < maxExchange; ++i)
+                    {
+                        if(hasReceiveExchange(i))
+                            receives.push_back(makeReceive(i));
+
+                        auto const sendEx = Mask::getMirroredExchangeType(i);
+                        if(hasSendExchange(sendEx))
+                            sends.push_back(makeSend(sendEx));
+                    }
+                    return caravan::whenAll(
+                        caravan::asSender(std::move(previous)),
+                        caravan::whenAll(std::move(receives)),
+                        caravan::whenAll(std::move(sends)));
+                });
         }
 
         /**

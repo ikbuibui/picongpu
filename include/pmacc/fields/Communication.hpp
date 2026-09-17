@@ -9,7 +9,7 @@
 #include "pmacc/fields/operations/CopyGuardToExchange.hpp"
 #include "pmacc/traits/NumberOfExchanges.hpp"
 
-#include <array>
+#include <vector>
 
 #include <caravan/core.hpp>
 
@@ -35,50 +35,62 @@ namespace pmacc::fields
                | caravan::sequence(buffer.send(exchange));
     }
 
-    /** Eager runtime-sized adapter for additive guard-to-border field communication.
-     *
-     * The returned event includes previous, even when this rank has no active exchanges.
-     */
+    /** Describe additive guard-to-border field communication as one lazy aggregate. */
     template<typename T_Field>
-    caravan::Event spawnCommunication(caravan::ControlContext& context, T_Field& field, caravan::Event previous = {})
+    auto communication(T_Field& field, caravan::Event previous = {})
     {
-        auto& buffer = field.getGridBuffer();
-        auto& device = Environment<>::get().DeviceContext();
-        // Keep only the tail of the ordered receives, plus the independent sends.
-        std::array<caravan::Event, traits::NumberOfExchanges<T_Field::dim>::value> branches{};
-        branches.front() = previous;
-        auto receivePrevious = previous;
-
-        for(uint32_t exchange = 1u; exchange < traits::NumberOfExchanges<T_Field::dim>::value; ++exchange)
-        {
-            if(buffer.hasReceiveExchange(exchange))
+        return caravan::defer(
+            [&field, previous = std::move(previous)]() mutable
             {
-                // Inserts use += and neighboring directions overlap at edges; retain their former FIFO ordering.
-                auto completion = context.spawn(
-                    caravan::alpaka::withDevice(
+                auto& buffer = field.getGridBuffer();
+                auto& device = Environment<>::get().DeviceContext();
+                auto receivePrevious = previous;
+
+                auto makeReceive = [&field, &buffer, &device, &receivePrevious](uint32_t exchange)
+                {
+                    auto reuse = buffer.receiveCompletion(exchange);
+                    caravan::EventSource completion;
+                    auto result = completion.event();
+                    auto branch = caravan::alpaka::withDevice(
                         device,
                         caravan::whenAll(
                             caravan::asSender(receivePrevious),
-                            caravan::asSender(buffer.receiveCompletion(exchange)))
-                            | caravan::sequence(receiveExchange(field, exchange))));
-                buffer.setReceiveCompletion(exchange, completion);
-                receivePrevious = completion;
-                branches.front() = std::move(completion);
-            }
-
-            if(buffer.hasSendExchange(exchange))
-            {
-                auto completion = context.spawn(
-                    caravan::alpaka::withDevice(
+                            caravan::asSender(std::move(reuse)))
+                            | caravan::sequence(receiveExchange(field, exchange)));
+                    receivePrevious = result;
+                    buffer.setReceiveCompletion(exchange, std::move(result));
+                    return caravan::trackCompletion(std::move(branch), std::move(completion));
+                };
+                auto makeSend = [&field, &buffer, &device, previous](uint32_t exchange)
+                {
+                    auto reuse = buffer.sendCompletion(exchange);
+                    caravan::EventSource completion;
+                    buffer.setSendCompletion(exchange, completion.event());
+                    auto branch = caravan::alpaka::withDevice(
                         device,
-                        caravan::whenAll(
-                            caravan::asSender(previous),
-                            caravan::asSender(buffer.sendCompletion(exchange)))
-                            | caravan::sequence(sendExchange(field, exchange))));
-                buffer.setSendCompletion(exchange, completion);
-                branches[exchange] = std::move(completion);
-            }
-        }
-        return caravan::whenAll(branches);
+                        caravan::whenAll(caravan::asSender(previous), caravan::asSender(std::move(reuse)))
+                            | caravan::sequence(sendExchange(field, exchange)));
+                    return caravan::trackCompletion(std::move(branch), std::move(completion));
+                };
+
+                using ReceiveBranch = decltype(makeReceive(1u));
+                using SendBranch = decltype(makeSend(1u));
+                std::vector<ReceiveBranch> receives;
+                std::vector<SendBranch> sends;
+                constexpr auto numExchanges = traits::NumberOfExchanges<T_Field::dim>::value;
+                receives.reserve(numExchanges);
+                sends.reserve(numExchanges);
+                for(uint32_t exchange = 1u; exchange < numExchanges; ++exchange)
+                {
+                    if(buffer.hasReceiveExchange(exchange))
+                        receives.push_back(makeReceive(exchange));
+                    if(buffer.hasSendExchange(exchange))
+                        sends.push_back(makeSend(exchange));
+                }
+                return caravan::whenAll(
+                    caravan::asSender(std::move(previous)),
+                    caravan::whenAll(std::move(receives)),
+                    caravan::whenAll(std::move(sends)));
+            });
     }
 } // namespace pmacc::fields

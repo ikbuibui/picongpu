@@ -972,6 +972,57 @@ namespace
         failureScope.join().wait();
     }
 
+    void testRuntimeAggregateAndDeferredFactory()
+    {
+        caravan::syncWait(caravan::whenAll(std::vector<caravan::EventSender>{}));
+
+        caravan::EventSource first;
+        caravan::EventSource second;
+        std::vector<caravan::EventSender> branches;
+        branches.push_back(caravan::asSender(first.event()));
+        branches.push_back(caravan::asSender(second.event()));
+        caravan::AsyncScope scope;
+        auto aggregate = scope.spawn(caravan::whenAll(std::move(branches)));
+        first.setReady();
+        assert(aggregate.state() == caravan::CompletionState::pending);
+        second.setReady();
+        aggregate.wait();
+
+        caravan::EventSource failedInput;
+        caravan::EventSource unfinishedInput;
+        std::vector<caravan::EventSender> failingBranches;
+        failingBranches.push_back(caravan::asSender(failedInput.event()));
+        failingBranches.push_back(caravan::asSender(unfinishedInput.event()));
+        auto failedAggregate = scope.spawn(caravan::whenAll(std::move(failingBranches)));
+        failedInput.setFailed(std::make_exception_ptr(std::runtime_error("runtime aggregate failure")));
+        assert(failedAggregate.state() == caravan::CompletionState::pending);
+        unfinishedInput.setReady();
+        assert(failedAggregate.state() == caravan::CompletionState::failed);
+
+        bool factoryCalled = false;
+        auto deferred = caravan::defer(
+            [&]
+            {
+                factoryCalled = true;
+                return caravan::asSender(caravan::readyEvent());
+            });
+        assert(!factoryCalled);
+        scope.spawn(std::move(deferred)).wait();
+        assert(factoryCalled);
+
+        caravan::EventSource trackedInput;
+        caravan::EventSource trackedOutput;
+        auto tracked = scope.spawn(caravan::trackCompletion(
+            caravan::asSender(trackedInput.event()),
+            trackedOutput));
+        assert(trackedOutput.event().state() == caravan::CompletionState::pending);
+        trackedInput.setReady();
+        tracked.wait();
+        assert(trackedOutput.event().isReady());
+
+        scope.join().wait();
+    }
+
     void testEagerSenderBridgesAndOperationLifetime()
     {
         caravan::AsyncScope scope;
@@ -1692,6 +1743,7 @@ int main()
     testSequence();
     testRepeatUntil();
     testTypedSenderVocabulary();
+    testRuntimeAggregateAndDeferredFactory();
     testEagerSenderBridgesAndOperationLifetime();
     testContinuesOnRunLoop();
     testControlContext();

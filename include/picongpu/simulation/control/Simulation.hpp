@@ -482,10 +482,10 @@ namespace picongpu
 
             // generate valid GUARDS (overwrite)
             eventSystem::getTransactionEvent().waitForFinished();
-            std::array communications{
-                fieldE->getGridBuffer().spawnCommunication(asyncContext),
-                fieldB->getGridBuffer().spawnCommunication(asyncContext)};
-            asyncContext.wait(caravan::whenAll(communications));
+            auto communications = caravan::whenAll(
+                fieldE->getGridBuffer().communication(),
+                fieldB->getGridBuffer().communication());
+            asyncContext.wait(asyncContext.spawn(std::move(communications)));
 
             log<picLog::SIMULATION_STATE>("Starting simulation from timestep 0");
             return step;

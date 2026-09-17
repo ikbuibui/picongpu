@@ -270,8 +270,10 @@ TEST_CASE("Field communication preserves overwrite and additive semantics", "[as
             box(cell) = guard ? (additive ? 1 : -100) : (additive ? 10 : topology.rank + 1 + step * 10);
         }
         context.wait(context.spawn(caravan::alpaka::withDevice(device, buffer.hostToDevice())));
-        context.wait(
-            additive ? pmacc::fields::spawnCommunication(context, field) : buffer.spawnCommunication(context));
+        if(additive)
+            context.wait(context.spawn(pmacc::fields::communication(field)));
+        else
+            context.wait(context.spawn(buffer.communication()));
         context.wait(context.spawn(caravan::alpaka::withDevice(device, buffer.deviceToHost())));
 
         for(int i = 0; i < extent.productOfComponents(); ++i)
@@ -301,8 +303,11 @@ TEST_CASE("Field communication without exchanges preserves previous work", "[asy
     MockField field;
     caravan::ControlContext context;
     caravan::EventSource previous;
-    auto communication = additive ? pmacc::fields::spawnCommunication(context, field, previous.event())
-                                  : field.buffer.spawnCommunication(context, previous.event());
+    caravan::Event communication;
+    if(additive)
+        communication = context.spawn(pmacc::fields::communication(field, previous.event()));
+    else
+        communication = context.spawn(field.buffer.communication(previous.event()));
     CHECK_FALSE(communication.isReady());
     previous.setReady();
     context.wait(communication);

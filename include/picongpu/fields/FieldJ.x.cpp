@@ -155,10 +155,10 @@ namespace picongpu
 
     caravan::Event FieldJ::spawnCommunication(caravan::ControlContext& context, caravan::Event previous)
     {
-        auto communicated = pmacc::fields::spawnCommunication(context, *this, std::move(previous));
+        auto communicated = pmacc::fields::communication(*this, std::move(previous));
         if(fieldJrecv)
-            return fieldJrecv->spawnCommunication(context, std::move(communicated));
-        return communicated;
+            return context.spawn(std::move(communicated) | caravan::sequence(fieldJrecv->communication()));
+        return context.spawn(std::move(communicated));
     }
 
     void FieldJ::reset(uint32_t)

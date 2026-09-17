@@ -9,7 +9,6 @@
 #include "pmacc/traits/NumberOfExchanges.hpp"
 #include "pmacc/type/Exchange.hpp"
 
-#include <array>
 #include <exception>
 #include <iostream>
 #include <optional>
@@ -149,68 +148,92 @@ namespace pmacc::particles
             });
     }
 
-    /** Eager runtime-sized adapter for all particle exchange directions. */
+    /** Describe all particle exchange directions as one lazy aggregate. */
     template<typename T_Particles>
-    caravan::Event spawnCommunication(
-        caravan::ControlContext& context,
-        T_Particles& particles,
-        caravan::Event previous = {})
+    auto communication(T_Particles& particles, caravan::Event previous = {})
     {
         using HandleGuardRegion = typename T_Particles::HandleGuardRegion;
         using HandleNotExchanged = typename HandleGuardRegion::HandleNotExchanged;
-        auto& buffer = particles.getParticlesBuffer();
-        auto& device = Environment<>::get().DeviceContext();
-        std::vector<caravan::Event> sends;
-        std::vector<caravan::Event> receives;
-        constexpr auto numExchanges = pmacc::traits::NumberOfExchanges<T_Particles::dim>::value;
-        sends.reserve(numExchanges);
-        receives.reserve(numExchanges);
-
-        for(uint32_t exchange = 1u; exchange < numExchanges; ++exchange)
-        {
-            if(buffer.hasSendExchange(exchange))
+        return caravan::defer(
+            [&particles, previous = std::move(previous)]() mutable
             {
-                std::array dependencies{previous, buffer.sendCompletion(exchange)};
-                auto completion = context.spawn(
-                    caravan::alpaka::withDevice(
+                auto& buffer = particles.getParticlesBuffer();
+                auto& device = Environment<>::get().DeviceContext();
+                auto makeSend = [&particles, &buffer, &device, previous](uint32_t exchange)
+                {
+                    auto reuse = buffer.sendCompletion(exchange);
+                    caravan::EventSource completion;
+                    buffer.setSendCompletion(exchange, completion.event());
+                    auto branch = caravan::alpaka::withDevice(
                         device,
-                        caravan::asSender(caravan::whenAll(dependencies))
-                            | caravan::sequence(sendChunks(particles, exchange))));
-                buffer.setSendCompletion(exchange, completion);
-                sends.push_back(std::move(completion));
-            }
-            else
-                sends.push_back(context.spawn(
-                    caravan::alpaka::withDevice(
+                        caravan::whenAll(caravan::asSender(previous), caravan::asSender(std::move(reuse)))
+                            | caravan::sequence(sendChunks(particles, exchange)));
+                    return caravan::trackCompletion(std::move(branch), std::move(completion));
+                };
+                auto makeReceive = [&particles, &buffer, &device, previous](uint32_t exchange)
+                {
+                    auto reuse = buffer.receiveCompletion(exchange);
+                    caravan::EventSource completion;
+                    buffer.setReceiveCompletion(exchange, completion.event());
+                    auto branch = caravan::alpaka::withDevice(
+                        device,
+                        caravan::whenAll(caravan::asSender(previous), caravan::asSender(std::move(reuse)))
+                            | caravan::sequence(receiveChunks(particles, exchange)));
+                    return caravan::trackCompletion(std::move(branch), std::move(completion));
+                };
+                auto makeInactiveSend = [&particles, &device, previous](uint32_t exchange)
+                {
+                    return caravan::alpaka::withDevice(
                         device,
                         caravan::asSender(previous)
-                            | caravan::sequence(HandleNotExchanged{}.handleOutgoingAsync(particles, exchange)))));
-
-            if(buffer.hasReceiveExchange(exchange))
-            {
-                std::array dependencies{previous, buffer.receiveCompletion(exchange)};
-                auto completion = context.spawn(
-                    caravan::alpaka::withDevice(
-                        device,
-                        caravan::asSender(caravan::whenAll(dependencies))
-                            | caravan::sequence(receiveChunks(particles, exchange))));
-                buffer.setReceiveCompletion(exchange, completion);
-                receives.push_back(std::move(completion));
-            }
-            else
-                receives.push_back(context.spawn(
-                    caravan::alpaka::withDevice(
+                            | caravan::sequence(HandleNotExchanged{}.handleOutgoingAsync(particles, exchange)));
+                };
+                auto makeInactiveReceive = [&particles, &device, previous](uint32_t exchange)
+                {
+                    return caravan::alpaka::withDevice(
                         device,
                         caravan::asSender(previous)
-                            | caravan::sequence(HandleNotExchanged{}.handleIncomingAsync(particles, exchange)))));
-        }
+                            | caravan::sequence(HandleNotExchanged{}.handleIncomingAsync(particles, exchange)));
+                };
 
-        auto received = caravan::whenAll(receives);
-        auto filled = context.spawn(
-            caravan::alpaka::withDevice(
-                device,
-                caravan::asSender(std::move(received)) | caravan::sequence(particles.fillBorderGapsAsync())));
-        sends.push_back(std::move(filled));
-        return caravan::whenAll(sends);
+                using SendBranch = decltype(makeSend(1u));
+                using ReceiveBranch = decltype(makeReceive(1u));
+                using InactiveSendBranch = decltype(makeInactiveSend(1u));
+                using InactiveReceiveBranch = decltype(makeInactiveReceive(1u));
+                std::vector<SendBranch> sends;
+                std::vector<ReceiveBranch> receives;
+                std::vector<InactiveSendBranch> inactiveSends;
+                std::vector<InactiveReceiveBranch> inactiveReceives;
+                constexpr auto numExchanges = pmacc::traits::NumberOfExchanges<T_Particles::dim>::value;
+                sends.reserve(numExchanges);
+                receives.reserve(numExchanges);
+                inactiveSends.reserve(numExchanges);
+                inactiveReceives.reserve(numExchanges);
+
+                for(uint32_t exchange = 1u; exchange < numExchanges; ++exchange)
+                {
+                    if(buffer.hasSendExchange(exchange))
+                        sends.push_back(makeSend(exchange));
+                    else
+                        inactiveSends.push_back(makeInactiveSend(exchange));
+
+                    if(buffer.hasReceiveExchange(exchange))
+                        receives.push_back(makeReceive(exchange));
+                    else
+                        inactiveReceives.push_back(makeInactiveReceive(exchange));
+                }
+
+                auto received = caravan::whenAll(
+                    caravan::whenAll(std::move(receives)),
+                    caravan::whenAll(std::move(inactiveReceives)));
+                auto filled = caravan::alpaka::withDevice(
+                    device,
+                    std::move(received) | caravan::sequence(particles.fillBorderGapsAsync()));
+                return caravan::whenAll(
+                    caravan::asSender(std::move(previous)),
+                    caravan::whenAll(std::move(sends)),
+                    caravan::whenAll(std::move(inactiveSends)),
+                    std::move(filled));
+            });
     }
 } // namespace pmacc::particles

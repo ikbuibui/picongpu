@@ -206,21 +206,21 @@ namespace gol
     private:
         void oneStep(uint32_t currentStep, std::unique_ptr<Buffer>& read, std::unique_ptr<Buffer>& write)
         {
-            auto communication = read->spawnCommunication(asyncContext);
-            auto core = evo.runAsync<CORE>(
-                read->getDeviceBuffer().getOwnedDataBox(),
-                write->getDeviceBuffer().getOwnedDataBox());
+                auto communication = read->communication();
+                auto core = evo.runAsync<CORE>(
+                    read->getDeviceBuffer().getOwnedDataBox(),
+                    write->getDeviceBuffer().getOwnedDataBox());
 
-            auto step = caravan::whenAll(std::move(core), caravan::asSender(std::move(communication)))
-                        | caravan::letValue(
-                            [&]
-                            {
-                                return evo.runAsync<BORDER>(
-                                    read->getDeviceBuffer().getOwnedDataBox(),
-                                    write->getDeviceBuffer().getOwnedDataBox());
-                            });
-            asyncContext.wait(asyncContext.spawn(
-                std::move(step) | caravan::alpaka::withDevice(Environment<>::get().DeviceContext())));
+                auto step = caravan::whenAll(std::move(core), std::move(communication))
+                            | caravan::letValue(
+                                [&]
+                                {
+                                    return evo.runAsync<BORDER>(
+                                        read->getDeviceBuffer().getOwnedDataBox(),
+                                        write->getDeviceBuffer().getOwnedDataBox());
+                                });
+                asyncContext.wait(asyncContext.spawn(
+                    std::move(step) | caravan::alpaka::withDevice(Environment<>::get().DeviceContext())));
 
             /* gather::operator() gathers all the buffers and assembles those to  *
              * a complete picture discarding the guards.                          */

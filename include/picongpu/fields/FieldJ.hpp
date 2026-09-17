@@ -98,8 +98,9 @@ namespace picongpu
 
         /** Start communication of current values after their producers complete.
          *
-         * The returned event covers additive guard-to-border exchange and, when
-         * interpolation needs it, the following border-to-guard exchange.
+         * All direction branches are joined internally. The returned event is the single control-context
+         * boundary for additive guard-to-border exchange and, when interpolation needs it, the following
+         * border-to-guard exchange.
          */
         caravan::Event spawnCommunication(caravan::ControlContext& context, caravan::Event previous = {});
 

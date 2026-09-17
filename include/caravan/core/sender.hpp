@@ -6,6 +6,7 @@
 
 #include <caravan/core/sender/common.hpp>
 #include <caravan/core/sender/continues_on.hpp>
+#include <caravan/core/sender/defer.hpp>
 #include <caravan/core/sender/graph.hpp>
 #include <caravan/core/sender/let_value.hpp>
 #include <caravan/core/sender/on.hpp>

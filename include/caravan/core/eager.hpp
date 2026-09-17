@@ -316,6 +316,95 @@ namespace caravan
         std::shared_ptr<detail::State> m_state;
     };
 
+    namespace detail
+    {
+        template<typename T_Receiver>
+        struct TrackCompletionReceiver
+        {
+            template<typename... T>
+            void set_value(T&&... values) noexcept
+            {
+                completion.setReady();
+                receiver->set_value(std::forward<T>(values)...);
+            }
+
+            void set_error(std::exception_ptr error) noexcept
+            {
+                completion.setFailed(error);
+                receiver->set_error(std::move(error));
+            }
+
+            decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
+                requires requires(T_Receiver const& output) { output.get_env(); }
+            {
+                return std::as_const(*receiver).get_env();
+            }
+
+            T_Receiver* receiver;
+            EventSource completion;
+        };
+
+        template<typename T_Sender, typename T_Receiver>
+        class TrackCompletionOperation
+        {
+            using Receiver = TrackCompletionReceiver<T_Receiver>;
+
+        public:
+            TrackCompletionOperation(T_Sender sender, EventSource completion, T_Receiver receiver)
+                : m_receiver(std::move(receiver))
+                , m_operation(std::move(sender).connect(Receiver{&m_receiver, std::move(completion)}))
+            {
+            }
+
+            TrackCompletionOperation(TrackCompletionOperation const&) = delete;
+            TrackCompletionOperation& operator=(TrackCompletionOperation const&) = delete;
+            TrackCompletionOperation(TrackCompletionOperation&&) = delete;
+            TrackCompletionOperation& operator=(TrackCompletionOperation&&) = delete;
+
+            void start() & noexcept
+            {
+                m_operation.start();
+            }
+
+        private:
+            T_Receiver m_receiver;
+            decltype(std::declval<T_Sender&&>().connect(std::declval<Receiver>())) m_operation;
+        };
+    } // namespace detail
+
+    template<Sender T_Sender>
+    class TrackCompletionSender
+    {
+    public:
+        using completion_signatures = CompletionSignaturesOf<T_Sender>;
+
+        TrackCompletionSender(T_Sender sender, EventSource completion)
+            : m_sender(std::move(sender))
+            , m_completion(std::move(completion))
+        {
+        }
+
+        template<typename T_Receiver>
+        auto connect(T_Receiver&& receiver) &&
+        {
+            return detail::TrackCompletionOperation<T_Sender, std::decay_t<T_Receiver>>{
+                std::move(m_sender),
+                std::move(m_completion),
+                std::forward<T_Receiver>(receiver)};
+        }
+
+    private:
+        T_Sender m_sender;
+        EventSource m_completion;
+    };
+
+    /** Mirror a sender's terminal state into an Event without scheduling a handoff. */
+    template<Sender T_Sender>
+    auto trackCompletion(T_Sender sender, EventSource completion)
+    {
+        return TrackCompletionSender<T_Sender>{std::move(sender), std::move(completion)};
+    }
+
     inline Event readyEvent()
     {
         return {};

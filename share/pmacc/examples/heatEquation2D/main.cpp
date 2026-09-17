@@ -177,7 +177,7 @@ auto run(caravan::MpiContext& mpi) -> int
 
     for(uint32_t i = 0; i < NUM_STEPS; i++)
     {
-        auto communication = buff1->spawnCommunication(asyncContext);
+        auto communication = buff1->communication();
 
         auto core = PMACC_LOCKSTEP_KERNEL(StencilFourPoint{})
                         .config(coreMapper.getGridDim(), SuperCell{})(
@@ -189,7 +189,7 @@ auto run(caravan::MpiContext& mpi) -> int
                             DT,
                             coreMapper);
         auto deviceStep
-            = asyncContext.onControl(caravan::whenAll(std::move(core), caravan::asSender(std::move(communication))))
+            = asyncContext.onControl(caravan::whenAll(std::move(core), std::move(communication)))
               | caravan::letValue(
                   [&,
                    residualView = residualBuffer->getDeviceBuffer().getOwnedAlpakaView(),

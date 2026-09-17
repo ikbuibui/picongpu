@@ -230,7 +230,7 @@ TEST_CASE("Particle communication handles exact and partial chunks", "[particles
 {
     caravan::ControlContext context;
     MockParticles particles;
-    context.wait(pmacc::particles::spawnCommunication(context, particles));
+    context.wait(context.spawn(pmacc::particles::communication(particles)));
     CHECK(particles.buffer.sendChunk == 2u);
     CHECK(particles.buffer.receiveChunk == 2u);
     CHECK(particles.inserted == 3u);
@@ -245,7 +245,7 @@ TEST_CASE("Particle communication handles empty chunks", "[particles][async]")
     MockParticles particles;
     particles.buffer.sendChunks = {0u, 0u};
     particles.buffer.receiveChunks = {0u, 0u};
-    context.wait(pmacc::particles::spawnCommunication(context, particles));
+    context.wait(context.spawn(pmacc::particles::communication(particles)));
     CHECK(particles.buffer.sendChunk == 1u);
     CHECK(particles.buffer.receiveChunk == 1u);
     CHECK(particles.inserted == 0u);
@@ -263,7 +263,7 @@ TEST_CASE("Full particle chunks require an empty terminator", "[particles][async
         particles.buffer.sendChunks.assign(fullChunks, 2u);
         particles.buffer.sendChunks.push_back(0u);
         particles.buffer.receiveChunks = particles.buffer.sendChunks;
-        context.wait(pmacc::particles::spawnCommunication(context, particles));
+        context.wait(context.spawn(pmacc::particles::communication(particles)));
         CHECK(particles.buffer.sendChunk == fullChunks + 1u);
         CHECK(particles.buffer.receiveChunk == fullChunks + 1u);
         CHECK(particles.buffer.sentChunks == particles.buffer.sendChunks);
@@ -288,6 +288,8 @@ TEST_CASE("Particle communication forwards callback failures", "[particles][asyn
         caravan::ControlContext context;
         MockParticles particles;
         particles.buffer.failure = failure;
-        CHECK_THROWS_AS(context.wait(pmacc::particles::spawnCommunication(context, particles)), std::runtime_error);
+        CHECK_THROWS_AS(
+            context.wait(context.spawn(pmacc::particles::communication(particles))),
+            std::runtime_error);
     }
 }
