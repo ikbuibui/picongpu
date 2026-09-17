@@ -286,11 +286,12 @@ namespace pmacc
                     if(deviceStaging)
                         ::alpaka::memcpy(nativeQueue, deviceStaging->value, source.value, extent);
                     if(hostStaging)
-                        ::alpaka::memcpy(
-                            nativeQueue,
-                            hostStaging->value,
-                            deviceStaging ? deviceStaging->value : source.value,
-                            extent);
+                    {
+                        if(deviceStaging)
+                            copyStaging(nativeQueue, hostStaging->value, deviceStaging->value, elements);
+                        else
+                            ::alpaka::memcpy(nativeQueue, hostStaging->value, source.value, extent);
+                    }
                 });
             return std::move(queueTail)
                    | caravan::letValue(
@@ -342,7 +343,8 @@ namespace pmacc
                                 deviceSize = std::move(deviceSize),
                                 hostSize = std::move(hostSize),
                                 sizeExtent,
-                                dataExtent](auto& nativeQueue) mutable
+                                dataExtent,
+                                elements = metadata.elements](auto& nativeQueue) mutable
                                {
                                    if(deviceSize)
                                        ::alpaka::memcpy(nativeQueue, *deviceSize, hostSize, sizeExtent);
@@ -350,11 +352,11 @@ namespace pmacc
                                    {
                                        if(deviceStaging)
                                        {
-                                           ::alpaka::memcpy(
+                                           copyStaging(
                                                nativeQueue,
                                                deviceStaging->value,
                                                hostStaging->value,
-                                               dataExtent);
+                                               elements);
                                            ::alpaka::memcpy(
                                                nativeQueue,
                                                destination.value,
@@ -431,6 +433,26 @@ namespace pmacc
         }
 
     private:
+        /** Copy between the contiguous staging allocations, not the potentially strided grid views.
+         * Flattening avoids a multidimensional host/device transfer with many tiny rows for thin halos.
+         * The caller retains the allocations until the submitted queue work completes.
+         */
+        template<typename T_Queue, typename T_Destination, typename T_Source>
+        static void copyStaging(
+            T_Queue& queue,
+            T_Destination& destination,
+            T_Source const& source,
+            size_t elements)
+        {
+            using DestinationView
+                = ::alpaka::ViewPlainPtr<::alpaka::Dev<T_Destination>, TYPE, AlpakaDim<DIM1>, MemIdxType>;
+            using SourceView = ::alpaka::ViewPlainPtr<::alpaka::Dev<T_Source>, TYPE const, AlpakaDim<DIM1>, MemIdxType>;
+            auto const extent = MemSpace<DIM1>(elements).toAlpakaMemVec();
+            DestinationView destinationView(::alpaka::getPtrNative(destination), ::alpaka::getDev(destination), extent);
+            SourceView sourceView(::alpaka::getPtrNative(source), ::alpaka::getDev(source), extent);
+            ::alpaka::memcpy(queue, destinationView, sourceView, extent);
+        }
+
         ReceiveMetadata receiveMetadata(caravan::ReceiveResult const& result) const
         {
             if(result.bytes % sizeof(TYPE) != 0u)
