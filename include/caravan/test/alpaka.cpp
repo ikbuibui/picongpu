@@ -211,6 +211,10 @@ int main()
     auto graphNodeB = caravan::node<"b">(caravan::alpaka::submit(
         secondQueue,
         [&](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [&] { ++graphB; }); }));
+    // Exercise graph-node detection in CUDA/HIP translation units as well as host builds.
+    static_assert(caravan::detail::isGraphNode<decltype(graphNodeA)>);
+    static_assert(caravan::detail::GraphNodeType<decltype(graphNodeA) const&>);
+    static_assert(!caravan::detail::GraphNodeType<int>);
     auto graphNodeC = caravan::node<"c">(
         caravan::alpaka::submit(
             queue,
