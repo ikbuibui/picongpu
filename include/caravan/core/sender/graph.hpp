@@ -67,11 +67,22 @@ namespace caravan
 
     namespace detail
     {
+        // Avoid partial specialization on FixedString: NVCC fails to match it.
         template<typename T>
-        inline constexpr bool isGraphNode = false;
+        consteval bool checkGraphNode()
+        {
+            if constexpr(requires {
+                             typename GraphNode<T::identity::name, typename T::sender_type, typename T::predecessors>;
+                         })
+                return std::is_same_v<
+                    T,
+                    GraphNode<T::identity::name, typename T::sender_type, typename T::predecessors>>;
+            else
+                return false;
+        }
 
-        template<FixedString T_Name, typename T_Sender, typename T_After>
-        inline constexpr bool isGraphNode<GraphNode<T_Name, T_Sender, T_After>> = true;
+        template<typename T>
+        inline constexpr bool isGraphNode = checkGraphNode<T>();
 
         template<typename T>
         concept GraphNodeType = isGraphNode<std::remove_cvref_t<T>>;
