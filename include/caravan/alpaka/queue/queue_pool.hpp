@@ -97,8 +97,8 @@ namespace caravan::alpaka
                 return m_entries[index]->queue;
             }
 
-            template<typename T_Operation>
-            void start(T_Operation& operation) const noexcept
+            template<typename T_Operation, std::size_t N>
+            void start(T_Operation& operation, std::array<std::size_t, N> const&) const noexcept
             {
                 operation.start();
             }
@@ -233,7 +233,8 @@ namespace caravan::alpaka
                 std::tuple<T_Submits...> submits,
                 SubmissionDependencies<stageCount> dependencies,
                 T_Receiver receiver)
-                : m_binding(std::in_place, pool.acquire(laneCount))
+                : m_lanes(lanes)
+                , m_binding(std::in_place, pool.acquire(laneCount))
                 , m_operation(
                       bindQueues(*m_binding, lanes),
                       std::move(submits),
@@ -250,7 +251,7 @@ namespace caravan::alpaka
 
             void start() & noexcept
             {
-                m_binding->start(m_operation);
+                m_binding->start(m_operation, m_lanes);
             }
 
             auto nativeDependencies() const
@@ -264,6 +265,7 @@ namespace caravan::alpaka
             }
 
         private:
+            std::array<std::size_t, stageCount> m_lanes{};
             std::optional<Binding> m_binding;
             Operation m_operation;
         };

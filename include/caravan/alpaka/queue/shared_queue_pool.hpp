@@ -38,10 +38,29 @@ namespace caravan::alpaka
                 return m_pool->m_queues[(m_base + lane) % m_pool->m_queues.size()];
             }
 
-            template<typename T_Operation>
-            void start(T_Operation& operation) const noexcept
+            template<typename T_Operation, std::size_t N>
+            void start(T_Operation& operation, std::array<std::size_t, N> const& lanes) const noexcept
             {
-                operation.start(&m_pool->m_mutex);
+                // Lock only the physical queues this graph uses, in a deterministic order. Independent
+                // directions on different queues can then submit concurrently; same-queue graphs still
+                // serialize, preserving CPU error attribution per queue.
+                std::array<std::size_t, N> distinct{};
+                std::size_t count = 0u;
+                for(auto lane : lanes)
+                {
+                    auto const index = (m_base + lane) % m_pool->m_queues.size();
+                    bool seen = false;
+                    for(std::size_t i = 0u; i < count; ++i)
+                        seen = seen || distinct[i] == index;
+                    if(!seen)
+                        distinct[count++] = index;
+                }
+                std::sort(distinct.begin(), distinct.begin() + count);
+                for(std::size_t i = 0u; i < count; ++i)
+                    m_pool->m_queueMutexes[distinct[i]]->lock();
+                operation.start();
+                for(std::size_t i = count; i-- > 0u;)
+                    m_pool->m_queueMutexes[distinct[i]]->unlock();
             }
 
         private:
@@ -79,8 +98,12 @@ namespace caravan::alpaka
             if(queueCount == 0u)
                 throw std::invalid_argument("SharedQueuePool requires at least one queue");
             m_queues.reserve(queueCount);
+            m_queueMutexes.reserve(queueCount);
             for(std::size_t i = 0u; i < queueCount; ++i)
+            {
                 m_queues.emplace_back(device);
+                m_queueMutexes.push_back(std::make_unique<std::mutex>());
+            }
         }
 
         SharedQueuePool(SharedQueuePool const&) = delete;
@@ -98,7 +121,10 @@ namespace caravan::alpaka
             if(m_started)
                 throw std::logic_error("SharedQueuePool cannot grow after its first submission");
             while(count-- != 0u)
+            {
                 m_queues.emplace_back(::alpaka::getDev(m_queues.front()));
+                m_queueMutexes.push_back(std::make_unique<std::mutex>());
+            }
         }
 
         std::size_t size() const
@@ -122,7 +148,9 @@ namespace caravan::alpaka
 
         detail::EventPool<T_Queue> m_events;
         std::vector<T_Queue> m_queues;
-        // ponytail: serialize graph submission, not execution; use per-queue fence-run locking if contention matters.
+        // One submission lock per queue instead of one pool-wide lock. See Binding::start.
+        std::vector<std::unique_ptr<std::mutex>> m_queueMutexes;
+        // ponytail: serialize pool growth and lease assignment, not graph submission.
         mutable std::mutex m_mutex;
         std::size_t m_next = 0u;
         bool m_started = false;

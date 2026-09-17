@@ -325,6 +325,9 @@ namespace pmacc
             auto const buffer = getCPtrCapacity();
             auto receive = communicator.receive(exchange, buffer.asCharPtr(), buffer.sizeInBytes(), communicationTag);
             return std::move(receive)
+                   // Move the post-MPI device submission off the single MPI owner thread so independent
+                   // directions can be submitted concurrently. With no workers configured this is inline.
+                   | caravan::continuesOn(caravan::SubmissionScheduler{})
                    | caravan::letValue(
                        [this,
                         destination = std::move(destination),
