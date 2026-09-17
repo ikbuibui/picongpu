@@ -8,10 +8,12 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <exception>
 #include <future>
 #include <mutex>
 #include <optional>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -128,11 +130,19 @@ namespace caravan::alpaka::detail
         ~CompletionTask() = default;
     };
 
+    enum class CompletionPollingPolicy
+    {
+        timed,
+        continuous
+    };
+
     /** Observes terminal fences and delivers receivers without blocking on pending backend work. */
     class CompletionThread
     {
     public:
-        CompletionThread() : m_thread([this] { run(); })
+        explicit CompletionThread(CompletionPollingPolicy pollingPolicy = CompletionPollingPolicy::timed)
+            : m_pollingPolicy(pollingPolicy)
+            , m_thread([this] { run(); })
         {
         }
 
@@ -171,10 +181,9 @@ namespace caravan::alpaka::detail
             {
                 {
                     std::unique_lock lock(m_mutex);
-                    if(pending)
-                        // linear scans at 100 us; tune/back off if measured polling cost warrants it.
+                    if(pending && m_pollingPolicy == CompletionPollingPolicy::timed)
                         m_ready.wait_for(lock, std::chrono::microseconds{100}, [this] { return m_head; });
-                    else
+                    else if(!pending)
                         m_ready.wait(lock, [this] { return m_stopped || m_head; });
                     if(m_head)
                     {
@@ -207,12 +216,21 @@ namespace caravan::alpaka::detail
         CompletionTask* m_head = nullptr;
         CompletionTask* m_tail = nullptr;
         bool m_stopped = false;
+        CompletionPollingPolicy m_pollingPolicy;
         std::thread m_thread;
     };
 
+    /** Select the diagnostic low-latency policy before the process first submits alpaka work. */
+    inline CompletionPollingPolicy completionPollingPolicy() noexcept
+    {
+        auto const* value = std::getenv("CARAVAN_ALPAKA_COMPLETION_POLLING");
+        return value && std::string_view{value} == "continuous" ? CompletionPollingPolicy::continuous
+                                                                : CompletionPollingPolicy::timed;
+    }
+
     inline CompletionThread& completionThread()
     {
-        static CompletionThread thread;
+        static CompletionThread thread{completionPollingPolicy()};
         return thread;
     }
 } // namespace caravan::alpaka::detail
