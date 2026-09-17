@@ -39,18 +39,23 @@ namespace pmacc::fields
     template<typename T_Field>
     auto communication(T_Field& field, caravan::Event previous = {})
     {
-        return caravan::defer(
-            [&field, previous = std::move(previous)]() mutable
+        return caravan::deferWithReservations(
+            [&field, previous = std::move(previous)](caravan::EventReservations& reservations) mutable
             {
                 auto& buffer = field.getGridBuffer();
                 auto& device = Environment<>::get().DeviceContext();
                 auto receivePrevious = previous;
-
-                auto makeReceive = [&field, &buffer, &device, &receivePrevious](uint32_t exchange)
+                // Direction events are rolled back if a later direction fails to connect.
+                auto makeReceive = [&field, &buffer, &device, &receivePrevious, &reservations](uint32_t exchange)
                 {
                     auto reuse = buffer.receiveCompletion(exchange);
                     caravan::EventSource completion;
                     auto result = completion.event();
+                    reservations.replace(
+                        reuse,
+                        result,
+                        [&buffer, exchange](caravan::Event event) noexcept
+                        { buffer.setReceiveCompletion(exchange, std::move(event)); });
                     auto branch = caravan::alpaka::withDevice(
                         device,
                         caravan::whenAll(
@@ -58,14 +63,17 @@ namespace pmacc::fields
                             caravan::asSender(std::move(reuse)))
                             | caravan::sequence(receiveExchange(field, exchange)));
                     receivePrevious = result;
-                    buffer.setReceiveCompletion(exchange, std::move(result));
                     return caravan::trackCompletion(std::move(branch), std::move(completion));
                 };
-                auto makeSend = [&field, &buffer, &device, previous](uint32_t exchange)
+                auto makeSend = [&field, &buffer, &device, previous, &reservations](uint32_t exchange)
                 {
                     auto reuse = buffer.sendCompletion(exchange);
                     caravan::EventSource completion;
-                    buffer.setSendCompletion(exchange, completion.event());
+                    reservations.replace(
+                        reuse,
+                        completion.event(),
+                        [&buffer, exchange](caravan::Event event) noexcept
+                        { buffer.setSendCompletion(exchange, std::move(event)); });
                     auto branch = caravan::alpaka::withDevice(
                         device,
                         caravan::whenAll(caravan::asSender(previous), caravan::asSender(std::move(reuse)))

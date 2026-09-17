@@ -1010,6 +1010,18 @@ namespace
         scope.spawn(std::move(deferred)).wait();
         assert(factoryCalled);
 
+        auto materializedValue = caravan::syncWait<caravan::CompletionResult<int>>(
+            AsyncValueSender<int>{caravan::readyEvent(), 42} | caravan::materialize());
+        assert(materializedValue.hasValue());
+        assert(std::get<0>(materializedValue.takeValues()) == 42);
+        auto expectedError = std::make_exception_ptr(std::runtime_error("materialized failure"));
+        caravan::EventSource materializedFailure;
+        auto materializedError = scope.spawnFuture<caravan::CompletionResult<>>(
+            caravan::asSender(materializedFailure.event()) | caravan::materialize());
+        materializedFailure.setFailed(expectedError);
+        auto failureResult = std::move(materializedError).takeResult();
+        assert(!failureResult.hasValue() && failureResult.error() == expectedError);
+
         caravan::EventSource trackedInput;
         caravan::EventSource trackedOutput;
         auto tracked = scope.spawn(caravan::trackCompletion(
@@ -1021,6 +1033,86 @@ namespace
         assert(trackedOutput.event().isReady());
 
         scope.join().wait();
+    }
+
+    void testReservedDefer()
+    {
+        // Successful connection commits reserved resource replacements.
+        {
+            caravan::Event original = caravan::EventSource{}.event();
+            caravan::EventSource replacement;
+            auto sender = caravan::deferWithReservations(
+                [&](caravan::EventReservations& reservations)
+                {
+                    reservations.replace(original, replacement.event());
+                    return caravan::asSender(caravan::readyEvent());
+                });
+            caravan::syncWait(std::move(sender));
+            replacement.setReady();
+            assert(original.isReady());
+        }
+
+        // A failed factory restores every reserved resource before delivering the error.
+        {
+            caravan::EventSource originalSource;
+            caravan::Event original = originalSource.event();
+            bool failed = false;
+            auto sender = caravan::deferWithReservations(
+                [&](caravan::EventReservations& reservations) -> caravan::EventSender
+                {
+                    reservations.replace(original, caravan::EventSource{}.event());
+                    throw std::runtime_error("reservation setup failure");
+                });
+            try
+            {
+                caravan::syncWait(std::move(sender));
+            }
+            catch(std::runtime_error const&)
+            {
+                failed = true;
+            }
+            assert(failed);
+            // Rollback must have restored the original event; a stale replacement would stay pending.
+            originalSource.setReady();
+            assert(original.isReady());
+        }
+
+        // Connection can fail after the factory returns and earlier children have connected.
+        // Replacing the same resource twice must roll back in reverse order, before a retry starts.
+        {
+            caravan::Event resource;
+            bool started = false;
+            bool destroyed = false;
+            bool failed = false;
+            auto sender = caravan::deferWithReservations(
+                [&](caravan::EventReservations& reservations)
+                {
+                    reservations.replace(resource, caravan::EventSource{}.event());
+                    reservations.replace(resource, caravan::EventSource{}.event());
+                    return caravan::whenAll(
+                        ScopeOperationTrackingSender{&destroyed} | caravan::then([&] { started = true; }),
+                        ThrowingConnectSender{});
+                });
+            try
+            {
+                caravan::syncWait(std::move(sender));
+            }
+            catch(std::runtime_error const&)
+            {
+                failed = true;
+                assert(resource.isReady());
+                caravan::syncWait(
+                    caravan::deferWithReservations(
+                        [&](caravan::EventReservations& reservations)
+                        {
+                            caravan::EventSource completion;
+                            auto previous = reservations.replace(resource, completion.event());
+                            return caravan::trackCompletion(caravan::asSender(previous), completion);
+                        }));
+            }
+            assert(failed && destroyed && !started);
+            assert(resource.isReady());
+        }
     }
 
     void testEagerSenderBridgesAndOperationLifetime()
@@ -1744,6 +1836,7 @@ int main()
     testRepeatUntil();
     testTypedSenderVocabulary();
     testRuntimeAggregateAndDeferredFactory();
+    testReservedDefer();
     testEagerSenderBridgesAndOperationLifetime();
     testContinuesOnRunLoop();
     testControlContext();

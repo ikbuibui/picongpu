@@ -286,19 +286,29 @@ namespace caravan::alpaka
 
         void waitOn(T_Queue& queue) const
         {
+            // A partial submission may already own live device work, but it cannot provide a valid dependency
+            // for a successor. Throwing here makes the consumer graph skip its descendants while completion()
+            // remains the quiescence authority for the producer.
+            if(m_submissionError)
+                std::rethrow_exception(m_submissionError);
             for(auto const& dependency : m_dependencies)
                 dependency.waitOn(queue);
         }
 
         /** Internal construction from graph-tail dependencies and retirement completion. */
-        SubmittedWork(std::vector<NativeDependency<T_Queue>> dependencies, Event completion)
+        SubmittedWork(
+            std::vector<NativeDependency<T_Queue>> dependencies,
+            Event completion,
+            std::exception_ptr submissionError = {})
             : m_dependencies(std::move(dependencies))
             , m_completion(std::move(completion))
+            , m_submissionError(std::move(submissionError))
         {
         }
 
     private:
         std::vector<NativeDependency<T_Queue>> m_dependencies;
         Event m_completion;
+        std::exception_ptr m_submissionError;
     };
 } // namespace caravan::alpaka

@@ -29,6 +29,7 @@
 #include "pmacc/memory/dataTypes/Mask.hpp"
 #include "pmacc/types.hpp"
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -309,8 +310,10 @@ namespace pmacc
                        });
         }
 
-        /** Describe one lazy receive, publishing its native dependency after the device copies are submitted. */
-        auto receiveSubmitted()
+    private:
+        /** Build the common MPI/metadata/copy path; finish selects submission or completion semantics. */
+        template<typename T_Finish>
+        auto receiveWith(T_Finish finish)
         {
             auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
             auto destination = getDeviceBuffer().getOwnedAlpakaView();
@@ -332,7 +335,8 @@ namespace pmacc
                        [this,
                         destination = std::move(destination),
                         deviceStaging = std::move(deviceStaging),
-                        hostStaging = std::move(hostStaging)](caravan::ReceiveResult result) mutable
+                        hostStaging = std::move(hostStaging),
+                        finish = std::move(finish)](caravan::ReceiveResult result) mutable
                        {
                            auto const metadata = receiveMetadata(result);
                            getDeviceBuffer().setSizeHostSide(metadata.elements);
@@ -386,25 +390,40 @@ namespace pmacc
                                            deviceStaging->value,
                                            dataExtent);
                                });
-                           auto& device = Environment<>::get().DeviceContext();
-                           return caravan::alpaka::startSubmission(device, std::move(copy))
-                                  | caravan::then(
-                                      [metadata](caravan::alpaka::SubmittedWork<ComputeDeviceQueue> work)
-                                      { return SubmittedReceive{metadata, std::move(work)}; });
+                           return std::invoke(finish, std::move(copy), metadata);
                        });
         }
 
-        /** Compatibility receive whose completion still means device quiescence. */
+    public:
+        /** Publish queue-side readiness; the preinstalled completion sink observes copy quiescence. */
+        auto receiveSubmitted()
+        {
+            return receiveSubmitted(caravan::EventSource{});
+        }
+
+        template<typename T_Completion>
+        auto receiveSubmitted(T_Completion completion)
+        {
+            return receiveWith(
+                [completion = std::move(completion)](auto copy, ReceiveMetadata metadata) mutable
+                {
+                    return caravan::alpaka::startSubmission(
+                               Environment<>::get().DeviceContext(), std::move(copy), std::move(completion))
+                           | caravan::then(
+                               [metadata](caravan::alpaka::SubmittedWork<ComputeDeviceQueue> work)
+                               { return SubmittedReceive{metadata, std::move(work)}; });
+                });
+        }
+
+        /** Ordinary receive completes at device quiescence without split-phase bookkeeping. */
         auto receive()
         {
-            return receiveSubmitted()
-                   | caravan::letValue(
-                       [](SubmittedReceive& submitted)
-                       {
-                           auto metadata = submitted.metadata;
-                           return caravan::asSender(submitted.deviceWork.completion())
-                                  | caravan::then([metadata] { return metadata; });
-                       });
+            return receiveWith(
+                [](auto copy, ReceiveMetadata metadata)
+                {
+                    return caravan::alpaka::withDevice(Environment<>::get().DeviceContext(), std::move(copy))
+                           | caravan::then([metadata] { return metadata; });
+                });
         }
 
         /**

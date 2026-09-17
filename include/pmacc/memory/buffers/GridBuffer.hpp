@@ -29,12 +29,15 @@
 
 #include <algorithm>
 #include <array>
+#include <exception>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <tuple>
 #include <vector>
 
 namespace pmacc
@@ -494,6 +497,13 @@ namespace pmacc
             return receiveExchanges[exchange]->receiveSubmitted();
         }
 
+        /** As above, but retire into a caller-owned completion sink installed before submission. */
+        template<typename T_Completion>
+        auto receiveSubmitted(uint32_t exchange, T_Completion completion)
+        {
+            return receiveExchanges[exchange]->receiveSubmitted(std::move(completion));
+        }
+
         /** Describe all dynamically selected exchange directions as one lazy aggregate.
          *
          * Direction retirement events still serialize staging-buffer reuse, but branch completion is joined
@@ -502,26 +512,26 @@ namespace pmacc
          */
         auto communication(caravan::Event previous = {})
         {
-            return caravan::defer(
-                [this, previous = std::move(previous)]() mutable
+            return caravan::deferWithReservations(
+                [this, previous = std::move(previous)](caravan::EventReservations& reservations) mutable
                 {
                     auto& device = Environment<>::get().DeviceContext();
-                    auto makeReceive = [this, &device, previous](uint32_t exchange)
+                    // Installed reservations are rolled back if any later direction fails to connect, so a
+                    // failed setup cannot leave a permanently pending direction event for the next step.
+                    auto makeReceive = [this, &reservations, &device, previous](uint32_t exchange)
                     {
-                        auto predecessor = receiveCompletions[exchange];
                         caravan::EventSource completion;
-                        receiveCompletions[exchange] = completion.event();
+                        auto predecessor = reservations.replace(receiveCompletions[exchange], completion.event());
                         auto branch = caravan::alpaka::withDevice(
                             device,
                             caravan::whenAll(caravan::asSender(previous), caravan::asSender(std::move(predecessor)))
                                 | caravan::sequence(receive(exchange)));
                         return caravan::trackCompletion(std::move(branch), std::move(completion));
                     };
-                    auto makeSend = [this, &device, previous](uint32_t exchange)
+                    auto makeSend = [this, &reservations, &device, previous](uint32_t exchange)
                     {
-                        auto predecessor = sendCompletions[exchange];
                         caravan::EventSource completion;
-                        sendCompletions[exchange] = completion.event();
+                        auto predecessor = reservations.replace(sendCompletions[exchange], completion.event());
                         auto branch = caravan::alpaka::withDevice(
                             device,
                             caravan::whenAll(caravan::asSender(previous), caravan::asSender(std::move(predecessor)))
@@ -553,47 +563,45 @@ namespace pmacc
 
         /** Submit CORE and receive copies independently, then enqueue BORDER behind their native fences.
          *
-         * Send retirement remains part of terminal completion. Receive and CORE completion events are also joined
-         * for error reporting and lifetime retirement, but they no longer gate BORDER submission on host fence
-         * observation. The border factory is invoked once all receive-copy fences have been recorded.
+         * Send retirement remains part of terminal completion. Receive and CORE retirement is joined on every
+         * path, including MPI, submission, and border-factory failures. Direction retirement events are installed
+         * before receives start so overlapping communication attempts cannot reuse staging storage prematurely.
          */
         template<typename T_Core, typename T_BorderFactory>
         auto communicationThen(T_Core core, T_BorderFactory borderFactory, caravan::Event previous = {})
         {
-            return caravan::defer(
+            return caravan::deferWithReservations(
                 [this,
                  core = std::move(core),
                  borderFactory = std::move(borderFactory),
-                 previous = std::move(previous)]() mutable
+                 previous = std::move(previous)](caravan::EventReservations& reservations) mutable
                 {
-                    using Queue = ComputeDeviceQueue;
-                    using Work = caravan::alpaka::SubmittedWork<Queue>;
+                    using Group = caravan::alpaka::SubmissionGroup<ComputeDeviceQueue>;
+                    auto group = std::make_shared<Group>();
                     auto& device = Environment<>::get().DeviceContext();
 
-                    std::size_t receiveCount = 0u;
-                    for(uint32_t i = 0; i < maxExchange; ++i)
-                        receiveCount += hasReceiveExchange(i) ? 1u : 0u;
-                    auto receiveWork = std::make_shared<std::vector<std::optional<Work>>>(receiveCount);
+                    // CORE publishes its native dependency and retires into the group.
+                    auto coreTicket = group->add();
+                    auto coreReady = coreTicket.publish(
+                        caravan::asSender(previous)
+                        | caravan::sequence(
+                            caravan::alpaka::startSubmission(device, std::move(core), coreTicket)));
 
-                    auto makeReceive = [this, previous, receiveWork](uint32_t exchange, std::size_t index)
+                    auto makeReceive = [this, previous, group, &reservations](uint32_t exchange)
                     {
-                        auto predecessor = receiveCompletions[exchange];
-                        return caravan::whenAll(
-                                   caravan::asSender(previous),
-                                   caravan::asSender(std::move(predecessor)))
-                               | caravan::sequence(receiveSubmitted(exchange))
-                               | caravan::then(
-                                   [this, receiveWork, exchange, index](auto submitted) mutable
-                                   {
-                                       receiveCompletions[exchange] = submitted.deviceWork.completion();
-                                       (*receiveWork)[index].emplace(std::move(submitted.deviceWork));
-                                   });
+                        auto ticket = group->add();
+                        auto predecessor = reservations.replace(receiveCompletions[exchange], ticket.event());
+                        return ticket.publish(
+                            caravan::whenAll(
+                                caravan::asSender(previous),
+                                caravan::asSender(std::move(predecessor)))
+                                | caravan::sequence(receiveSubmitted(exchange, ticket)),
+                            [](auto submitted) { return std::move(submitted.deviceWork); });
                     };
-                    auto makeSend = [this, &device, previous](uint32_t exchange)
+                    auto makeSend = [this, &reservations, &device, previous](uint32_t exchange)
                     {
-                        auto predecessor = sendCompletions[exchange];
                         caravan::EventSource completion;
-                        sendCompletions[exchange] = completion.event();
+                        auto predecessor = reservations.replace(sendCompletions[exchange], completion.event());
                         auto branch = caravan::alpaka::withDevice(
                             device,
                             caravan::whenAll(
@@ -603,62 +611,39 @@ namespace pmacc
                         return caravan::trackCompletion(std::move(branch), std::move(completion));
                     };
 
-                    using ReceiveBranch = decltype(makeReceive(0u, 0u));
+                    using ReceiveBranch = decltype(makeReceive(0u));
                     using SendBranch = decltype(makeSend(0u));
                     std::vector<ReceiveBranch> receives;
                     std::vector<SendBranch> sends;
-                    receives.reserve(receiveCount);
+                    receives.reserve(maxExchange);
                     sends.reserve(maxExchange);
-                    std::size_t receiveIndex = 0u;
                     for(uint32_t i = 0; i < maxExchange; ++i)
                     {
                         if(hasReceiveExchange(i))
-                            receives.push_back(makeReceive(i, receiveIndex++));
+                            receives.push_back(makeReceive(i));
 
                         auto const sendEx = Mask::getMirroredExchangeType(i);
                         if(hasSendExchange(sendEx))
                             sends.push_back(makeSend(sendEx));
                     }
 
-                    auto ready = caravan::whenAll(
-                        caravan::alpaka::startSubmission(device, std::move(core)),
-                        caravan::whenAll(std::move(receives)));
+                    auto ready = caravan::whenAll(std::move(coreReady), caravan::whenAll(std::move(receives)));
                     auto border = std::move(ready)
                                   | caravan::letValue(
-                                      [receiveWork,
-                                       &device,
-                                       borderFactory = std::move(borderFactory)](Work& coreWork) mutable
+                                      [group, &device, borderFactory = std::move(borderFactory)]() mutable
                                       {
-                                          std::vector<caravan::EventSender> retirements;
-                                          retirements.reserve(receiveWork->size() + 1u);
-                                          retirements.push_back(caravan::asSender(coreWork.completion()));
-                                          for(auto const& work : *receiveWork)
-                                          {
-                                              if(!work)
-                                                  throw std::logic_error("Receive dependency was not published");
-                                              retirements.push_back(caravan::asSender(work->completion()));
-                                          }
-
-                                          auto waits = caravan::alpaka::submit(
-                                              [coreWork, receiveWork](auto& queue)
-                                              {
-                                                  coreWork.waitOn(queue);
-                                                  for(auto const& work : *receiveWork)
-                                                      work->waitOn(queue);
-                                              });
-                                          auto deviceBorder = caravan::alpaka::withDevice(
+                                          // Import published native fences; a producer error surfaces here.
+                                          auto waits = group->waitFor();
+                                          return caravan::alpaka::withDevice(
                                               device,
                                               std::move(waits)
                                                   | caravan::alpaka::sequence(std::invoke(borderFactory)));
-                                          return caravan::whenAll(
-                                              std::move(deviceBorder),
-                                              caravan::whenAll(std::move(retirements)));
                                       });
-                    // Start CORE/receives first; eager send construction must not delay the CORE launch.
-                    return caravan::whenAll(
+                    // Terminal completion joins border, sends, previous and every producer's retirement.
+                    return group->join(caravan::whenAll(
                         std::move(border),
                         caravan::whenAll(std::move(sends)),
-                        caravan::asSender(std::move(previous)));
+                        caravan::asSender(std::move(previous))));
                 });
         }
 

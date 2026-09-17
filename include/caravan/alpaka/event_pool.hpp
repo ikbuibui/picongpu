@@ -13,7 +13,7 @@
 
 namespace caravan::alpaka::detail
 {
-    /** Device-local event storage. Leases must outlive native use and the pool must outlive its leases. */
+    /** Device-local event storage. Leases retain the backing storage and must outlive native use. */
     template<typename T_Queue>
     class EventPool
     {
@@ -29,6 +29,18 @@ namespace caravan::alpaka::detail
             Entry* next = nullptr;
         };
 
+        struct Storage
+        {
+            explicit Storage(::alpaka::Dev<T_Queue> device) : device(std::move(device))
+            {
+            }
+
+            ::alpaka::Dev<T_Queue> device;
+            std::mutex mutex;
+            std::vector<std::unique_ptr<Entry>> entries;
+            Entry* free = nullptr;
+        };
+
     public:
         class Lease
         {
@@ -36,17 +48,17 @@ namespace caravan::alpaka::detail
             Lease(Lease const&) = delete;
             Lease& operator=(Lease const&) = delete;
 
-            Lease(Lease&& other) noexcept : m_pool(std::exchange(other.m_pool, nullptr)), m_entry(other.m_entry)
+            Lease(Lease&& other) noexcept : m_storage(std::move(other.m_storage)), m_entry(other.m_entry)
             {
             }
 
             ~Lease()
             {
-                if(m_pool)
+                if(m_storage)
                 {
-                    std::lock_guard lock(m_pool->m_mutex);
-                    m_entry->next = m_pool->m_free;
-                    m_pool->m_free = m_entry;
+                    std::lock_guard lock(m_storage->mutex);
+                    m_entry->next = m_storage->free;
+                    m_storage->free = m_entry;
                 }
             }
 
@@ -58,15 +70,17 @@ namespace caravan::alpaka::detail
         private:
             friend class EventPool;
 
-            Lease(EventPool& pool, Entry& entry) : m_pool(&pool), m_entry(&entry)
+            Lease(std::shared_ptr<Storage> storage, Entry& entry)
+                : m_storage(std::move(storage))
+                , m_entry(&entry)
             {
             }
 
-            EventPool* m_pool;
+            std::shared_ptr<Storage> m_storage;
             Entry* m_entry;
         };
 
-        explicit EventPool(::alpaka::Dev<T_Queue> device) : m_device(std::move(device))
+        explicit EventPool(::alpaka::Dev<T_Queue> device) : m_storage(std::make_shared<Storage>(std::move(device)))
         {
         }
 
@@ -75,22 +89,19 @@ namespace caravan::alpaka::detail
 
         Lease acquire()
         {
-            std::lock_guard lock(m_mutex);
-            if(m_free)
+            std::lock_guard lock(m_storage->mutex);
+            if(m_storage->free)
             {
-                auto* entry = m_free;
-                m_free = entry->next;
-                return Lease{*this, *entry};
+                auto* entry = m_storage->free;
+                m_storage->free = entry->next;
+                return Lease{m_storage, *entry};
             }
-            // ponytail: retain the high-water mark; trim idle events only if measured resource use warrants it.
-            m_entries.push_back(std::make_unique<Entry>(m_device));
-            return Lease{*this, *m_entries.back()};
+            // Retain the high-water mark until the pool and all exported dependencies are released.
+            m_storage->entries.push_back(std::make_unique<Entry>(m_storage->device));
+            return Lease{m_storage, *m_storage->entries.back()};
         }
 
     private:
-        ::alpaka::Dev<T_Queue> m_device;
-        std::mutex m_mutex;
-        std::vector<std::unique_ptr<Entry>> m_entries;
-        Entry* m_free = nullptr;
+        std::shared_ptr<Storage> m_storage;
     };
 } // namespace caravan::alpaka::detail

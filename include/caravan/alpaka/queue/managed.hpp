@@ -12,6 +12,7 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <caravan/alpaka/queue/queue_pool.hpp>
 #include <caravan/core/sender/common.hpp>
@@ -215,8 +216,9 @@ namespace caravan::alpaka
 
     namespace detail
     {
-        template<typename T_Context, typename T_Sender>
-        class SubmissionWorkState : public std::enable_shared_from_this<SubmissionWorkState<T_Context, T_Sender>>
+        template<typename T_Context, typename T_Sender, typename T_Completion>
+        class SubmissionWorkState
+            : public std::enable_shared_from_this<SubmissionWorkState<T_Context, T_Sender, T_Completion>>
         {
             struct Receiver
             {
@@ -237,20 +239,24 @@ namespace caravan::alpaka
                 withDevice(std::declval<T_Context&>(), std::declval<T_Sender>()).connect(std::declval<Receiver>()));
 
         public:
-            SubmissionWorkState(T_Context& context, T_Sender sender)
-                : m_operation(withDevice(context, std::move(sender)).connect(Receiver{this}))
+            SubmissionWorkState(T_Context& context, T_Sender sender, T_Completion completion)
+                : m_completion(std::move(completion))
+                , m_operation(withDevice(context, std::move(sender)).connect(Receiver{this}))
             {
+                m_operation.enableNativeDependencies();
             }
 
-            void start()
+            void start() noexcept
             {
                 m_keepAlive = this->shared_from_this();
+                if constexpr(requires { m_completion.submitted(); })
+                    m_completion.submitted();
                 m_operation.start();
             }
 
-            auto nativeDependencies() const
+            auto takeNativeDependencies() noexcept
             {
-                return m_operation.nativeDependencies();
+                return m_operation.takeNativeDependencies();
             }
 
             std::exception_ptr submissionError() const noexcept
@@ -274,21 +280,25 @@ namespace caravan::alpaka
                 m_keepAlive.reset();
             }
 
-            EventSource m_completion;
+            T_Completion m_completion;
             std::shared_ptr<SubmissionWorkState> m_keepAlive;
             Operation m_operation;
         };
 
-        template<typename T_Context, typename T_Sender, typename T_Receiver>
+        template<typename T_Context, typename T_Sender, typename T_Completion, typename T_Receiver>
         class StartSubmissionOperation
         {
             using Queue = typename T_Context::Queue;
-            using State = SubmissionWorkState<T_Context, T_Sender>;
+            using State = SubmissionWorkState<T_Context, T_Sender, T_Completion>;
 
         public:
-            StartSubmissionOperation(T_Context& context, T_Sender sender, T_Receiver receiver)
+            StartSubmissionOperation(
+                T_Context& context,
+                T_Sender sender,
+                T_Completion completion,
+                T_Receiver receiver)
                 : m_receiver(std::move(receiver))
-                , m_state(std::make_shared<State>(context, std::move(sender)))
+                , m_state(std::make_shared<State>(context, std::move(sender), std::move(completion)))
             {
             }
 
@@ -300,11 +310,10 @@ namespace caravan::alpaka
             void start() & noexcept
             {
                 m_state->start();
-                if(auto error = m_state->submissionError())
-                    m_receiver.set_error(std::move(error));
-                else
-                    m_receiver.set_value(
-                        SubmittedWork<Queue>{m_state->nativeDependencies(), m_state->completion()});
+                auto error = m_state->submissionError();
+                auto dependencies = m_state->takeNativeDependencies();
+                m_receiver.set_value(
+                    SubmittedWork<Queue>{std::move(dependencies), m_state->completion(), std::move(error)});
                 // Receiver delivery may destroy this operation. Do not access members here.
             }
 
@@ -314,12 +323,15 @@ namespace caravan::alpaka
         };
     } // namespace detail
 
-    /** A sender which completes when a managed graph has been submitted, not when it has finished.
+    /** A sender which completes when a managed graph has attempted submission, not when it has finished.
      *
      * The resulting SubmittedWork carries queue-side dependencies plus a separate host-visible completion event.
-     * This explicit split prevents dependency availability from being mistaken for buffer quiescence.
+     * A partial submission produces work whose waitOn() rejects consumers and whose completion remains pending
+     * until the producer is quiescent. This prevents submission failure from becoming premature buffer retirement.
+     * Joining a scope containing only this sender joins publication, not execution: the context and borrowed
+     * storage must outlive completion(). Use SubmissionGroup to join publication and retirement structurally.
      */
-    template<typename T_Context, typename T_Sender>
+    template<typename T_Context, typename T_Sender, typename T_Completion>
     class StartSubmissionSender
     {
         using Queue = typename T_Context::Queue;
@@ -328,28 +340,40 @@ namespace caravan::alpaka
         using completion_signatures
             = CompletionSignatures<ValueSignature<SubmittedWork<Queue>>, ErrorSignature<std::exception_ptr>>;
 
-        StartSubmissionSender(T_Context& context, T_Sender sender) : m_context(&context), m_sender(std::move(sender))
+        StartSubmissionSender(T_Context& context, T_Sender sender, T_Completion completion)
+            : m_context(&context)
+            , m_sender(std::move(sender))
+            , m_completion(std::move(completion))
         {
         }
 
         template<typename T_Receiver>
         auto connect(T_Receiver&& receiver) &&
         {
-            return detail::StartSubmissionOperation<T_Context, T_Sender, std::decay_t<T_Receiver>>{
+            return detail::StartSubmissionOperation<T_Context, T_Sender, T_Completion, std::decay_t<T_Receiver>>{
                 *m_context,
                 std::move(m_sender),
+                std::move(m_completion),
                 std::forward<T_Receiver>(receiver)};
         }
 
     private:
         T_Context* m_context;
         T_Sender m_sender;
+        T_Completion m_completion;
     };
 
-    template<typename T_Context, typename... T_Submits>
-    auto startSubmission(T_Context& context, ManagedSubmitSender<T_Submits...> sender)
+    /** The optional completion sink is installed before submission; its event is the retirement authority. */
+    template<typename T_Context, typename... T_Submits, typename T_Completion = EventSource>
+    auto startSubmission(
+        T_Context& context,
+        ManagedSubmitSender<T_Submits...> sender,
+        T_Completion completion = {})
     {
-        return StartSubmissionSender<T_Context, ManagedSubmitSender<T_Submits...>>{context, std::move(sender)};
+        return StartSubmissionSender<T_Context, ManagedSubmitSender<T_Submits...>, T_Completion>{
+            context,
+            std::move(sender),
+            std::move(completion)};
     }
 
     /** Import submitted work as queue-side waits in a new managed graph. */

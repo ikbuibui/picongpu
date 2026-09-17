@@ -154,27 +154,35 @@ namespace pmacc::particles
     {
         using HandleGuardRegion = typename T_Particles::HandleGuardRegion;
         using HandleNotExchanged = typename HandleGuardRegion::HandleNotExchanged;
-        return caravan::defer(
-            [&particles, previous = std::move(previous)]() mutable
+        return caravan::deferWithReservations(
+            [&particles, previous = std::move(previous)](caravan::EventReservations& reservations) mutable
             {
                 auto& buffer = particles.getParticlesBuffer();
                 auto& device = Environment<>::get().DeviceContext();
-                auto makeSend = [&particles, &buffer, &device, previous](uint32_t exchange)
+                auto makeSend = [&particles, &buffer, &device, previous, &reservations](uint32_t exchange)
                 {
                     auto reuse = buffer.sendCompletion(exchange);
                     caravan::EventSource completion;
-                    buffer.setSendCompletion(exchange, completion.event());
+                    reservations.replace(
+                        reuse,
+                        completion.event(),
+                        [&buffer, exchange](caravan::Event event) noexcept
+                        { buffer.setSendCompletion(exchange, std::move(event)); });
                     auto branch = caravan::alpaka::withDevice(
                         device,
                         caravan::whenAll(caravan::asSender(previous), caravan::asSender(std::move(reuse)))
                             | caravan::sequence(sendChunks(particles, exchange)));
                     return caravan::trackCompletion(std::move(branch), std::move(completion));
                 };
-                auto makeReceive = [&particles, &buffer, &device, previous](uint32_t exchange)
+                auto makeReceive = [&particles, &buffer, &device, previous, &reservations](uint32_t exchange)
                 {
                     auto reuse = buffer.receiveCompletion(exchange);
                     caravan::EventSource completion;
-                    buffer.setReceiveCompletion(exchange, completion.event());
+                    reservations.replace(
+                        reuse,
+                        completion.event(),
+                        [&buffer, exchange](caravan::Event event) noexcept
+                        { buffer.setReceiveCompletion(exchange, std::move(event)); });
                     auto branch = caravan::alpaka::withDevice(
                         device,
                         caravan::whenAll(caravan::asSender(previous), caravan::asSender(std::move(reuse)))

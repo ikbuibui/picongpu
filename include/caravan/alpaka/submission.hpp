@@ -11,8 +11,6 @@
 #include <exception>
 #include <functional>
 #include <memory>
-#include <mutex>
-#include <optional>
 #include <tuple>
 #include <vector>
 #include <type_traits>
@@ -166,33 +164,55 @@ namespace caravan::alpaka
             SubmitOperation(SubmitOperation&&) = delete;
             SubmitOperation& operator=(SubmitOperation&&) = delete;
 
-            void start(std::mutex* submissionMutex = nullptr) & noexcept
+            /** Submit all stages without making completion observable yet.
+             *
+             * Queue-pool bindings use this split to release their submission locks before publish() can run a
+             * receiver and destroy the connected operation.
+             */
+            void submit() & noexcept
             {
-                if(submissionMutex)
+                submitStage<0u>();
+                if(m_exportNativeDependencies && !m_submissionError)
                 {
-                    std::lock_guard lock(*submissionMutex);
-                    submitStage<0u>();
+                    // Snapshot graph-tail fences before publishing to the completion thread. poll() resets
+                    // m_fences once the graph is quiescent, so reading them later would race with cleanup.
+                    for(std::size_t i = 0u; i < stageCount; ++i)
+                        if(m_outgoing[i] == 0u)
+                            m_nativeDependencies.emplace_back(m_fences[m_fenceIndices[i]]);
                 }
-                else
-                    submitStage<0u>();
-                // Snapshot graph-tail fences before publishing to the completion thread. poll() resets
-                // m_fences once the graph is quiescent, so reading them later would race with cleanup.
-                for(std::size_t i = 0u; i < stageCount; ++i)
-                    if(m_outgoing[i] == 0u)
-                        m_nativeDependencies.emplace_back(m_fences[m_fenceIndices[i]]);
-                // Publish only after unlocking: completion can destroy this operation and start another graph.
+            }
+
+            /** Publish a submitted operation to completion progress.
+             *
+             * Receiver delivery may destroy this operation, so callers must not access it after this call.
+             */
+            void publish() & noexcept
+            {
                 m_completionThread.post(*this);
             }
 
-            /** Export graph-tail fences captured by start().
+            void start() & noexcept
+            {
+                submit();
+                publish();
+            }
+
+            void enableNativeDependencies()
+            {
+                // Allocate before any stage can borrow storage. Export itself must not throw after submission.
+                m_nativeDependencies.reserve(stageCount);
+                m_exportNativeDependencies = true;
+            }
+
+            /** Export graph-tail fences captured by submit().
              *
              * Shared ownership keeps pooled events alive through all queue-side consumers, even after the
              * producer itself is quiescent. A failed submission has no usable dependency and is reported through
              * submissionError() instead.
              */
-            auto nativeDependencies() const
+            auto takeNativeDependencies() noexcept
             {
-                return m_nativeDependencies;
+                return std::move(m_nativeDependencies);
             }
 
             std::exception_ptr submissionError() const noexcept
@@ -277,7 +297,16 @@ namespace caravan::alpaka
             T_Receiver m_receiver;
             std::exception_ptr m_error;
             std::exception_ptr m_submissionError;
+            bool m_exportNativeDependencies = false;
         };
+
+        template<typename T_Queue, typename T_Receiver, typename... T_Submits>
+        SubmitOperation(
+            std::array<T_Queue*, sizeof...(T_Submits)>,
+            std::tuple<T_Submits...>,
+            SubmissionDependencies<sizeof...(T_Submits)>,
+            T_Receiver,
+            EventPool<T_Queue>*) -> SubmitOperation<T_Queue, T_Receiver, T_Submits...>;
     } // namespace detail
 
     /** Compatibility query: Caravan terminal completion no longer runs in alpaka callbacks. */

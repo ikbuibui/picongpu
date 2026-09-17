@@ -15,9 +15,9 @@ namespace caravan::alpaka
      * sequence retains logical affinity, while whenAll branches may serialize on the same physical queue.
      * There are no exclusive leases or completion-time admission waits. The cap applies to this pool instance.
      *
-     * Entire graph submissions (including error fences) are serialized to keep CPU queue errors attributable
-     * to their graph. Nonblocking queues can execute different graphs concurrently after submission. Callables
-     * must only enqueue work on the supplied queue: no recursive graph starts, external queue submissions, or
+     * Graph submissions are serialized per physical queue (including error fences) to keep CPU queue errors
+     * attributable to their graph. Graphs using disjoint queues may submit concurrently. Callables must only
+     * enqueue work on the supplied queue: no recursive graph starts, external queue submissions, or
      * blocking on other branches. Queue references must not escape for later use. The pool must outlive all its
      * senders and connected operations. Cross-pool native composition is rejected, as for QueuePool.
      * Native completion events are pooled independently of the queue cap and reused after graph quiescence.
@@ -58,9 +58,12 @@ namespace caravan::alpaka
                 std::sort(distinct.begin(), distinct.begin() + count);
                 for(std::size_t i = 0u; i < count; ++i)
                     m_pool->m_queueMutexes[distinct[i]]->lock();
-                operation.start();
+                operation.submit();
                 for(std::size_t i = count; i-- > 0u;)
                     m_pool->m_queueMutexes[distinct[i]]->unlock();
+                // Publication can synchronously deliver a receiver and destroy operation and this binding.
+                // Do it only after every access to the binding and its locks has finished.
+                operation.publish();
             }
 
         private:

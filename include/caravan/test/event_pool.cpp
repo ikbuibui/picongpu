@@ -200,4 +200,22 @@ int main()
     caravan::alpaka::SharedQueuePool<Queue> shared{device, 2u};
     exercise(exclusive);
     exercise(shared);
+
+    // Exported native dependencies retain their pooled event storage beyond the owning queue pool.
+    {
+        using Work = caravan::alpaka::SubmittedWork<Queue>;
+        std::optional<Work> retained;
+        {
+            caravan::alpaka::QueuePool<Queue> pool{device};
+            retained.emplace(caravan::syncWait<Work>(caravan::alpaka::startSubmission(
+                pool,
+                caravan::alpaka::submit([](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [] {}); }))));
+            retained->completion().wait();
+        }
+        // The pool is gone; the dependency token and its fence must still be usable and destructible.
+        Queue replay{device};
+        retained->waitOn(replay);
+        alpaka::wait(replay);
+        retained.reset();
+    }
 }

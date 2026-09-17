@@ -289,6 +289,62 @@ TEST_CASE("Field communication preserves overwrite and additive semantics", "[as
     }
 }
 
+TEST_CASE("Split-phase field communication joins core, receive and border", "[async][fields]")
+{
+    MockField field;
+    auto& buffer = field.getGridBuffer();
+    auto const tag = pmacc::traits::getUniqueId<uint32_t>();
+    for(uint32_t exchange = 1u; exchange < pmacc::traits::NumberOfExchanges<TEST_DIM>::value; ++exchange)
+    {
+        auto extent = pmacc::DataSpace<TEST_DIM>::create(1);
+        buffer.addExchange(pmacc::GUARD, exchange, extent, tag);
+    }
+
+    auto& device = pmacc::Environment<>::get().DeviceContext();
+    auto const topology = pmacc::Environment<>::get().getMpiContext().topology();
+    auto const extent = buffer.getGridLayout().sizeND();
+    auto box = buffer.getHostBuffer().getDataBox();
+    for(int i = 0; i < extent.productOfComponents(); ++i)
+    {
+        auto const cell = pmacc::math::mapToND(extent, i);
+        bool guard = false;
+        for(uint32_t d = 0u; d < TEST_DIM; ++d)
+            guard = guard || cell[d] == 0 || cell[d] == 3;
+        box(cell) = guard ? -100 : topology.rank + 1;
+    }
+    caravan::syncWait(caravan::alpaka::withDevice(device, buffer.hostToDevice()));
+
+    bool coreRan = false;
+    bool borderRan = false;
+    auto core
+        = caravan::alpaka::submit([&](auto& nativeQueue) { ::alpaka::enqueue(nativeQueue, [&] { coreRan = true; }); });
+    auto step = buffer.communicationThen(
+        std::move(core),
+        [&]
+        {
+            // Snapshot the received guards as BORDER work, not after the aggregate has already retired.
+            // This checks the native receive dependencies as well as final completion.
+            return buffer.deviceToHost()
+                   | caravan::alpaka::sequence(
+                       caravan::alpaka::submit([&](auto& nativeQueue)
+                                               { ::alpaka::enqueue(nativeQueue, [&] { borderRan = coreRan; }); }));
+        });
+    caravan::syncWait(caravan::alpaka::withDevice(device, std::move(step)));
+    CHECK(coreRan);
+    CHECK(borderRan);
+
+    for(int i = 0; i < extent.productOfComponents(); ++i)
+    {
+        auto const cell = pmacc::math::mapToND(extent, i);
+        bool guard = false;
+        for(uint32_t d = 0u; d < TEST_DIM; ++d)
+            guard = guard || cell[d] == 0 || cell[d] == 3;
+        auto const neighbor
+            = (topology.rank + (cell.x() == 0 ? -1 : (cell.x() == 3 ? 1 : 0)) + topology.size) % topology.size;
+        CHECK(box(cell) == (guard ? neighbor + 1 : topology.rank + 1));
+    }
+}
+
 TEST_CASE("Field communication without exchanges preserves previous work", "[async][fields]")
 {
     bool additive = false;

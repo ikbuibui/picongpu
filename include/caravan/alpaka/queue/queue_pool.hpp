@@ -100,7 +100,8 @@ namespace caravan::alpaka
             template<typename T_Operation, std::size_t N>
             void start(T_Operation& operation, std::array<std::size_t, N> const&) const noexcept
             {
-                operation.start();
+                operation.submit();
+                operation.publish();
             }
 
         private:
@@ -254,9 +255,14 @@ namespace caravan::alpaka
                 m_binding->start(m_operation, m_lanes);
             }
 
-            auto nativeDependencies() const
+            void enableNativeDependencies()
             {
-                return m_operation.nativeDependencies();
+                m_operation.enableNativeDependencies();
+            }
+
+            auto takeNativeDependencies() noexcept
+            {
+                return m_operation.takeNativeDependencies();
             }
 
             std::exception_ptr submissionError() const noexcept

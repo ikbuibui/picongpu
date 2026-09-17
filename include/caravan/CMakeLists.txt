@@ -45,6 +45,23 @@ if(CARAVAN_BUILD_TESTING)
     target_link_libraries(caravan-core-test PRIVATE caravan::core Threads::Threads)
     add_test(NAME caravan-core COMMAND caravan-core-test)
 
+    add_executable(caravan-thread-pool-test test/thread_pool.cpp)
+    target_link_libraries(caravan-thread-pool-test PRIVATE caravan::core Threads::Threads)
+    foreach(workers IN ITEMS 0 1 4)
+        add_test(NAME caravan-thread-pool-${workers} COMMAND caravan-thread-pool-test ${workers})
+        set_tests_properties(
+            caravan-thread-pool-${workers}
+            PROPERTIES ENVIRONMENT "CARAVAN_SUBMISSION_THREADS=${workers}" TIMEOUT 30
+        )
+    endforeach()
+    foreach(invalid IN ITEMS "-1" "not-a-number" "4junk" "184467440737095516160")
+        add_test(NAME caravan-thread-pool-invalid-${invalid} COMMAND caravan-thread-pool-test invalid)
+        set_tests_properties(
+            caravan-thread-pool-invalid-${invalid}
+            PROPERTIES ENVIRONMENT "CARAVAN_SUBMISSION_THREADS=${invalid}" TIMEOUT 30
+        )
+    endforeach()
+
     add_executable(caravan-retained-test test/retained.cpp)
     target_link_libraries(caravan-retained-test PRIVATE caravan::core)
     add_test(NAME caravan-retained COMMAND caravan-retained-test)
