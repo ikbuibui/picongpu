@@ -10,9 +10,11 @@
 #include <array>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <tuple>
+#include <vector>
 #include <type_traits>
 #include <utility>
 
@@ -132,13 +134,13 @@ namespace caravan::alpaka
                 , m_dependencies(dependencies)
                 , m_receiver(std::move(receiver))
             {
-                std::array<std::size_t, stageCount> incoming{}, outgoing{};
+                std::array<std::size_t, stageCount> incoming{};
                 for(std::size_t i = 0u; i < stageCount; ++i)
                     for(std::size_t j = 0u; j < i; ++j)
                         if(m_dependencies.predecessors[i][j])
                         {
                             ++incoming[i];
-                            ++outgoing[j];
+                            ++m_outgoing[j];
                         }
 
                 // Preallocate fences before borrowing captures. Only unbranched, adjacent same-queue stages
@@ -149,12 +151,12 @@ namespace caravan::alpaka
                 for(std::size_t i = stageCount; i-- > 0u;)
                 {
                     if(i + 1u < stageCount && *m_queues[i] == *m_queues[i + 1u]
-                       && m_dependencies.predecessors[i + 1u][i] && outgoing[i] == 1u && incoming[i + 1u] == 1u)
+                       && m_dependencies.predecessors[i + 1u][i] && m_outgoing[i] == 1u && incoming[i + 1u] == 1u)
                         m_fenceIndices[i] = m_fenceIndices[i + 1u];
                     else
                     {
                         m_fenceIndices[i] = i;
-                        m_fences[i].emplace(*m_queues[i], eventPool);
+                        m_fences[i] = std::make_shared<Fence>(*m_queues[i], eventPool);
                     }
                 }
             }
@@ -173,8 +175,29 @@ namespace caravan::alpaka
                 }
                 else
                     submitStage<0u>();
+                // Snapshot graph-tail fences before publishing to the completion thread. poll() resets
+                // m_fences once the graph is quiescent, so reading them later would race with cleanup.
+                for(std::size_t i = 0u; i < stageCount; ++i)
+                    if(m_outgoing[i] == 0u)
+                        m_nativeDependencies.emplace_back(m_fences[m_fenceIndices[i]]);
                 // Publish only after unlocking: completion can destroy this operation and start another graph.
                 m_completionThread.post(*this);
+            }
+
+            /** Export graph-tail fences captured by start().
+             *
+             * Shared ownership keeps pooled events alive through all queue-side consumers, even after the
+             * producer itself is quiescent. A failed submission has no usable dependency and is reported through
+             * submissionError() instead.
+             */
+            auto nativeDependencies() const
+            {
+                return m_nativeDependencies;
+            }
+
+            std::exception_ptr submissionError() const noexcept
+            {
+                return m_submissionError;
             }
 
         private:
@@ -202,7 +225,10 @@ namespace caravan::alpaka
                     {
                         m_failed[T_Index] = true;
                         if(!m_error)
+                        {
                             m_error = std::current_exception();
+                            m_submissionError = m_error;
+                        }
                         try
                         {
                             // A throwing wait/submission may already have borrowed captures. Fence it before
@@ -243,11 +269,14 @@ namespace caravan::alpaka
             std::array<T_Queue*, stageCount> m_queues;
             std::tuple<T_Submits...> m_submits;
             SubmissionDependencies<stageCount> m_dependencies;
-            std::array<std::optional<Fence>, stageCount> m_fences;
+            std::array<std::shared_ptr<Fence>, stageCount> m_fences;
             std::array<std::size_t, stageCount> m_fenceIndices{};
+            std::array<std::size_t, stageCount> m_outgoing{};
             std::array<bool, stageCount> m_failed{};
+            std::vector<NativeDependency<T_Queue>> m_nativeDependencies;
             T_Receiver m_receiver;
             std::exception_ptr m_error;
+            std::exception_ptr m_submissionError;
         };
     } // namespace detail
 

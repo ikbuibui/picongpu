@@ -258,6 +258,12 @@ namespace pmacc
             caravan::ReceiveResult const mpi;
         };
 
+        struct SubmittedReceive
+        {
+            ReceiveMetadata metadata;
+            caravan::alpaka::SubmittedWork<ComputeDeviceQueue> deviceWork;
+        };
+
         /** Describe one lazy send. The exchange and borrowed buffers must outlive it. */
         auto send()
         {
@@ -303,8 +309,8 @@ namespace pmacc
                        });
         }
 
-        /** Describe one lazy receive followed by size publication and device copies. */
-        auto receive()
+        /** Describe one lazy receive, publishing its native dependency after the device copies are submitted. */
+        auto receiveSubmitted()
         {
             auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
             auto destination = getDeviceBuffer().getOwnedAlpakaView();
@@ -377,7 +383,24 @@ namespace pmacc
                                            deviceStaging->value,
                                            dataExtent);
                                });
-                           return std::move(copy) | caravan::then([metadata] { return metadata; });
+                           auto& device = Environment<>::get().DeviceContext();
+                           return caravan::alpaka::startSubmission(device, std::move(copy))
+                                  | caravan::then(
+                                      [metadata](caravan::alpaka::SubmittedWork<ComputeDeviceQueue> work)
+                                      { return SubmittedReceive{metadata, std::move(work)}; });
+                       });
+        }
+
+        /** Compatibility receive whose completion still means device quiescence. */
+        auto receive()
+        {
+            return receiveSubmitted()
+                   | caravan::letValue(
+                       [](SubmittedReceive& submitted)
+                       {
+                           auto metadata = submitted.metadata;
+                           return caravan::asSender(submitted.deviceWork.completion())
+                                  | caravan::then([metadata] { return metadata; });
                        });
         }
 

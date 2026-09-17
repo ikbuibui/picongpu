@@ -210,17 +210,13 @@ namespace gol
                 auto core = evo.runAsync<CORE>(
                     read->getDeviceBuffer().getOwnedDataBox(),
                     write->getDeviceBuffer().getOwnedDataBox());
-
-                auto step = caravan::whenAll(std::move(core), std::move(communication))
-                            | caravan::letValue(
-                                [&]
-                                {
-                                    return evo.runAsync<BORDER>(
-                                        read->getDeviceBuffer().getOwnedDataBox(),
-                                        write->getDeviceBuffer().getOwnedDataBox());
-                                });
-                asyncContext.wait(asyncContext.spawn(
-                    std::move(step) | caravan::alpaka::withDevice(Environment<>::get().DeviceContext())));
+                auto borderRead = read->getDeviceBuffer().getOwnedDataBox();
+                auto borderWrite = write->getDeviceBuffer().getOwnedDataBox();
+                auto step = read->communicationThen(
+                    std::move(core),
+                    [this, borderRead = std::move(borderRead), borderWrite = std::move(borderWrite)]() mutable
+                    { return evo.runAsync<BORDER>(std::move(borderRead), std::move(borderWrite)); });
+                asyncContext.wait(asyncContext.spawn(std::move(step)));
 
             /* gather::operator() gathers all the buffers and assembles those to  *
              * a complete picture discarding the guards.                          */

@@ -253,6 +253,16 @@ namespace caravan::alpaka
                 m_binding->start(m_operation);
             }
 
+            auto nativeDependencies() const
+            {
+                return m_operation.nativeDependencies();
+            }
+
+            std::exception_ptr submissionError() const noexcept
+            {
+                return m_operation.submissionError();
+            }
+
         private:
             std::optional<Binding> m_binding;
             Operation m_operation;

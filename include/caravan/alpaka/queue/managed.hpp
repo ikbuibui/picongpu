@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <exception>
+#include <memory>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -211,6 +212,152 @@ namespace caravan::alpaka
         std::size_t m_laneCount;
         detail::SubmissionDependencies<stageCount> m_dependencies;
     };
+
+    namespace detail
+    {
+        template<typename T_Context, typename T_Sender>
+        class SubmissionWorkState : public std::enable_shared_from_this<SubmissionWorkState<T_Context, T_Sender>>
+        {
+            struct Receiver
+            {
+                void set_value() noexcept
+                {
+                    owner->complete({});
+                }
+
+                void set_error(std::exception_ptr error) noexcept
+                {
+                    owner->complete(std::move(error));
+                }
+
+                SubmissionWorkState* owner;
+            };
+
+            using Operation = decltype(
+                withDevice(std::declval<T_Context&>(), std::declval<T_Sender>()).connect(std::declval<Receiver>()));
+
+        public:
+            SubmissionWorkState(T_Context& context, T_Sender sender)
+                : m_operation(withDevice(context, std::move(sender)).connect(Receiver{this}))
+            {
+            }
+
+            void start()
+            {
+                m_keepAlive = this->shared_from_this();
+                m_operation.start();
+            }
+
+            auto nativeDependencies() const
+            {
+                return m_operation.nativeDependencies();
+            }
+
+            std::exception_ptr submissionError() const noexcept
+            {
+                return m_operation.submissionError();
+            }
+
+            Event completion() const
+            {
+                return m_completion.event();
+            }
+
+        private:
+            void complete(std::exception_ptr error) noexcept
+            {
+                if(error)
+                    m_completion.setFailed(std::move(error));
+                else
+                    m_completion.setReady();
+                // Completion can destroy m_operation. Its receiver permits this and does not touch itself again.
+                m_keepAlive.reset();
+            }
+
+            EventSource m_completion;
+            std::shared_ptr<SubmissionWorkState> m_keepAlive;
+            Operation m_operation;
+        };
+
+        template<typename T_Context, typename T_Sender, typename T_Receiver>
+        class StartSubmissionOperation
+        {
+            using Queue = typename T_Context::Queue;
+            using State = SubmissionWorkState<T_Context, T_Sender>;
+
+        public:
+            StartSubmissionOperation(T_Context& context, T_Sender sender, T_Receiver receiver)
+                : m_receiver(std::move(receiver))
+                , m_state(std::make_shared<State>(context, std::move(sender)))
+            {
+            }
+
+            StartSubmissionOperation(StartSubmissionOperation const&) = delete;
+            StartSubmissionOperation& operator=(StartSubmissionOperation const&) = delete;
+            StartSubmissionOperation(StartSubmissionOperation&&) = delete;
+            StartSubmissionOperation& operator=(StartSubmissionOperation&&) = delete;
+
+            void start() & noexcept
+            {
+                m_state->start();
+                if(auto error = m_state->submissionError())
+                    m_receiver.set_error(std::move(error));
+                else
+                    m_receiver.set_value(
+                        SubmittedWork<Queue>{m_state->nativeDependencies(), m_state->completion()});
+                // Receiver delivery may destroy this operation. Do not access members here.
+            }
+
+        private:
+            T_Receiver m_receiver;
+            std::shared_ptr<State> m_state;
+        };
+    } // namespace detail
+
+    /** A sender which completes when a managed graph has been submitted, not when it has finished.
+     *
+     * The resulting SubmittedWork carries queue-side dependencies plus a separate host-visible completion event.
+     * This explicit split prevents dependency availability from being mistaken for buffer quiescence.
+     */
+    template<typename T_Context, typename T_Sender>
+    class StartSubmissionSender
+    {
+        using Queue = typename T_Context::Queue;
+
+    public:
+        using completion_signatures
+            = CompletionSignatures<ValueSignature<SubmittedWork<Queue>>, ErrorSignature<std::exception_ptr>>;
+
+        StartSubmissionSender(T_Context& context, T_Sender sender) : m_context(&context), m_sender(std::move(sender))
+        {
+        }
+
+        template<typename T_Receiver>
+        auto connect(T_Receiver&& receiver) &&
+        {
+            return detail::StartSubmissionOperation<T_Context, T_Sender, std::decay_t<T_Receiver>>{
+                *m_context,
+                std::move(m_sender),
+                std::forward<T_Receiver>(receiver)};
+        }
+
+    private:
+        T_Context* m_context;
+        T_Sender m_sender;
+    };
+
+    template<typename T_Context, typename... T_Submits>
+    auto startSubmission(T_Context& context, ManagedSubmitSender<T_Submits...> sender)
+    {
+        return StartSubmissionSender<T_Context, ManagedSubmitSender<T_Submits...>>{context, std::move(sender)};
+    }
+
+    /** Import submitted work as queue-side waits in a new managed graph. */
+    template<typename T_Queue>
+    auto waitFor(SubmittedWork<T_Queue> work)
+    {
+        return submit([work = std::move(work)](auto& queue) { work.waitOn(queue); });
+    }
 
     /** Native lowering for queue-free alpaka graphs before device binding. */
     struct ManagedSubmissionDomain

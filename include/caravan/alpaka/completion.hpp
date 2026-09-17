@@ -11,11 +11,13 @@
 #include <cstdlib>
 #include <exception>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include <caravan/alpaka/event_pool.hpp>
 #include <caravan/core/eager.hpp>
@@ -234,3 +236,69 @@ namespace caravan::alpaka::detail
         return thread;
     }
 } // namespace caravan::alpaka::detail
+
+namespace caravan::alpaka
+{
+    /** A queue-side dependency exported by an already submitted alpaka graph.
+     *
+     * Holding this object retains the native fence. waitOn() only enqueues a
+     * dependency and never blocks the calling thread. Dependencies are published
+     * only after their producer fence has been recorded.
+     */
+    template<typename T_Queue>
+    class NativeDependency
+    {
+    public:
+        void waitOn(T_Queue& queue) const
+        {
+            m_fence->waitOn(queue);
+        }
+
+        /** Internal construction from a recorded submission fence. */
+        explicit NativeDependency(std::shared_ptr<detail::CompletionFence<T_Queue>> fence)
+            : m_fence(std::move(fence))
+        {
+        }
+
+    private:
+        std::shared_ptr<detail::CompletionFence<T_Queue>> m_fence;
+    };
+
+    /** Split-phase result of a submitted graph.
+     *
+     * dependencies() is available immediately after host submission and can be imported into another queue.
+     * completion() becomes ready only after the producer is quiescent and is the authority for errors and resource
+     * retirement.
+     */
+    template<typename T_Queue>
+    class SubmittedWork
+    {
+    public:
+        std::vector<NativeDependency<T_Queue>> const& dependencies() const noexcept
+        {
+            return m_dependencies;
+        }
+
+        Event const& completion() const noexcept
+        {
+            return m_completion;
+        }
+
+        void waitOn(T_Queue& queue) const
+        {
+            for(auto const& dependency : m_dependencies)
+                dependency.waitOn(queue);
+        }
+
+        /** Internal construction from graph-tail dependencies and retirement completion. */
+        SubmittedWork(std::vector<NativeDependency<T_Queue>> dependencies, Event completion)
+            : m_dependencies(std::move(dependencies))
+            , m_completion(std::move(completion))
+        {
+        }
+
+    private:
+        std::vector<NativeDependency<T_Queue>> m_dependencies;
+        Event m_completion;
+    };
+} // namespace caravan::alpaka

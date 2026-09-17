@@ -169,6 +169,45 @@ int main(int argc, char** argv)
         busy.join();
     }
 
+    // A submitted graph exports queue-side readiness separately from host-visible quiescence.
+    {
+        caravan::alpaka::SharedQueuePool<Queue> pool{device, 2u};
+        std::promise<void> release, producerStarted;
+        auto gate = release.get_future().share();
+        auto started = producerStarted.get_future();
+        auto producer = caravan::syncWait<caravan::alpaka::SubmittedWork<Queue>>(
+            caravan::alpaka::startSubmission(
+                pool,
+                caravan::alpaka::enqueue(
+                    [&, gate]
+                    {
+                        producerStarted.set_value();
+                        gate.wait();
+                    })));
+        started.get();
+        assert(producer.completion().state() == caravan::CompletionState::pending);
+
+        bool consumerSubmitted = false;
+        std::atomic<bool> consumerRan = false;
+        auto consumer = scope.spawn(
+            caravan::alpaka::withDevice(
+                pool,
+                caravan::alpaka::waitFor(producer)
+                    | caravan::alpaka::sequence(
+                        caravan::alpaka::submit(
+                            [&](Queue& q)
+                            {
+                                consumerSubmitted = true;
+                                alpaka::enqueue(q, [&] { consumerRan = true; });
+                            }))));
+        assert(consumerSubmitted);
+        assert(!consumerRan.load());
+        release.set_value();
+        producer.completion().wait();
+        consumer.wait();
+        assert(consumerRan.load());
+    }
+
     // Pool-bound senders use the same native dispatch and retain queue affinity.
     {
         caravan::alpaka::QueuePool<Queue> pool{device};
