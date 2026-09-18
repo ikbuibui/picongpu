@@ -23,8 +23,13 @@
 
 #include "pmacc/assert.hpp"
 #include "pmacc/memory/buffers/Exchange.hpp"
+#include "pmacc/memory/buffers/size.hpp"
 #include "pmacc/particles/memory/boxes/ExchangePopDataBox.hpp"
 #include "pmacc/particles/memory/boxes/ExchangePushDataBox.hpp"
+
+#include <utility>
+
+#include <caravan/alpaka.hpp>
 
 namespace pmacc
 {
@@ -92,28 +97,28 @@ namespace pmacc
                 stackIndexer.getDeviceBuffer().getDataBox());
         }
 
-        void setSize(size_t const size)
+        auto resetAsync()
         {
-            // do host and device setSize parallel
-            EventTask split = eventSystem::getTransactionEvent();
-            EventTask e1;
+            stack.getDeviceBuffer().setSizeHostSide(0u);
+            stackIndexer.getDeviceBuffer().setSizeHostSide(0u);
+            auto stackSize = pmacc::size(
+                stack.getDeviceBuffer().sizeOnDeviceBuffer(),
+                stack.getDeviceBuffer().sizeHostSideBuffer());
+            auto indexSize = pmacc::size(
+                stackIndexer.getDeviceBuffer().sizeOnDeviceBuffer(),
+                stackIndexer.getDeviceBuffer().sizeHostSideBuffer());
+            return std::move(stackSize) | caravan::sequence(std::move(indexSize));
+        }
 
-            if(!Environment<>::get().isMpiDirectEnabled())
-            {
-                eventSystem::startTransaction(split);
-                stackIndexer.getHostBuffer().setSize(size);
-                stack.getHostBuffer().setSize(size);
-                e1 = eventSystem::endTransaction();
-            }
-
-            eventSystem::startTransaction(split);
-            stackIndexer.getDeviceBuffer().setSize(size);
-            EventTask e2 = eventSystem::endTransaction();
-            eventSystem::startTransaction(split);
-            stack.getDeviceBuffer().setSize(size);
-            EventTask e3 = eventSystem::endTransaction();
-
-            eventSystem::setTransactionEvent(e1 + e2 + e3);
+        auto publishDeviceSizes()
+        {
+            auto stackSize = pmacc::size(
+                stack.getDeviceBuffer().sizeHostSideBuffer(),
+                stack.getDeviceBuffer().sizeOnDeviceBuffer());
+            auto indexSize = pmacc::size(
+                stackIndexer.getDeviceBuffer().sizeHostSideBuffer(),
+                stackIndexer.getDeviceBuffer().sizeOnDeviceBuffer());
+            return std::move(stackSize) | caravan::sequence(std::move(indexSize));
         }
 
         size_t getHostCurrentSize()

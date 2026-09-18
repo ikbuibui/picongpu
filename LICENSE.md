@@ -41,6 +41,16 @@ If not stated otherwise explicitly, that affects:
  - `share/pmacc`
 
 
+### Caravan
+
+Caravan is an independent library for async execution with alpaka and MPI facilities,
+licensed under the **MPL-2.0** (Mozilla Public License 2.0). See
+https://mozilla.org/MPL/2.0/ for the license.
+
+If not stated otherwise explicitly, that affects:
+ - `include/caravan`
+
+
 ### Documentation
 
 Documentation is licensed under CC-BY 4.0.

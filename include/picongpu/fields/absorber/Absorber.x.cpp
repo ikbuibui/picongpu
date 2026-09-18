@@ -82,7 +82,7 @@ namespace picongpu
                     for(uint32_t direction = 0u; direction < 2u; direction++)
                         thickness(axis, direction) = numCells[axis][direction];
                 DataSpace<DIM3> const isPeriodicBoundary
-                    = Environment<simDim>::get().EnvironmentController().getCommunicator().getPeriodic();
+                    = Environment<simDim>::get().GridController().getCommunicator().getPeriodic();
                 for(uint32_t axis = 0u; axis < 3u; axis++)
                     if(isPeriodicBoundary[axis])
                     {
@@ -129,7 +129,7 @@ namespace picongpu
                 auto const thickness = absorber.getGlobalThickness();
                 pmacc::traits::StringProperty propList;
                 DataSpace<DIM3> const periodic
-                    = Environment<simDim>::get().EnvironmentController().getCommunicator().getPeriodic();
+                    = Environment<simDim>::get().GridController().getCommunicator().getPeriodic();
 
                 for(uint32_t i = 1; i < NumberOfExchanges<simDim>::value; ++i)
                 {

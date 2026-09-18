@@ -19,8 +19,6 @@
 
 #include "picongpu/plugins/common/MPIHelpers.hpp"
 
-#include <pmacc/communication/manager_common.hpp>
-
 #include <algorithm>
 #include <fstream>
 #include <numeric>
@@ -41,9 +39,9 @@ namespace picongpu
      */
     std::string collective_file_read(std::string const& path, MPI_Comm comm)
     {
-        int rank, size;
-        MPI_CHECK(MPI_Comm_rank(comm, &rank));
-        MPI_CHECK(MPI_Comm_size(comm, &size));
+        int rank;
+        if(MPI_Comm_rank(comm, &rank) != MPI_SUCCESS)
+            throw std::runtime_error("[collective_file_read] MPI_Comm_rank failure.");
 
         std::string res;
         size_t stringLength = 0;

@@ -23,15 +23,20 @@
 
 #include "pmacc/assert.hpp"
 #include "pmacc/dimensions/GridLayout.hpp"
-#include "pmacc/eventSystem/tasks/Factory.hpp"
-#include "pmacc/eventSystem/tasks/TaskReceive.hpp"
 #include "pmacc/mappings/simulation/GridController.hpp"
 #include "pmacc/memory/buffers/DeviceBuffer.hpp"
 #include "pmacc/memory/buffers/HostBuffer.hpp"
 #include "pmacc/memory/dataTypes/Mask.hpp"
 #include "pmacc/types.hpp"
 
+#include <functional>
 #include <memory>
+#include <optional>
+#include <stdexcept>
+
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
+#include <caravan/mpi.hpp>
 
 namespace pmacc
 {
@@ -248,14 +253,177 @@ namespace pmacc
             return *deviceDoubleBuffer;
         }
 
-        EventTask startSend()
+        struct ReceiveMetadata
         {
-            return Environment<>::get().Factory().createTaskSend(*this);
+            size_t const elements;
+            caravan::ReceiveResult const mpi;
+        };
+
+        struct SubmittedReceive
+        {
+            ReceiveMetadata metadata;
+            caravan::alpaka::SubmittedWork<ComputeDeviceQueue> deviceWork;
+        };
+
+        /** Describe one lazy send. The exchange and borrowed buffers must outlive it. */
+        auto send()
+        {
+            auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
+            auto source = getDeviceBuffer().getOwnedAlpakaView();
+            std::optional<decltype(source)> deviceStaging;
+            if(hasDeviceDoubleBuffer())
+                deviceStaging.emplace(getDeviceDoubleBuffer().getOwnedAlpakaView());
+            using HostView = decltype(getHostBuffer().getOwnedAlpakaView());
+            std::optional<HostView> hostStaging;
+            if(!Environment<>::get().isMpiDirectEnabled())
+                hostStaging.emplace(getHostBuffer().getOwnedAlpakaView());
+
+            auto queueTail = caravan::alpaka::submit(
+                [this,
+                 source = std::move(source),
+                 deviceStaging = std::move(deviceStaging),
+                 hostStaging = std::move(hostStaging)](auto& nativeQueue) mutable
+                {
+                    auto const elements = getDeviceBuffer().size();
+                    auto const extent = getDeviceBuffer().sizeND(elements).toAlpakaMemVec();
+                    if(deviceStaging)
+                        getDeviceDoubleBuffer().setSizeHostSide(elements);
+                    if(hostStaging)
+                        getHostBuffer().setSizeHostSide(elements);
+                    if(deviceStaging)
+                        ::alpaka::memcpy(nativeQueue, deviceStaging->value, source.value, extent);
+                    if(hostStaging)
+                    {
+                        if(deviceStaging)
+                            copyStaging(nativeQueue, hostStaging->value, deviceStaging->value, elements);
+                        else
+                            ::alpaka::memcpy(nativeQueue, hostStaging->value, source.value, extent);
+                    }
+                });
+            return std::move(queueTail)
+                   | caravan::letValue(
+                       [this, &communicator]
+                       {
+                           auto const buffer = getCPtrCurrentSize();
+                           return communicator
+                               .send(exchange, buffer.asCharPtr(), buffer.sizeInBytes(), communicationTag);
+                       });
         }
 
-        EventTask startReceive()
+    private:
+        /** Build the common MPI/metadata/copy path; finish selects submission or completion semantics. */
+        template<typename T_Finish>
+        auto receiveWith(T_Finish finish)
         {
-            return Environment<>::get().Factory().createTaskReceive(*this);
+            auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
+            auto destination = getDeviceBuffer().getOwnedAlpakaView();
+            std::optional<decltype(destination)> deviceStaging;
+            if(hasDeviceDoubleBuffer())
+                deviceStaging.emplace(getDeviceDoubleBuffer().getOwnedAlpakaView());
+            using HostView = decltype(getHostBuffer().getOwnedAlpakaView());
+            std::optional<HostView> hostStaging;
+            if(!Environment<>::get().isMpiDirectEnabled())
+                hostStaging.emplace(getHostBuffer().getOwnedAlpakaView());
+
+            auto const buffer = getCPtrCapacity();
+            auto receive = communicator.receive(exchange, buffer.asCharPtr(), buffer.sizeInBytes(), communicationTag);
+            return std::move(receive)
+                   // Move the post-MPI device submission off the single MPI owner thread so independent
+                   // directions can be submitted concurrently. With no workers configured this is inline.
+                   | caravan::continuesOn(caravan::SubmissionScheduler{})
+                   | caravan::letValue(
+                       [this,
+                        destination = std::move(destination),
+                        deviceStaging = std::move(deviceStaging),
+                        hostStaging = std::move(hostStaging),
+                        finish = std::move(finish)](caravan::ReceiveResult result) mutable
+                       {
+                           auto const metadata = receiveMetadata(result);
+                           getDeviceBuffer().setSizeHostSide(metadata.elements);
+                           if(deviceStaging)
+                               getDeviceDoubleBuffer().setSizeHostSide(metadata.elements);
+                           if(hostStaging)
+                               getHostBuffer().setSizeHostSide(metadata.elements);
+
+                           auto deviceSize = getDeviceBuffer().currentSizeBufferDevice;
+                           auto hostSize = getDeviceBuffer().sizeHostSideBuffer();
+                           auto const sizeExtent = MemSpace<DIM1>(1).toAlpakaMemVec();
+                           auto const dataExtent = getDeviceBuffer().sizeND(metadata.elements).toAlpakaMemVec();
+                           auto copy = caravan::alpaka::submit(
+                               [destination = std::move(destination),
+                                deviceStaging = std::move(deviceStaging),
+                                hostStaging = std::move(hostStaging),
+                                deviceSize = std::move(deviceSize),
+                                hostSize = std::move(hostSize),
+                                sizeExtent,
+                                dataExtent,
+                                elements = metadata.elements](auto& nativeQueue) mutable
+                               {
+                                   if(deviceSize)
+                                       ::alpaka::memcpy(nativeQueue, *deviceSize, hostSize, sizeExtent);
+                                   if(hostStaging)
+                                   {
+                                       if(deviceStaging)
+                                       {
+                                           copyStaging(
+                                               nativeQueue,
+                                               deviceStaging->value,
+                                               hostStaging->value,
+                                               elements);
+                                           ::alpaka::memcpy(
+                                               nativeQueue,
+                                               destination.value,
+                                               deviceStaging->value,
+                                               dataExtent);
+                                       }
+                                       else
+                                           ::alpaka::memcpy(
+                                               nativeQueue,
+                                               destination.value,
+                                               hostStaging->value,
+                                               dataExtent);
+                                   }
+                                   else if(deviceStaging)
+                                       ::alpaka::memcpy(
+                                           nativeQueue,
+                                           destination.value,
+                                           deviceStaging->value,
+                                           dataExtent);
+                               });
+                           return std::invoke(finish, std::move(copy), metadata);
+                       });
+        }
+
+    public:
+        /** Publish queue-side readiness; the preinstalled completion sink observes copy quiescence. */
+        auto receiveSubmitted()
+        {
+            return receiveSubmitted(caravan::EventSource{});
+        }
+
+        template<typename T_Completion>
+        auto receiveSubmitted(T_Completion completion)
+        {
+            return receiveWith(
+                [completion = std::move(completion)](auto copy, ReceiveMetadata metadata) mutable
+                {
+                    return caravan::alpaka::startSubmission(
+                               Environment<>::get().DeviceContext(), std::move(copy), std::move(completion))
+                           | caravan::then(
+                               [metadata](caravan::alpaka::SubmittedWork<ComputeDeviceQueue> work)
+                               { return SubmittedReceive{metadata, std::move(work)}; });
+                });
+        }
+
+        /** Ordinary receive completes at device quiescence without split-phase bookkeeping. */
+        auto receive()
+        {
+            return receiveWith(
+                [](auto copy, ReceiveMetadata metadata)
+                {
+                    return caravan::alpaka::withDevice(Environment<>::get().DeviceContext(), std::move(copy))
+                           | caravan::then([metadata] { return metadata; });
+                });
         }
 
         /**
@@ -307,6 +475,37 @@ namespace pmacc
             }
 
             return getHostBuffer().getCPtrCurrentSize();
+        }
+
+    private:
+        /** Copy between the contiguous staging allocations, not the potentially strided grid views.
+         * Flattening avoids a multidimensional host/device transfer with many tiny rows for thin halos.
+         * The caller retains the allocations until the submitted queue work completes.
+         */
+        template<typename T_Queue, typename T_Destination, typename T_Source>
+        static void copyStaging(
+            T_Queue& queue,
+            T_Destination& destination,
+            T_Source const& source,
+            size_t elements)
+        {
+            using DestinationView
+                = ::alpaka::ViewPlainPtr<::alpaka::Dev<T_Destination>, TYPE, AlpakaDim<DIM1>, MemIdxType>;
+            using SourceView = ::alpaka::ViewPlainPtr<::alpaka::Dev<T_Source>, TYPE const, AlpakaDim<DIM1>, MemIdxType>;
+            auto const extent = MemSpace<DIM1>(elements).toAlpakaMemVec();
+            DestinationView destinationView(::alpaka::getPtrNative(destination), ::alpaka::getDev(destination), extent);
+            SourceView sourceView(::alpaka::getPtrNative(source), ::alpaka::getDev(source), extent);
+            ::alpaka::memcpy(queue, destinationView, sourceView, extent);
+        }
+
+        ReceiveMetadata receiveMetadata(caravan::ReceiveResult const& result) const
+        {
+            if(result.bytes % sizeof(TYPE) != 0u)
+                throw std::runtime_error("Received exchange byte count is not an element count");
+            auto const elements = result.bytes / sizeof(TYPE);
+            if(elements > static_cast<size_t>(deviceBuffer->capacityND().productOfComponents()))
+                throw std::runtime_error("Received exchange exceeds its device buffer");
+            return {elements, result};
         }
 
     protected:

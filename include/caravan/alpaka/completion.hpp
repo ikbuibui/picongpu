@@ -1,0 +1,314 @@
+/*
+ * This file is part of Caravan.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+#pragma once
+
+#include <alpaka/alpaka.hpp>
+
+#include <chrono>
+#include <condition_variable>
+#include <cstdlib>
+#include <exception>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
+
+#include <caravan/alpaka/event_pool.hpp>
+#include <caravan/core/eager.hpp>
+
+namespace caravan::alpaka::detail
+{
+    /** A submission-time fence. Query failure does not establish quiescence. */
+    template<typename T_Queue>
+    class CompletionFence
+    {
+    public:
+        explicit CompletionFence(T_Queue const& queue, EventPool<T_Queue>* pool = nullptr)
+            : m_lease(pool ? std::make_optional(pool->acquire()) : std::nullopt)
+            , m_event(m_lease ? m_lease->event() : ::alpaka::Event<T_Queue>{::alpaka::getDev(queue)})
+        {
+        }
+
+        void record(T_Queue& queue)
+        {
+            if(!m_recorded)
+            {
+                ::alpaka::enqueue(queue, m_event);
+                m_recorded = true;
+            }
+        }
+
+        void waitOn(T_Queue& queue)
+        {
+            ::alpaka::wait(queue, m_event);
+        }
+
+        bool poll(std::exception_ptr&) noexcept
+        {
+            if(!m_recorded || m_complete)
+                return true;
+            try
+            {
+                m_complete = ::alpaka::isComplete(m_event);
+                return m_complete;
+            }
+            catch(...)
+            {
+                // An unsuccessful query is not a lifetime fence, even if it reports a device execution error.
+                std::terminate();
+            }
+        }
+
+    private:
+        std::optional<typename EventPool<T_Queue>::Lease> m_lease;
+        ::alpaka::Event<T_Queue> m_event;
+        bool m_recorded = false;
+        bool m_complete = false;
+    };
+
+    /** CPU barriers snapshot preceding task errors and signal only after those tasks have been destroyed. */
+    template<typename T_Dev>
+    class CompletionFence<::alpaka::QueueGenericThreadsNonBlocking<T_Dev>>
+    {
+        using Queue = ::alpaka::QueueGenericThreadsNonBlocking<T_Dev>;
+
+    public:
+        explicit CompletionFence(Queue const&, EventPool<Queue>* = nullptr)
+        {
+        }
+
+        void record(Queue& queue)
+        {
+            if(!m_future.valid())
+                m_future = queue.m_spQueueImpl->m_workerThread.submitErrorBarrier().share();
+        }
+
+        void waitOn(Queue& queue)
+        {
+            // Match alpaka's CPU queue-event wait without consuming or losing the fence's error snapshot.
+            queue.m_spQueueImpl->m_workerThread.submit([future = m_future] { future.wait(); });
+        }
+
+        bool poll(std::exception_ptr& error) noexcept
+        {
+            if(!m_future.valid() || m_complete)
+                return true;
+            if(m_future.wait_for(std::chrono::seconds{0}) != std::future_status::ready)
+                return false;
+            m_complete = true;
+            try
+            {
+                m_future.get();
+            }
+            catch(...)
+            {
+                // Unlike fence construction/query failure, this exception is delivered by a completed barrier.
+                if(!error)
+                    error = std::current_exception();
+            }
+            return true;
+        }
+
+    private:
+        std::shared_future<void> m_future;
+        bool m_complete = false;
+    };
+
+    class CompletionTask
+    {
+    public:
+        // A true result may destroy this task; false retains it for the next scan.
+        virtual bool poll() noexcept = 0;
+
+        CompletionTask* next = nullptr;
+
+    protected:
+        ~CompletionTask() = default;
+    };
+
+    enum class CompletionPollingPolicy
+    {
+        timed,
+        continuous
+    };
+
+    /** Observes terminal fences and delivers receivers without blocking on pending backend work. */
+    class CompletionThread
+    {
+    public:
+        explicit CompletionThread(CompletionPollingPolicy pollingPolicy = CompletionPollingPolicy::timed)
+            : m_pollingPolicy(pollingPolicy)
+            , m_thread([this] { run(); })
+        {
+        }
+
+        CompletionThread(CompletionThread const&) = delete;
+        CompletionThread& operator=(CompletionThread const&) = delete;
+
+        ~CompletionThread()
+        {
+            {
+                std::lock_guard lock(m_mutex);
+                m_stopped = true;
+            }
+            m_ready.notify_one();
+            m_thread.join();
+        }
+
+        void post(CompletionTask& task) noexcept
+        {
+            {
+                std::lock_guard lock(m_mutex);
+                if(m_tail)
+                    m_tail->next = &task;
+                else
+                    m_head = &task;
+                m_tail = &task;
+            }
+            m_ready.notify_one();
+        }
+
+    private:
+        void run() noexcept
+        {
+            ExecutorThreadGuard guard;
+            CompletionTask* pending = nullptr;
+            while(true)
+            {
+                {
+                    std::unique_lock lock(m_mutex);
+                    if(pending && m_pollingPolicy == CompletionPollingPolicy::timed)
+                        m_ready.wait_for(lock, std::chrono::microseconds{100}, [this] { return m_head; });
+                    else if(!pending)
+                        m_ready.wait(lock, [this] { return m_stopped || m_head; });
+                    if(m_head)
+                    {
+                        m_tail->next = pending;
+                        pending = std::exchange(m_head, nullptr);
+                        m_tail = nullptr;
+                    }
+                    if(!pending && m_stopped)
+                        return;
+                }
+
+                CompletionTask* deferred = nullptr;
+                auto** tail = &deferred;
+                while(pending)
+                {
+                    auto* task = pending;
+                    pending = std::exchange(task->next, nullptr);
+                    if(!task->poll())
+                    {
+                        *tail = task;
+                        tail = &task->next;
+                    }
+                }
+                pending = deferred;
+            }
+        }
+
+        std::mutex m_mutex;
+        std::condition_variable m_ready;
+        CompletionTask* m_head = nullptr;
+        CompletionTask* m_tail = nullptr;
+        bool m_stopped = false;
+        CompletionPollingPolicy m_pollingPolicy;
+        std::thread m_thread;
+    };
+
+    /** Select the diagnostic low-latency policy before the process first submits alpaka work. */
+    inline CompletionPollingPolicy completionPollingPolicy() noexcept
+    {
+        auto const* value = std::getenv("CARAVAN_ALPAKA_COMPLETION_POLLING");
+        return value && std::string_view{value} == "continuous" ? CompletionPollingPolicy::continuous
+                                                                : CompletionPollingPolicy::timed;
+    }
+
+    inline CompletionThread& completionThread()
+    {
+        static CompletionThread thread{completionPollingPolicy()};
+        return thread;
+    }
+} // namespace caravan::alpaka::detail
+
+namespace caravan::alpaka
+{
+    /** A queue-side dependency exported by an already submitted alpaka graph.
+     *
+     * Holding this object retains the native fence. waitOn() only enqueues a
+     * dependency and never blocks the calling thread. Dependencies are published
+     * only after their producer fence has been recorded.
+     */
+    template<typename T_Queue>
+    class NativeDependency
+    {
+    public:
+        void waitOn(T_Queue& queue) const
+        {
+            m_fence->waitOn(queue);
+        }
+
+        /** Internal construction from a recorded submission fence. */
+        explicit NativeDependency(std::shared_ptr<detail::CompletionFence<T_Queue>> fence)
+            : m_fence(std::move(fence))
+        {
+        }
+
+    private:
+        std::shared_ptr<detail::CompletionFence<T_Queue>> m_fence;
+    };
+
+    /** Split-phase result of a submitted graph.
+     *
+     * dependencies() is available immediately after host submission and can be imported into another queue.
+     * completion() becomes ready only after the producer is quiescent and is the authority for errors and resource
+     * retirement.
+     */
+    template<typename T_Queue>
+    class SubmittedWork
+    {
+    public:
+        std::vector<NativeDependency<T_Queue>> const& dependencies() const noexcept
+        {
+            return m_dependencies;
+        }
+
+        Event const& completion() const noexcept
+        {
+            return m_completion;
+        }
+
+        void waitOn(T_Queue& queue) const
+        {
+            // A partial submission may already own live device work, but it cannot provide a valid dependency
+            // for a successor. Throwing here makes the consumer graph skip its descendants while completion()
+            // remains the quiescence authority for the producer.
+            if(m_submissionError)
+                std::rethrow_exception(m_submissionError);
+            for(auto const& dependency : m_dependencies)
+                dependency.waitOn(queue);
+        }
+
+        /** Internal construction from graph-tail dependencies and retirement completion. */
+        SubmittedWork(
+            std::vector<NativeDependency<T_Queue>> dependencies,
+            Event completion,
+            std::exception_ptr submissionError = {})
+            : m_dependencies(std::move(dependencies))
+            , m_completion(std::move(completion))
+            , m_submissionError(std::move(submissionError))
+        {
+        }
+
+    private:
+        std::vector<NativeDependency<T_Queue>> m_dependencies;
+        Event m_completion;
+        std::exception_ptr m_submissionError;
+    };
+} // namespace caravan::alpaka

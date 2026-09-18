@@ -48,7 +48,7 @@ namespace picongpu
                     NoneImpl(MappingDesc const cellDescription) : AbsorberImpl(Absorber::Kind::None, cellDescription)
                     {
                         DataSpace<DIM3> const isPeriodicBoundary
-                            = Environment<simDim>::get().EnvironmentController().getCommunicator().getPeriodic();
+                            = Environment<simDim>::get().GridController().getCommunicator().getPeriodic();
                         bool areAllBoundariesPeriodic = true;
                         for(uint32_t axis = 0u; axis < simDim; axis++)
                             if(!isPeriodicBoundary[axis])

@@ -1,0 +1,758 @@
+/*
+ * This file is part of Caravan.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
+#include <alpaka/alpaka.hpp>
+
+#include <atomic>
+#include <cassert>
+#include <cstdlib>
+#include <exception>
+#include <future>
+#include <limits>
+#include <memory>
+#include <new>
+#include <stdexcept>
+#include <string_view>
+
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
+
+namespace
+{
+    thread_local unsigned allocationFailures = 0u;
+    std::weak_ptr<int> fatalOwner;
+    std::atomic<bool> fatalTaskFinished = false;
+
+    void expectFailed(caravan::Event const& event)
+    {
+        try
+        {
+            event.wait();
+            assert(false);
+        }
+        catch(std::exception const&)
+        {
+        }
+        assert(event.state() == caravan::CompletionState::failed);
+    }
+} // namespace
+
+// Inject only on the submitting thread, after a native task has borrowed retained storage.
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
+void* operator new(std::size_t bytes)
+{
+    if(allocationFailures != 0u)
+    {
+        --allocationFailures;
+        throw std::bad_alloc{};
+    }
+    if(auto* memory = std::malloc(bytes == 0u ? 1u : bytes))
+        return memory;
+    throw std::bad_alloc{};
+}
+
+void operator delete(void* memory) noexcept
+{
+    std::free(memory);
+}
+
+void operator delete(void* memory, std::size_t) noexcept
+{
+    std::free(memory);
+}
+#endif
+
+int main(int argc, char** argv)
+{
+    // These regressions exercise CPU queues even in CUDA/HIP builds; no accelerator device is required.
+    using Queue = alpaka::QueueCpuNonBlocking;
+    auto const device = alpaka::getDevByIdx(alpaka::PlatformCpu{}, 0u);
+    Queue queue{device};
+    Queue secondQueue{device};
+    Queue blockerQueue{device};
+    caravan::AsyncScope scope;
+
+    if(argc > 1 && std::string_view(argv[1]) == "--fatal-fence")
+    {
+        std::promise<void> release;
+        auto gate = release.get_future().share();
+        auto storage = std::make_shared<int>(42);
+        fatalOwner = storage;
+        std::set_terminate(
+            [] { std::_Exit(!fatalOwner.expired() && !fatalTaskFinished.load() ? EXIT_SUCCESS : EXIT_FAILURE); });
+        scope.spawn(
+            caravan::alpaka::submit(
+                queue,
+                [storage = std::move(storage), gate](Queue& nativeQueue)
+                {
+                    alpaka::enqueue(
+                        nativeQueue,
+                        [raw = storage.get(), gate]
+                        {
+                            gate.wait();
+                            assert(*raw == 42);
+                            fatalTaskFinished = true;
+                        });
+                    allocationFailures = std::numeric_limits<unsigned>::max();
+                }));
+        // Expected termination must occur in cleanup, before receiver delivery or scope destruction.
+        std::_Exit(EXIT_FAILURE);
+    }
+
+    // Queue-free graphs preserve fork/join dependencies and lease another queue for concurrent work.
+    {
+        caravan::alpaka::QueuePool<Queue> pool{device};
+        std::array<int, 4u> values{};
+        int seed = 0;
+        auto branch = [&](std::size_t index)
+        {
+            return caravan::alpaka::enqueue(
+                [&, index]
+                {
+                    assert(seed == 42);
+                    if(index >= 2u)
+                        assert(values[1u] == seed + 1);
+                    values[index] = seed + static_cast<int>(index);
+                });
+        };
+        auto work
+            = caravan::alpaka::enqueue([&] { seed = 42; })
+              | caravan::sequence(
+                  caravan::whenAll(
+                      branch(0u),
+                      branch(1u) | caravan::alpaka::sequence(caravan::whenAll(branch(2u), branch(3u)))))
+              | caravan::sequence(caravan::alpaka::enqueue([&] { assert((values == std::array{42, 43, 44, 45})); }));
+        static_assert(caravan::Sender<decltype(work)>);
+        static_assert(std::is_same_v<decltype(caravan::getDomain(work)), caravan::alpaka::ManagedSubmissionDomain>);
+        caravan::syncWait(caravan::alpaka::withDevice(pool, std::move(work)));
+
+        int stage = 0;
+        caravan::syncWait(
+            caravan::alpaka::withDevice(
+                pool,
+                caravan::alpaka::enqueue([&] { stage = 1; }) | caravan::then([&] { assert(stage == 1); })
+                    | caravan::sequence(caravan::alpaka::enqueue([&] { stage = 2; }))
+                    | caravan::then([&] { assert(stage == 2); })
+                    | caravan::sequence(caravan::alpaka::enqueue([&] { stage = 3; }))));
+        assert(stage == 3);
+
+        auto failed = scope.spawn(
+            caravan::alpaka::withDevice(
+                pool,
+                caravan::alpaka::enqueue([] { throw std::runtime_error("execution failure"); })));
+        expectFailed(failed);
+        caravan::syncWait(caravan::alpaka::withDevice(pool, caravan::alpaka::enqueue([] {})));
+
+        std::promise<void> release, started;
+        auto gate = release.get_future().share();
+        auto branchStarted = started.get_future();
+        std::thread busy(
+            [&]
+            {
+                caravan::syncWait(
+                    caravan::alpaka::withDevice(
+                        pool,
+                        caravan::alpaka::enqueue(
+                            [&, gate]
+                            {
+                                started.set_value();
+                                gate.wait();
+                            })));
+            });
+        branchStarted.get();
+        bool concurrentRan = false;
+        caravan::syncWait(caravan::alpaka::withDevice(pool, caravan::alpaka::enqueue([&] { concurrentRan = true; })));
+        assert(concurrentRan);
+        release.set_value();
+        busy.join();
+    }
+
+    // A submitted graph exports queue-side readiness separately from host-visible quiescence.
+    {
+        caravan::alpaka::SharedQueuePool<Queue> pool{device, 2u};
+        std::promise<void> release, producerStarted;
+        auto gate = release.get_future().share();
+        auto started = producerStarted.get_future();
+        auto producer = caravan::syncWait<caravan::alpaka::SubmittedWork<Queue>>(
+            caravan::alpaka::startSubmission(
+                pool,
+                caravan::alpaka::enqueue(
+                    [&, gate]
+                    {
+                        producerStarted.set_value();
+                        gate.wait();
+                    })));
+        started.get();
+        assert(producer.completion().state() == caravan::CompletionState::pending);
+
+        bool consumerSubmitted = false;
+        std::atomic<bool> consumerRan = false;
+        auto consumer = scope.spawn(
+            caravan::alpaka::withDevice(
+                pool,
+                caravan::alpaka::waitFor(producer)
+                    | caravan::alpaka::sequence(
+                        caravan::alpaka::submit(
+                            [&](Queue& q)
+                            {
+                                consumerSubmitted = true;
+                                alpaka::enqueue(q, [&] { consumerRan = true; });
+                            }))));
+        assert(consumerSubmitted);
+        assert(!consumerRan.load());
+        release.set_value();
+        producer.completion().wait();
+        consumer.wait();
+        assert(consumerRan.load());
+    }
+
+    // A partial submission rejects native consumers but remains observable until its queued work is quiescent.
+    {
+        caravan::alpaka::SharedQueuePool<Queue> pool{device, 2u};
+        std::promise<void> release, producerStarted;
+        auto gate = release.get_future().share();
+        auto started = producerStarted.get_future();
+        auto producer = caravan::syncWait<caravan::alpaka::SubmittedWork<Queue>>(
+            caravan::alpaka::startSubmission(
+                pool,
+                caravan::alpaka::submit(
+                    [&, gate](Queue& q)
+                    {
+                        alpaka::enqueue(
+                            q,
+                            [&, gate]
+                            {
+                                producerStarted.set_value();
+                                gate.wait();
+                            });
+                        throw std::runtime_error("partial submission");
+                    })));
+        started.get();
+        assert(producer.completion().state() == caravan::CompletionState::pending);
+
+        bool consumerRan = false;
+        auto consumer = scope.spawn(
+            caravan::alpaka::withDevice(
+                pool,
+                caravan::alpaka::waitFor(producer)
+                    | caravan::alpaka::sequence(caravan::alpaka::enqueue([&] { consumerRan = true; }))));
+        expectFailed(consumer);
+        assert(!consumerRan);
+        assert(producer.completion().state() == caravan::CompletionState::pending);
+        release.set_value();
+        expectFailed(producer.completion());
+    }
+
+    // Pool-bound senders use the same native dispatch and retain queue affinity.
+    {
+        caravan::alpaka::QueuePool<Queue> pool{device};
+        auto submissions = pool.submissions();
+        int value = 0;
+        auto work = caravan::sequence(
+            submissions.submit([&](Queue& q) { alpaka::enqueue(q, [&] { value = 42; }); }),
+            submissions.submit([&](Queue& q) { alpaka::enqueue(q, [&] { assert(value == 42); }); }));
+        static_assert(
+            std::is_same_v<decltype(caravan::getDomain(work)), caravan::alpaka::PooledSubmissionDomain<Queue>>);
+        caravan::syncWait(std::move(work));
+    }
+
+    // Independently bound contexts join through ordinary sender composition.
+    {
+        caravan::alpaka::QueuePool<Queue> firstPool{device}, secondPool{device};
+        bool firstRan = false, secondRan = false;
+        caravan::syncWait(
+            caravan::whenAll(
+                caravan::alpaka::withDevice(firstPool, caravan::alpaka::enqueue([&] { firstRan = true; })),
+                caravan::alpaka::withDevice(secondPool, caravan::alpaka::enqueue([&] { secondRan = true; }))));
+        assert(firstRan && secondRan);
+    }
+
+    // Native fork/join submits the join before host completion, without serializing branches.
+    // The fork follows a seed on queue A; branch B must start even while branch A is blocked.
+    {
+        std::promise<void> release, branchStarted;
+        auto gate = release.get_future().share();
+        auto started = branchStarted.get_future();
+        int seed = 0, left = 0, right = 0;
+        bool joinSubmitted = false;
+        std::atomic<bool> hostCompleted = false;
+        auto seedWork = caravan::alpaka::submit(queue, [&](Queue& q) { alpaka::enqueue(q, [&] { seed = 42; }); });
+        static_assert(
+            std::is_same_v<decltype(caravan::getDomain(seedWork)), caravan::alpaka::SubmissionDomain<Queue>>);
+        auto work = std::move(seedWork)
+                    | caravan::sequence(
+                        caravan::whenAll(
+                            caravan::alpaka::submit(
+                                queue,
+                                [&](Queue& q)
+                                {
+                                    alpaka::enqueue(
+                                        q,
+                                        [&]
+                                        {
+                                            gate.wait();
+                                            left = seed;
+                                        });
+                                }),
+                            caravan::whenAll(
+                                caravan::alpaka::submit(
+                                    secondQueue,
+                                    [&](Queue& q)
+                                    {
+                                        alpaka::enqueue(
+                                            q,
+                                            [&]
+                                            {
+                                                branchStarted.set_value();
+                                                gate.wait();
+                                                right = seed;
+                                            });
+                                    }),
+                                caravan::alpaka::submit(blockerQueue, [](Queue&) {}))))
+                    | caravan::sequence(
+                        caravan::alpaka::submit(
+                            queue,
+                            [&, owner = std::make_unique<int>(42)](Queue& q)
+                            {
+                                joinSubmitted = true;
+                                alpaka::enqueue(q, [&, raw = owner.get()] { assert(left == *raw && right == *raw); });
+                            }))
+                    | caravan::then(
+                        [&]
+                        {
+                            assert(left == 42 && right == 42);
+                            hostCompleted = true;
+                        });
+        auto done = scope.spawn(std::move(work));
+        assert(joinSubmitted);
+        assert(!hostCompleted);
+        assert(done.state() == caravan::CompletionState::pending);
+        started.get();
+        release.set_value();
+        done.wait();
+        assert(hostCompleted);
+    }
+
+    // A mixed join falls back to host completion, waiting for both native work and the event.
+    for(bool fail : {false, true})
+    {
+        caravan::EventSource release;
+        std::promise<void> nativeRelease;
+        auto gate = nativeRelease.get_future().share();
+        std::atomic<bool> submitted = false;
+        auto done = scope.spawn(
+            caravan::whenAll(
+                caravan::alpaka::submit(queue, [gate](Queue& q) { alpaka::enqueue(q, [gate] { gate.wait(); }); }),
+                caravan::asSender(release.event()))
+            | caravan::sequence(caravan::alpaka::submit(secondQueue, [&](Queue&) { submitted = true; })));
+        assert(!submitted);
+        if(fail)
+            release.setFailed(std::make_exception_ptr(std::runtime_error("mixed join")));
+        else
+            release.setReady();
+        assert(!submitted && done.state() == caravan::CompletionState::pending);
+        nativeRelease.set_value();
+        if(fail)
+            expectFailed(done);
+        else
+            done.wait();
+        assert(submitted == !fail);
+    }
+
+    // Neither an ordinary host callback nor explicit placement can be fused away.
+    {
+        std::promise<void> release;
+        auto gate = release.get_future().share();
+        std::atomic<bool> submitted = false;
+        auto done = scope.spawn(
+            caravan::alpaka::submit(queue, [gate](Queue& q) { alpaka::enqueue(q, [gate] { gate.wait(); }); })
+            | caravan::then([] { assert(caravan::isExecutorThread()); })
+            | caravan::sequence(caravan::alpaka::submit(secondQueue, [&](Queue&) { submitted = true; })));
+        assert(!submitted);
+        release.set_value();
+        done.wait();
+        assert(submitted);
+
+        submitted = false;
+        caravan::RunLoop loop;
+        auto placed = scope.spawn(
+            caravan::alpaka::submit(queue, [](Queue&) {}) | caravan::continuesOn(loop.scheduler())
+            | caravan::sequence(caravan::alpaka::submit(secondQueue, [&](Queue&) { submitted = true; })));
+        assert(!submitted);
+        while(placed.state() == caravan::CompletionState::pending)
+        {
+            loop.runReady();
+            std::this_thread::yield();
+        }
+        placed.wait();
+        assert(submitted);
+    }
+
+    // Failed submission skips descendants, starts independent branches, and retains partially submitted work.
+    {
+        std::promise<void> release;
+        auto gate = release.get_future().share();
+        auto owner = std::make_shared<int>(42);
+        std::weak_ptr<int> observer = owner;
+        bool siblingSubmitted = false, descendantSubmitted = false, joinSubmitted = false;
+        caravan::AsyncScope failureScope;
+        auto failed = failureScope.spawn(
+            caravan::whenAll(
+                caravan::alpaka::submit(
+                    queue,
+                    [owner = std::move(owner), gate](Queue& q)
+                    {
+                        alpaka::enqueue(
+                            q,
+                            [raw = owner.get(), gate]
+                            {
+                                gate.wait();
+                                assert(*raw == 42);
+                            });
+                        throw std::runtime_error("partial branch");
+                    })
+                    | caravan::alpaka::sequence(
+                        caravan::alpaka::submit(queue, [&](Queue&) { descendantSubmitted = true; })),
+                caravan::alpaka::submit(secondQueue, [&](Queue&) { siblingSubmitted = true; }))
+            | caravan::alpaka::sequence(caravan::alpaka::submit(blockerQueue, [&](Queue&) { joinSubmitted = true; })));
+        assert(siblingSubmitted && !descendantSubmitted && !joinSubmitted);
+        assert(failed.state() == caravan::CompletionState::pending);
+        assert(!observer.expired());
+        release.set_value();
+        expectFailed(failed);
+        failureScope.join().wait();
+        assert(observer.expired());
+    }
+
+    // Asynchronous branch errors are reported at quiescence, not used to retract an already submitted join.
+    {
+        bool joinSubmitted = false;
+        auto failed = scope.spawn(
+            caravan::whenAll(
+                caravan::alpaka::submit(
+                    queue,
+                    [](Queue& q) { alpaka::enqueue(q, [] { throw std::runtime_error("branch execution"); }); }),
+                caravan::alpaka::submit(secondQueue, [](Queue&) {}))
+            | caravan::alpaka::sequence(caravan::alpaka::submit(blockerQueue, [&](Queue&) { joinSubmitted = true; })));
+        assert(joinSubmitted);
+        expectFailed(failed);
+    }
+
+    // A pending queue must not hold up a ready queue whose continuation releases it.
+    {
+        std::promise<void> release;
+        auto gate = release.get_future().share();
+        auto pending = scope.spawn(
+            caravan::alpaka::submit(
+                queue,
+                [gate](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [gate] { gate.wait(); }); }));
+        scope.spawn(caravan::alpaka::submit(secondQueue, [](Queue&) {}) | caravan::then([&] { release.set_value(); }))
+            .wait();
+        pending.wait();
+    }
+
+    // A late observer must not include a subsequent operation's error in an earlier operation's fence.
+    {
+        std::promise<void> release;
+        auto gate = release.get_future().share();
+        auto blocker = scope.spawn(
+            caravan::alpaka::submit(
+                blockerQueue,
+                [gate](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [gate] { gate.wait(); }); }));
+        auto good = scope.spawn(caravan::alpaka::submit(queue, [](Queue&) {}));
+        auto bad = scope.spawn(
+            caravan::alpaka::submit(
+                queue,
+                [](Queue& nativeQueue)
+                { alpaka::enqueue(nativeQueue, [] { throw std::runtime_error("later operation"); }); }));
+        release.set_value();
+        good.wait();
+        expectFailed(bad);
+        blocker.wait();
+    }
+
+    // Work appended after a sender may depend on that sender's completion without moving its fence.
+    {
+        std::promise<void> release;
+        auto gate = release.get_future().share();
+        auto blocker = scope.spawn(
+            caravan::alpaka::submit(
+                blockerQueue,
+                [gate](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [gate] { gate.wait(); }); }));
+        auto predecessor = scope.spawn(caravan::alpaka::submit(queue, [](Queue&) {}));
+        alpaka::enqueue(queue, [predecessor] { predecessor.wait(); });
+        release.set_value();
+        predecessor.wait();
+        blocker.wait();
+        alpaka::wait(queue);
+    }
+
+    // Cross-queue error snapshots survive dependency waits, including a return to an earlier queue.
+    auto crossQueueFailure = scope.spawn(
+        caravan::alpaka::sequence(
+            caravan::alpaka::sequence(
+                caravan::alpaka::submit(
+                    queue,
+                    [](Queue& nativeQueue)
+                    { alpaka::enqueue(nativeQueue, [] { throw std::runtime_error("first queue"); }); }),
+                caravan::alpaka::submit(secondQueue, [](Queue&) {})),
+            caravan::alpaka::submit(queue, [](Queue&) {})));
+    expectFailed(crossQueueFailure);
+    scope.spawn(caravan::alpaka::submit(queue, [](Queue&) {})).wait();
+
+    // Cleanup fences the active same-queue run even when its final stages were never submitted.
+    bool skippedStageRan = false;
+    auto partialFailure = scope.spawn(
+        caravan::alpaka::sequence(
+            caravan::alpaka::submit(queue, [](Queue&) {}),
+            caravan::alpaka::sequence(
+                caravan::alpaka::submit(secondQueue, [](Queue&) { throw std::runtime_error("partial chain"); }),
+                caravan::alpaka::submit(secondQueue, [&](Queue&) { skippedStageRan = true; }))));
+    expectFailed(partialFailure);
+    assert(!skippedStageRan);
+
+    // Blocking CPU queues exercise the native-event fence implementation too.
+    alpaka::QueueCpuBlocking blockingQueue{device};
+    alpaka::QueueCpuBlocking secondBlockingQueue{device};
+    scope
+        .spawn(
+            caravan::alpaka::sequence(
+                caravan::alpaka::submit(blockingQueue, [](auto&) {}),
+                caravan::alpaka::submit(secondBlockingQueue, [](auto&) {})))
+        .wait();
+
+    // Receiver delivery uses the same blocking guards as the other Caravan progress authorities.
+    auto nestedWait = scope.spawn(
+        caravan::alpaka::submit(queue, [](Queue&) {})
+        | caravan::then(
+            [&]
+            {
+                assert(caravan::isExecutorThread());
+                caravan::syncWait(caravan::alpaka::submit(secondQueue, [](Queue&) {}));
+            }));
+    expectFailed(nestedWait);
+
+    // Failure to allocate the first fence must retain captures until a recovery fence proves completion.
+    std::promise<void> release;
+    auto gate = release.get_future().share();
+    auto storage = std::make_shared<int>(42);
+    std::weak_ptr<int> observer = storage;
+    auto failedFence = scope.spawn(
+        caravan::alpaka::submit(
+            queue,
+            [storage = std::move(storage), gate](Queue& nativeQueue)
+            {
+                alpaka::enqueue(
+                    nativeQueue,
+                    [raw = storage.get(), gate]
+                    {
+                        gate.wait();
+                        assert(*raw == 42);
+                    });
+                allocationFailures = 1u;
+            }));
+    scope.spawn(caravan::alpaka::submit(secondQueue, [](Queue&) {})).wait();
+    assert(failedFence.state() == caravan::CompletionState::pending);
+    assert(!observer.expired());
+    release.set_value();
+    expectFailed(failedFence);
+
+    // SubmissionGroup joins publication and producer retirement, including partial submission failures.
+    {
+        caravan::alpaka::SharedQueuePool<Queue> pool{device, 2u};
+        for(bool fail : {false, true})
+        {
+            caravan::alpaka::SubmissionGroup<Queue> group;
+            auto first = group.add();
+            auto second = group.add();
+            bool firstRan = false;
+            bool secondRan = false;
+            auto joined = caravan::alpaka::withDevice(
+                pool,
+                group.join(caravan::whenAll(
+                    first.publish(caravan::alpaka::startSubmission(
+                        pool,
+                        caravan::alpaka::submit(
+                            [&](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [&] { firstRan = true; }); }),
+                        first)),
+                    second.publish(caravan::alpaka::startSubmission(
+                        pool,
+                        caravan::alpaka::submit(
+                            [&](Queue& nativeQueue)
+                            {
+                                alpaka::enqueue(nativeQueue, [&] { secondRan = true; });
+                                if(fail)
+                                    throw std::runtime_error("group submission");
+                            }),
+                        second)))));
+            if(fail)
+            {
+                try
+                {
+                    caravan::syncWait(std::move(joined));
+                    assert(false);
+                }
+                catch(std::runtime_error const&)
+                {
+                }
+                assert(first.event().isReady());
+                expectFailed(second.event());
+            }
+            else
+            {
+                caravan::syncWait(std::move(joined));
+                assert(first.event().isReady());
+                assert(second.event().isReady());
+            }
+            assert(firstRan && secondRan);
+        }
+
+        // A producer that never publishes fails the join instead of leaving it pending forever.
+        caravan::alpaka::SubmissionGroup<Queue> group;
+        auto missing = group.add();
+        bool ran = false;
+        try
+        {
+            caravan::syncWait(
+                caravan::alpaka::withDevice(pool, group.join(caravan::alpaka::submit([&](auto&) { ran = true; }))));
+            assert(false);
+        }
+        catch(std::logic_error const&)
+        {
+        }
+        assert(ran);
+        expectFailed(missing.event());
+    }
+
+    // Submission is not publication: forgetting ticket.publish() must fail even if the producer ran.
+    {
+        caravan::alpaka::SharedQueuePool<Queue> pool{device, 1u};
+        caravan::alpaka::SubmissionGroup<Queue> group;
+        auto ticket = group.add();
+        bool failed = false;
+        try
+        {
+            caravan::syncWait(
+                group.join(caravan::alpaka::startSubmission(pool, caravan::alpaka::enqueue([] {}), ticket)));
+        }
+        catch(std::logic_error const&)
+        {
+            failed = true;
+        }
+        assert(failed);
+        assert(ticket.event().isReady());
+    }
+
+    // Every failure path must retain a blocked producer, even if BORDER can never be submitted.
+    {
+        enum class Failure
+        {
+            none,
+            publication,
+            submission,
+            extraction,
+            borderFactory
+        };
+        using Work = caravan::alpaka::SubmittedWork<Queue>;
+        caravan::alpaka::SharedQueuePool<Queue> pool{device, 2u};
+        for(auto failure :
+            {Failure::none, Failure::publication, Failure::submission, Failure::extraction, Failure::borderFactory})
+        {
+            caravan::alpaka::SubmissionGroup<Queue> group;
+            auto core = group.add();
+            auto receive = group.add();
+            std::promise<void> release, started;
+            auto gate = release.get_future().share();
+            auto running = started.get_future();
+            bool coreRan = false;
+            bool receiveRan = false;
+            bool borderSubmitted = false;
+            bool borderRan = false;
+            caravan::EventSource input;
+            if(failure == Failure::publication)
+                input.setFailed(std::make_exception_ptr(std::runtime_error("receive failed")));
+            else
+                input.setReady();
+
+            auto ready = caravan::whenAll(
+                core.publish(
+                    caravan::alpaka::startSubmission(
+                        pool,
+                        caravan::alpaka::submit(
+                            [&](Queue& q)
+                            {
+                                alpaka::enqueue(
+                                    q,
+                                    [&]
+                                    {
+                                        started.set_value();
+                                        gate.wait();
+                                        coreRan = true;
+                                    });
+                                if(failure == Failure::submission)
+                                    throw std::runtime_error("partial CORE submission");
+                            }),
+                        core),
+                    [failure](Work work)
+                    {
+                        if(failure == Failure::extraction)
+                            throw std::runtime_error("publication extractor failed");
+                        return work;
+                    }),
+                receive.publish(
+                    caravan::asSender(input.event())
+                    | caravan::sequence(
+                        caravan::alpaka::startSubmission(
+                            pool,
+                            caravan::alpaka::enqueue([&] { receiveRan = true; }),
+                            receive))));
+            auto border = std::move(ready)
+                          | caravan::letValue(
+                              [&]
+                              {
+                                  if(failure == Failure::borderFactory)
+                                      throw std::runtime_error("BORDER factory failed");
+                                  return caravan::alpaka::withDevice(
+                                      pool,
+                                      group.waitFor()
+                                          | caravan::alpaka::sequence(
+                                              caravan::alpaka::submit(
+                                                  [&](Queue& q)
+                                                  {
+                                                      borderSubmitted = true;
+                                                      alpaka::enqueue(
+                                                          q,
+                                                          [&]
+                                                          {
+                                                              assert(coreRan && receiveRan);
+                                                              borderRan = true;
+                                                          });
+                                                  })));
+                              });
+            auto completed = scope.spawn(group.join(std::move(border)));
+            running.get();
+            assert(completed.state() == caravan::CompletionState::pending);
+            assert(core.event().state() == caravan::CompletionState::pending);
+            assert(borderSubmitted == (failure == Failure::none));
+            assert(!borderRan);
+            release.set_value();
+            if(failure == Failure::none)
+                completed.wait();
+            else
+                expectFailed(completed);
+            assert(coreRan);
+            assert(borderRan == (failure == Failure::none));
+        }
+    }
+
+    // Empty groups and synchronous input completion must also support operation destruction at delivery.
+    {
+        caravan::alpaka::SubmissionGroup<Queue> group;
+        scope.spawn(group.join(caravan::asSender(caravan::readyEvent()))).wait();
+    }
+
+    scope.join().wait();
+    assert(observer.expired());
+}

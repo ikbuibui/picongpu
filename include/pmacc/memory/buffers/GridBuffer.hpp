@@ -28,9 +28,17 @@
 #include "pmacc/memory/dataTypes/Mask.hpp"
 
 #include <algorithm>
+#include <array>
+#include <exception>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <tuple>
+#include <vector>
 
 namespace pmacc
 {
@@ -99,7 +107,6 @@ namespace pmacc
             , gridLayout(gridLayout)
             , maxExchange(0)
         {
-            init();
         }
 
         /**
@@ -118,7 +125,6 @@ namespace pmacc
             , gridLayout(dataSpace)
             , maxExchange(0)
         {
-            init();
         }
 
         /**
@@ -141,7 +147,6 @@ namespace pmacc
             , gridLayout(gridLayout)
             , maxExchange(0)
         {
-            init();
         }
 
         GridBuffer(
@@ -156,7 +161,6 @@ namespace pmacc
             , gridLayout(gridLayout)
             , maxExchange(0)
         {
-            init();
         }
 
         /**
@@ -434,7 +438,7 @@ namespace pmacc
          */
         Mask getSendMask() const
         {
-            return (Environment<DIM>::get().EnvironmentController().getCommunicationMask() & sendMask);
+            return (Environment<DIM>::get().GridController().getCommunicationMask() & sendMask);
         }
 
         /**
@@ -444,7 +448,7 @@ namespace pmacc
          */
         Mask getReceiveMask() const
         {
-            return (Environment<DIM>::get().EnvironmentController().getCommunicationMask() & receiveMask);
+            return (Environment<DIM>::get().GridController().getCommunicationMask() & receiveMask);
         }
 
         /**
@@ -455,57 +459,192 @@ namespace pmacc
          * This operation runs sequential to other code but intern asynchronous
          *
          */
-        EventTask communication()
+        caravan::Event sendCompletion(uint32_t exchange) const
         {
-            EventTask ev = this->asyncCommunication(eventSystem::getTransactionEvent());
-            eventSystem::setTransactionEvent(ev);
-            return ev;
+            return sendCompletions[exchange];
         }
 
-        /**
-         * Starts sync data from own device buffer to neighbor device buffer.
+        caravan::Event receiveCompletion(uint32_t exchange) const
+        {
+            return receiveCompletions[exchange];
+        }
+
+        void setSendCompletion(uint32_t exchange, caravan::Event completion)
+        {
+            sendCompletions[exchange] = std::move(completion);
+        }
+
+        void setReceiveCompletion(uint32_t exchange, caravan::Event completion)
+        {
+            receiveCompletions[exchange] = std::move(completion);
+        }
+
+        /** Describe one lazy send for an active exchange direction. */
+        auto send(uint32_t exchange)
+        {
+            return sendExchanges[exchange]->send();
+        }
+
+        /** Describe one lazy receive for an active exchange direction. */
+        auto receive(uint32_t exchange)
+        {
+            return receiveExchanges[exchange]->receive();
+        }
+
+        /** Describe a receive which publishes queue-side readiness before device quiescence. */
+        auto receiveSubmitted(uint32_t exchange)
+        {
+            return receiveExchanges[exchange]->receiveSubmitted();
+        }
+
+        /** As above, but retire into a caller-owned completion sink installed before submission. */
+        template<typename T_Completion>
+        auto receiveSubmitted(uint32_t exchange, T_Completion completion)
+        {
+            return receiveExchanges[exchange]->receiveSubmitted(std::move(completion));
+        }
+
+        /** Describe all dynamically selected exchange directions as one lazy aggregate.
          *
-         * Asynchronously starts synchronization data from internal DeviceBuffer using added
-         * Exchange buffers.
-         *
+         * Direction retirement events still serialize staging-buffer reuse, but branch completion is joined
+         * directly instead of being transferred through ControlContext. The returned sender includes previous,
+         * even when this rank has no active exchanges. It must be started before another communication is created.
          */
-        EventTask asyncCommunication(EventTask serialEvent)
+        auto communication(caravan::Event previous = {})
         {
-            EventTask evR;
-            for(uint32_t i = 0; i < maxExchange; ++i)
-            {
-                evR += asyncReceive(serialEvent, i);
+            return caravan::deferWithReservations(
+                [this, previous = std::move(previous)](caravan::EventReservations& reservations) mutable
+                {
+                    auto& device = Environment<>::get().DeviceContext();
+                    // Installed reservations are rolled back if any later direction fails to connect, so a
+                    // failed setup cannot leave a permanently pending direction event for the next step.
+                    auto makeReceive = [this, &reservations, &device, previous](uint32_t exchange)
+                    {
+                        caravan::EventSource completion;
+                        auto predecessor = reservations.replace(receiveCompletions[exchange], completion.event());
+                        auto branch = caravan::alpaka::withDevice(
+                            device,
+                            caravan::whenAll(caravan::asSender(previous), caravan::asSender(std::move(predecessor)))
+                                | caravan::sequence(receive(exchange)));
+                        return caravan::trackCompletion(std::move(branch), std::move(completion));
+                    };
+                    auto makeSend = [this, &reservations, &device, previous](uint32_t exchange)
+                    {
+                        caravan::EventSource completion;
+                        auto predecessor = reservations.replace(sendCompletions[exchange], completion.event());
+                        auto branch = caravan::alpaka::withDevice(
+                            device,
+                            caravan::whenAll(caravan::asSender(previous), caravan::asSender(std::move(predecessor)))
+                                | caravan::sequence(send(exchange)));
+                        return caravan::trackCompletion(std::move(branch), std::move(completion));
+                    };
 
-                ExchangeType sendEx = Mask::getMirroredExchangeType(i);
+                    using ReceiveBranch = decltype(makeReceive(0u));
+                    using SendBranch = decltype(makeSend(0u));
+                    std::vector<ReceiveBranch> receives;
+                    std::vector<SendBranch> sends;
+                    receives.reserve(maxExchange);
+                    sends.reserve(maxExchange);
+                    for(uint32_t i = 0; i < maxExchange; ++i)
+                    {
+                        if(hasReceiveExchange(i))
+                            receives.push_back(makeReceive(i));
 
-                evR += asyncSend(serialEvent, sendEx);
-            }
-            return evR;
+                        auto const sendEx = Mask::getMirroredExchangeType(i);
+                        if(hasSendExchange(sendEx))
+                            sends.push_back(makeSend(sendEx));
+                    }
+                    return caravan::whenAll(
+                        caravan::asSender(std::move(previous)),
+                        caravan::whenAll(std::move(receives)),
+                        caravan::whenAll(std::move(sends)));
+                });
         }
 
-        EventTask asyncSend(EventTask serialEvent, uint32_t sendEx)
+        /** Submit CORE and receive copies independently, then enqueue BORDER behind their native fences.
+         *
+         * Send retirement remains part of terminal completion. Receive and CORE retirement is joined on every
+         * path, including MPI, submission, and border-factory failures. Direction retirement events are installed
+         * before receives start so overlapping communication attempts cannot reuse staging storage prematurely.
+         */
+        template<typename T_Core, typename T_BorderFactory>
+        auto communicationThen(T_Core core, T_BorderFactory borderFactory, caravan::Event previous = {})
         {
-            if(hasSendExchange(sendEx))
-            {
-                eventSystem::startTransaction(serialEvent + sendEvents[sendEx]);
-                sendEvents[sendEx] = sendExchanges[sendEx]->startSend();
-                eventSystem::endTransaction();
-                return sendEvents[sendEx];
-            }
-            return EventTask();
-        }
+            return caravan::deferWithReservations(
+                [this,
+                 core = std::move(core),
+                 borderFactory = std::move(borderFactory),
+                 previous = std::move(previous)](caravan::EventReservations& reservations) mutable
+                {
+                    using Group = caravan::alpaka::SubmissionGroup<ComputeDeviceQueue>;
+                    auto group = std::make_shared<Group>();
+                    auto& device = Environment<>::get().DeviceContext();
 
-        EventTask asyncReceive(EventTask serialEvent, uint32_t recvEx)
-        {
-            if(hasReceiveExchange(recvEx))
-            {
-                eventSystem::startTransaction(serialEvent + receiveEvents[recvEx]);
-                receiveEvents[recvEx] = receiveExchanges[recvEx]->startReceive();
+                    // CORE publishes its native dependency and retires into the group.
+                    auto coreTicket = group->add();
+                    auto coreReady = coreTicket.publish(
+                        caravan::asSender(previous)
+                        | caravan::sequence(
+                            caravan::alpaka::startSubmission(device, std::move(core), coreTicket)));
 
-                eventSystem::endTransaction();
-                return receiveEvents[recvEx];
-            }
-            return EventTask();
+                    auto makeReceive = [this, previous, group, &reservations](uint32_t exchange)
+                    {
+                        auto ticket = group->add();
+                        auto predecessor = reservations.replace(receiveCompletions[exchange], ticket.event());
+                        return ticket.publish(
+                            caravan::whenAll(
+                                caravan::asSender(previous),
+                                caravan::asSender(std::move(predecessor)))
+                                | caravan::sequence(receiveSubmitted(exchange, ticket)),
+                            [](auto submitted) { return std::move(submitted.deviceWork); });
+                    };
+                    auto makeSend = [this, &reservations, &device, previous](uint32_t exchange)
+                    {
+                        caravan::EventSource completion;
+                        auto predecessor = reservations.replace(sendCompletions[exchange], completion.event());
+                        auto branch = caravan::alpaka::withDevice(
+                            device,
+                            caravan::whenAll(
+                                caravan::asSender(previous),
+                                caravan::asSender(std::move(predecessor)))
+                                | caravan::sequence(send(exchange)));
+                        return caravan::trackCompletion(std::move(branch), std::move(completion));
+                    };
+
+                    using ReceiveBranch = decltype(makeReceive(0u));
+                    using SendBranch = decltype(makeSend(0u));
+                    std::vector<ReceiveBranch> receives;
+                    std::vector<SendBranch> sends;
+                    receives.reserve(maxExchange);
+                    sends.reserve(maxExchange);
+                    for(uint32_t i = 0; i < maxExchange; ++i)
+                    {
+                        if(hasReceiveExchange(i))
+                            receives.push_back(makeReceive(i));
+
+                        auto const sendEx = Mask::getMirroredExchangeType(i);
+                        if(hasSendExchange(sendEx))
+                            sends.push_back(makeSend(sendEx));
+                    }
+
+                    auto ready = caravan::whenAll(std::move(coreReady), caravan::whenAll(std::move(receives)));
+                    auto border = std::move(ready)
+                                  | caravan::letValue(
+                                      [group, &device, borderFactory = std::move(borderFactory)]() mutable
+                                      {
+                                          // Import published native fences; a producer error surfaces here.
+                                          auto waits = group->waitFor();
+                                          return caravan::alpaka::withDevice(
+                                              device,
+                                              std::move(waits)
+                                                  | caravan::alpaka::sequence(std::invoke(borderFactory)));
+                                      });
+                    // Terminal completion joins border, sends, previous and every producer's retirement.
+                    return group->join(caravan::whenAll(
+                        std::move(border),
+                        caravan::whenAll(std::move(sends)),
+                        caravan::asSender(std::move(previous))));
+                });
         }
 
         /**
@@ -516,20 +655,6 @@ namespace pmacc
         GridLayout<DIM> getGridLayout()
         {
             return gridLayout;
-        }
-
-    private:
-        friend class Environment<DIM>;
-
-        void init()
-        {
-            for(uint32_t i = 0; i < 27; ++i)
-            {
-                /* fill array with valid empty events to avoid side effects if
-                 * array is accessed without calling hasExchange() before usage */
-                receiveEvents[i] = EventTask();
-                sendEvents[i] = EventTask();
-            }
         }
 
     protected:
@@ -543,8 +668,8 @@ namespace pmacc
 
         std::unique_ptr<Exchange<BORDERTYPE, DIM>> sendExchanges[27];
         std::unique_ptr<Exchange<BORDERTYPE, DIM>> receiveExchanges[27];
-        EventTask receiveEvents[27];
-        EventTask sendEvents[27];
+        caravan::Event receiveCompletions[27];
+        caravan::Event sendCompletions[27];
 
         uint32_t maxExchange; // use max exchanges and run over the array is faster as use set from stl
     };

@@ -39,6 +39,8 @@
 #include "pmacc/particles/memory/frames/Frame.hpp"
 #include "pmacc/traits/GetUniqueTypeId.hpp"
 
+#include <algorithm>
+#include <array>
 #include <memory>
 
 namespace pmacc
@@ -150,17 +152,20 @@ namespace pmacc
             DataSpace<DIM> superCellsCount = gridSize / superCellSize;
 
             superCells = std::make_unique<GridBuffer<SuperCellType, DIM>>(superCellsCount);
-
-            reset();
         }
 
-        /**
-         * Resets all internal buffers.
-         */
-        void reset()
+        /** Lazily initialize host and device supercell storage. */
+        auto resetAsync()
         {
-            superCells->getDeviceBuffer().setValue(SuperCellType());
-            superCells->getHostBuffer().setValue(SuperCellType());
+            auto host = superCells->getHostBuffer().getOwnedAlpakaView();
+            auto device = superCells->getDeviceBuffer().getOwnedAlpakaView();
+            auto const elements = superCells->getHostBuffer().capacityND().productOfComponents();
+            return caravan::alpaka::submit(
+                [host = std::move(host), device = std::move(device), elements](auto& nativeQueue) mutable
+                {
+                    std::fill_n(alpaka::getPtrNative(host.value), elements, SuperCellType{});
+                    alpaka::memcpy(nativeQueue, device.value, host.value, alpaka::getExtents(host.value));
+                });
         }
 
         /**
@@ -249,27 +254,43 @@ namespace pmacc
          * GridBuffer
          *
          */
-        EventTask asyncCommunication(EventTask serialEvent)
+        caravan::Event sendCompletion(uint32_t exchange) const
         {
-            return framesExchanges->asyncCommunication(serialEvent)
-                   + exchangeMemoryIndexer->asyncCommunication(serialEvent);
+            std::array completions{
+                framesExchanges->sendCompletion(exchange),
+                exchangeMemoryIndexer->sendCompletion(exchange)};
+            return caravan::whenAll(completions);
         }
 
-        EventTask asyncSendParticles(EventTask serialEvent, uint32_t ex)
+        caravan::Event receiveCompletion(uint32_t exchange) const
         {
-            /* store each gpu-free event separately to avoid race conditions */
-            EventTask framesExchangesGPUEvent;
-            EventTask exchangeMemoryIndexerGPUEvent;
-            EventTask returnEvent
-                = framesExchanges->asyncSend(serialEvent, ex) + exchangeMemoryIndexer->asyncSend(serialEvent, ex);
-
-            return returnEvent;
+            std::array completions{
+                framesExchanges->receiveCompletion(exchange),
+                exchangeMemoryIndexer->receiveCompletion(exchange)};
+            return caravan::whenAll(completions);
         }
 
-        EventTask asyncReceiveParticles(EventTask serialEvent, uint32_t ex)
+        void setSendCompletion(uint32_t exchange, caravan::Event completion)
         {
-            return framesExchanges->asyncReceive(serialEvent, ex)
-                   + exchangeMemoryIndexer->asyncReceive(serialEvent, ex);
+            framesExchanges->setSendCompletion(exchange, completion);
+            exchangeMemoryIndexer->setSendCompletion(exchange, std::move(completion));
+        }
+
+        void setReceiveCompletion(uint32_t exchange, caravan::Event completion)
+        {
+            framesExchanges->setReceiveCompletion(exchange, completion);
+            exchangeMemoryIndexer->setReceiveCompletion(exchange, std::move(completion));
+        }
+
+        auto sendParticles(uint32_t exchange)
+        {
+            return caravan::whenAll(framesExchanges->send(exchange), exchangeMemoryIndexer->send(exchange));
+        }
+
+        auto receiveParticles(uint32_t exchange)
+        {
+            return caravan::whenAll(framesExchanges->receive(exchange), exchangeMemoryIndexer->receive(exchange))
+                   | caravan::then([](auto&&...) {});
         }
 
         /**
@@ -303,12 +324,6 @@ namespace pmacc
         {
             return superCellSize;
         }
-
-        void deviceToHost()
-        {
-            superCells->deviceToHost();
-        }
-
 
     private:
         std::unique_ptr<GridBuffer<BorderFrameIndex, DIM1>> exchangeMemoryIndexer;

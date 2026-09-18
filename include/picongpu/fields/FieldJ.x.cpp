@@ -30,9 +30,9 @@
 #include "picongpu/traits/SIBaseUnits.hpp"
 
 #include <pmacc/Environment.hpp>
+#include <pmacc/fields/Communication.hpp>
 #include <pmacc/fields/operations/AddExchangeToBorder.hpp>
 #include <pmacc/fields/operations/CopyGuardToExchange.hpp>
-#include <pmacc/fields/tasks/FieldFactory.hpp>
 #include <pmacc/mappings/kernel/AreaMapping.hpp>
 #include <pmacc/math/Vector.hpp>
 #include <pmacc/particles/memory/boxes/ParticlesBox.hpp>
@@ -45,6 +45,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <utility>
 
 namespace picongpu
 {
@@ -152,24 +153,12 @@ namespace picongpu
         return cellDescription.getGridLayout();
     }
 
-    EventTask FieldJ::asyncCommunication(EventTask serialEvent)
+    caravan::Event FieldJ::spawnCommunication(caravan::ControlContext& context, caravan::Event previous)
     {
-        EventTask ret;
-        eventSystem::startTransaction(serialEvent);
-        FieldFactory::getInstance().createTaskFieldReceiveAndInsert(*this);
-        ret = eventSystem::endTransaction();
-
-        eventSystem::startTransaction(serialEvent);
-        FieldFactory::getInstance().createTaskFieldSend(*this);
-        ret += eventSystem::endTransaction();
-
-        if(fieldJrecv != nullptr)
-        {
-            EventTask eJ = fieldJrecv->asyncCommunication(ret);
-            return eJ;
-        }
-        else
-            return ret;
+        auto communicated = pmacc::fields::communication(*this, std::move(previous));
+        if(fieldJrecv)
+            return context.spawn(std::move(communicated) | caravan::sequence(fieldJrecv->communication()));
+        return context.spawn(std::move(communicated));
     }
 
     void FieldJ::reset(uint32_t)

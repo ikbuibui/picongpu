@@ -106,7 +106,9 @@ namespace picongpu
         /**
          * Constructor
          */
-        Simulation() = default;
+        explicit Simulation(caravan::MpiContext& mpiContext) : mpiContext(mpiContext)
+        {
+        }
 
         void pluginRegisterHelp(po::options_description& desc) override
         {
@@ -217,7 +219,11 @@ namespace picongpu
                 isPeriodic[i] = periodic[i];
             }
 
-            Environment<simDim>::get().initDevices(gpus, isPeriodic);
+            Environment<simDim>::get().initDevices(mpiContext, gpus, isPeriodic);
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+            // Match the old event system's seven-queue cap: PMacc owns one, PIConGPU adds six.
+            Environment<>::get().DeviceContext().addQueues(6u);
+#endif
             pmacc::GridController<simDim>& gc = pmacc::Environment<simDim>::get().GridController();
 
             DataSpace<simDim> myGPUpos(gc.getPosition());
@@ -364,7 +370,10 @@ namespace picongpu
 
             // init and share random number generator
             pmacc::GridController<simDim>& gridCon = pmacc::Environment<simDim>::get().GridController();
-            rngFactory->init(gridCon.getScalarPosition() ^ seed);
+            asyncContext.wait(asyncContext.spawn(
+                caravan::alpaka::withDevice(
+                    Environment<>::get().DeviceContext(),
+                    rngFactory->init(gridCon.getScalarPosition() ^ seed))));
             dc.consume(std::move(rngFactory));
 
 #if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
@@ -425,11 +434,6 @@ namespace picongpu
                 freeGpuMem = freeDeviceMemory();
                 log<picLog::MEMORY>("free mem after all mem is allocated %1% MiB") % (freeGpuMem / 1024 / 1024);
             }
-
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
-            /* add CUDA streams to the QueueController for concurrent execution */
-            Environment<>::get().QueueController().addQueues(6);
-#endif
         }
 
         uint32_t fillSimulation() override
@@ -477,10 +481,11 @@ namespace picongpu
             auto fieldB = dc.get<FieldB>(FieldB::getName());
 
             // generate valid GUARDS (overwrite)
-            EventTask eRfieldE = fieldE->asyncCommunication(eventSystem::getTransactionEvent());
-            eventSystem::setTransactionEvent(eRfieldE);
-            EventTask eRfieldB = fieldB->asyncCommunication(eventSystem::getTransactionEvent());
-            eventSystem::setTransactionEvent(eRfieldB);
+            eventSystem::getTransactionEvent().waitForFinished();
+            auto communications = caravan::whenAll(
+                fieldE->getGridBuffer().communication(),
+                fieldB->getGridBuffer().communication());
+            asyncContext.wait(asyncContext.spawn(std::move(communications)));
 
             log<picLog::SIMULATION_STATE>("Starting simulation from timestep 0");
             return step;
@@ -509,7 +514,12 @@ namespace picongpu
             eventSystem::setTransactionEvent(commEvent);
             (*currentBackground)(currentStep);
             CurrentDeposition{}(currentStep);
-            (*currentInterpolationAndAdditionToEMF)(currentStep, *myFieldSolver);
+            // Bridge the remaining legacy current producers into the Caravan graph.
+            eventSystem::getTransactionEvent().waitForFinished();
+            auto currentAdded
+                = (*currentInterpolationAndAdditionToEMF)(asyncContext, caravan::readyEvent(), *myFieldSolver);
+            // The following field-solver stage still has a synchronous signature.
+            asyncContext.wait(currentAdded);
             myFieldSolver->update_afterCurrent(currentStep);
         }
 
@@ -614,6 +624,8 @@ namespace picongpu
         bool isDeviceMemoryShared{false};
 
     private:
+        caravan::MpiContext& mpiContext;
+
         /** Get available memory on device
          *
          * @attention This method is using MPI collectives and must be called from all MPI processes collectively.
@@ -629,8 +641,8 @@ namespace picongpu
             GridController<simDim>& gc = Environment<simDim>::get().GridController();
             if(isDeviceSharedBetweenRanks)
             {
-                // Synchronize to guarantee that all other MPI process on the same device allocated there memory.
-                MPI_CHECK(MPI_Barrier(gc.getCommunicator().getMPIComm()));
+                // Synchronize to guarantee that all other MPI process on the same device allocated their memory.
+                caravan::syncWait(gc.getCommunicator().barrier());
             }
 
             // free memory reported by the driver
@@ -651,7 +663,7 @@ namespace picongpu
                 freeDeviceMemory /= numRanksPerDevice;
                 // Synchronize to guarantee that all other MPI process on the same device see the same amount of free
                 // memory.
-                MPI_CHECK(MPI_Barrier(gc.getCommunicator().getMPIComm()));
+                caravan::syncWait(gc.getCommunicator().barrier());
             }
 
             size_t allocatableMemory = freeDeviceMemory;
@@ -692,7 +704,7 @@ namespace picongpu
             if(isDeviceSharedBetweenRanks)
             {
                 // Wait that all MPI processes had checked the available/allocatable memory.
-                MPI_CHECK(MPI_Barrier(gc.getCommunicator().getMPIComm()));
+                caravan::syncWait(gc.getCommunicator().barrier());
             }
 
             return allocatableMemory;
