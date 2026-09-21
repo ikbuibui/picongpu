@@ -102,6 +102,13 @@ namespace caravan::alpaka
                 operation.start();
             }
 
+            /** Lease-based pools own their queues for the graph lifetime, so no per-queue mutex is needed. */
+            template<typename T_Operation, std::size_t N>
+            void start(T_Operation& operation, std::array<std::size_t, N> const&) const noexcept
+            {
+                operation.start();
+            }
+
         private:
             friend class QueuePool;
 
@@ -233,6 +240,7 @@ namespace caravan::alpaka
                       dependencies,
                       Receiver{&m_binding, std::move(receiver)},
                       &pool.m_events)
+                , m_lanes(std::move(lanes))
             {
             }
 
@@ -243,12 +251,13 @@ namespace caravan::alpaka
 
             void start() & noexcept
             {
-                m_binding->start(m_operation);
+                m_binding->start(m_operation, m_lanes);
             }
 
         private:
             std::optional<Binding> m_binding;
             Operation m_operation;
+            std::array<std::size_t, stageCount> m_lanes;
         };
     } // namespace detail
 

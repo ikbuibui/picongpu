@@ -160,17 +160,36 @@ namespace caravan::alpaka
             SubmitOperation(SubmitOperation&&) = delete;
             SubmitOperation& operator=(SubmitOperation&&) = delete;
 
+            /** Submit every stage without making completion observable yet.
+             *
+             * Queue-pool bindings use this so their submission locks can be released before publish() can run a
+             * receiver and destroy the connected operation.
+             */
+            void submit() & noexcept
+            {
+                submitStage<0u>();
+            }
+
+            /** Publish a submitted operation to completion progress.
+             *
+             * Receiver delivery may destroy this operation, so callers must not access it after this call.
+             */
+            void publish() & noexcept
+            {
+                m_completionThread.post(*this);
+            }
+
             void start(std::mutex* submissionMutex = nullptr) & noexcept
             {
                 if(submissionMutex)
                 {
                     std::lock_guard lock(*submissionMutex);
-                    submitStage<0u>();
+                    submit();
                 }
                 else
-                    submitStage<0u>();
+                    submit();
                 // Publish only after unlocking: completion can destroy this operation and start another graph.
-                m_completionThread.post(*this);
+                publish();
             }
 
         private:
