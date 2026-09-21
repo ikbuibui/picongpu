@@ -233,6 +233,19 @@ namespace caravan::alpaka
             std::array<std::size_t, stageCount> m_fenceIndices{};
             T_Receiver m_receiver;
         };
+
+        /** Explicit deduction guide for host compilers that cannot form the implicit guide.
+         *
+         * The pack appears in the `sizeof...(T_Submits)` array/dependency parameters before the tuple
+         * parameter that deduces it. nvcc rejects the implicit guide for this ordering, so spell it out.
+         */
+        template<typename T_Queue, typename T_Receiver, typename... T_Submits>
+        SubmitOperation(
+            std::array<T_Queue*, sizeof...(T_Submits)>,
+            std::tuple<T_Submits...>,
+            SubmissionDependencies<sizeof...(T_Submits)>,
+            T_Receiver,
+            EventPool<T_Queue>* = nullptr) -> SubmitOperation<T_Queue, T_Receiver, T_Submits...>;
     } // namespace detail
 
     /** Compatibility query: Caravan terminal completion no longer runs in alpaka callbacks. */
