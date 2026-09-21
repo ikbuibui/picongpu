@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <array>
-#include <exception>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -142,10 +141,7 @@ namespace caravan::alpaka
                         }
 
                 // Preallocate fences before borrowing captures. Only unbranched, adjacent same-queue stages
-                // share a fence: after a submission failure the remainder of that run is necessarily skipped.
-                // whenAll(A, B) -> C on A's queue retains A's branch fence despite FIFO ordering.
-                // Future optimization: omit it when no cross-queue consumer needs it, preserving error snapshots
-                // and a cleanup fence for A if submission failure skips C and its terminal fence.
+                // share a fence. whenAll(A, B) -> C on A's queue retains A's branch fence despite FIFO ordering.
                 for(std::size_t i = stageCount; i-- > 0u;)
                 {
                     if(i + 1u < stageCount && *m_queues[i] == *m_queues[i + 1u]
@@ -184,37 +180,11 @@ namespace caravan::alpaka
                 auto& queue = *m_queues[T_Index];
                 auto& fence = m_fences[m_fenceIndices[T_Index]];
                 for(std::size_t i = 0u; i != T_Index; ++i)
-                    if(m_dependencies.predecessors[T_Index][i] && m_failed[i])
-                        m_failed[T_Index] = true;
-
-                if(!m_failed[T_Index])
-                {
-                    try
-                    {
-                        for(std::size_t i = 0u; i != T_Index; ++i)
-                            if(m_dependencies.predecessors[T_Index][i] && queue != *m_queues[i])
-                                m_fences[m_fenceIndices[i]]->waitOn(queue);
-                        std::invoke(std::get<T_Index>(m_submits), queue);
-                        if(m_fenceIndices[T_Index] == T_Index)
-                            fence->record(queue);
-                    }
-                    catch(...)
-                    {
-                        m_failed[T_Index] = true;
-                        if(!m_error)
-                            m_error = std::current_exception();
-                        try
-                        {
-                            // A throwing wait/submission may already have borrowed captures. Fence it before
-                            // continuing independent branches; descendants of this failed stage are skipped.
-                            fence->record(queue);
-                        }
-                        catch(...)
-                        {
-                            std::terminate(); // No fence means no proof that retained storage can be reclaimed.
-                        }
-                    }
-                }
+                    if(m_dependencies.predecessors[T_Index][i] && queue != *m_queues[i])
+                        m_fences[m_fenceIndices[i]]->waitOn(queue);
+                std::invoke(std::get<T_Index>(m_submits), queue);
+                if(m_fenceIndices[T_Index] == T_Index)
+                    fence->record(queue);
 
                 if constexpr(T_Index + 1u < stageCount)
                     submitStage<T_Index + 1u>();
@@ -224,17 +194,14 @@ namespace caravan::alpaka
             {
                 bool ready = true;
                 for(auto& fence : m_fences)
-                    if(fence && !fence->poll(m_error))
+                    if(fence && !fence->poll())
                         ready = false;
                 if(!ready)
                     return false;
                 // Return event leases only after the whole graph is quiescent, before a receiver starts more work.
                 for(auto& fence : m_fences)
                     fence.reset();
-                if(m_error)
-                    m_receiver.set_error(std::move(m_error));
-                else
-                    m_receiver.set_value();
+                m_receiver.set_value();
                 // The receiver may destroy this operation. Do not access members below this point.
                 return true;
             }
@@ -245,9 +212,7 @@ namespace caravan::alpaka
             SubmissionDependencies<stageCount> m_dependencies;
             std::array<std::optional<Fence>, stageCount> m_fences;
             std::array<std::size_t, stageCount> m_fenceIndices{};
-            std::array<bool, stageCount> m_failed{};
             T_Receiver m_receiver;
-            std::exception_ptr m_error;
         };
     } // namespace detail
 
@@ -264,11 +229,9 @@ namespace caravan::alpaka
      * only enqueue tracked work on their supplied queue, not read unfinished results or block for completion.
      * sequence uses FIFO/events; whenAll preserves independent branches. Ordinary then/letValue
      * callbacks and explicit placement wrappers remain host-completion boundaries. Unbranched same-queue runs
-     * share a fence. CPU fences snapshot task exceptions; other backends use alpaka events.
-     * A shared progress thread polls all recorded fences before terminal completion and reclamation. Submission
-     * failures skip descendants but not independent branches; asynchronous errors cannot retract queued work.
-     * Submission errors take precedence over execution errors. Failure to establish quiescence terminates rather
-     * than reclaim live storage. Receivers run on an executor thread: use continuesOn before blocking callbacks.
+     * share a fence. A shared progress thread polls all recorded fences before terminal completion and reclamation.
+     * Backend, submission, and CPU task failures terminate the process. Receivers run on an executor thread: use
+     * continuesOn before blocking callbacks.
      */
     template<typename T_Queue, typename... T_Submits>
     class SubmitSender
@@ -278,7 +241,7 @@ namespace caravan::alpaka
 
     public:
         static constexpr auto stage_count = stageCount;
-        using completion_signatures = CompletionSignatures<ValueSignature<>, ErrorSignature<std::exception_ptr>>;
+        using completion_signatures = CompletionSignatures<ValueSignature<>>;
 
         SubmitSender(
             std::array<T_Queue*, stageCount> queues,

@@ -4,7 +4,6 @@
  */
 #pragma once
 
-#include <exception>
 #include <functional>
 #include <type_traits>
 #include <utility>
@@ -24,11 +23,6 @@ namespace caravan
                 void set_value(T&&... values) noexcept
                 {
                     owner->completeValue(std::forward<T>(values)...);
-                }
-
-                void set_error(std::exception_ptr error) noexcept
-                {
-                    owner->m_receiver.set_error(std::move(error));
                 }
 
                 decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
@@ -62,20 +56,13 @@ namespace caravan
             template<typename... T>
             void completeValue(T&&... values) noexcept
             {
-                try
+                if constexpr(std::is_void_v<std::invoke_result_t<T_Function&, T...>>)
                 {
-                    if constexpr(std::is_void_v<std::invoke_result_t<T_Function&, T...>>)
-                    {
-                        std::invoke(m_function, std::forward<T>(values)...);
-                        m_receiver.set_value();
-                    }
-                    else
-                        m_receiver.set_value(std::invoke(m_function, std::forward<T>(values)...));
+                    std::invoke(m_function, std::forward<T>(values)...);
+                    m_receiver.set_value();
                 }
-                catch(...)
-                {
-                    m_receiver.set_error(std::current_exception());
-                }
+                else
+                    m_receiver.set_value(std::invoke(m_function, std::forward<T>(values)...));
             }
 
             T_Function m_function;

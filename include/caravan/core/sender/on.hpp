@@ -39,8 +39,8 @@ namespace caravan
      *
      * The receiver environment must answer getScheduler(), usually supplied by an
      * enclosing startsOn(). Capture it at connect, not from the initiating thread.
-     * Value/error completions (including failed initial scheduling) are restored
-     * via continuesOn; restoration failure replaces that outcome.
+     * Successful completion is restored via continuesOn. Scheduling and
+     * restoration failures are fatal.
      * An inline ambient scheduler restores inline on the completing thread, with
      * no return hop. An ambient run loop must be driven to deliver restoration.
      */

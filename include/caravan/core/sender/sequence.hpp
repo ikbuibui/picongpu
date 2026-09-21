@@ -15,8 +15,7 @@ namespace caravan
      * constraints, such as using one queue pool, still apply. Otherwise, the successor is connected and
      * started on the thread delivering successful predecessor completion, without blocking or a scheduler
      * transfer. Use letValue when the successor needs predecessor values or an explicit host boundary.
-     * Native fusion may enqueue successors before asynchronous execution errors become observable;
-     * the generic path skips the successor on predecessor error.
+     * Callback, submission, and asynchronous execution failures are fatal.
      */
     template<Sender T_Previous, Sender T_Next>
     auto sequence(T_Previous previous, T_Next next)

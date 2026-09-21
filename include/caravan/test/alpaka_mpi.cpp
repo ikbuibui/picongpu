@@ -9,7 +9,6 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdlib>
-#include <exception>
 #include <memory>
 #include <new>
 #include <span>
@@ -39,11 +38,6 @@ namespace
         void set_value() noexcept
         {
             output.setReady();
-        }
-
-        void set_error(std::exception_ptr error) noexcept
-        {
-            output.setFailed(std::move(error));
         }
 
         caravan::EventSource output;

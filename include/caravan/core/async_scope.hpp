@@ -6,7 +6,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -101,12 +100,6 @@ namespace caravan
                 finishSpawn(owner, std::move(scope));
             }
 
-            void set_error(std::exception_ptr error) noexcept
-            {
-                output.setFailed(std::move(error));
-                finishSpawn(owner, std::move(scope));
-            }
-
             std::shared_ptr<AsyncScopeState> scope;
             T_Output output;
             SpawnOwner owner;
@@ -118,20 +111,7 @@ namespace caravan
             template<typename U>
             void set_value(U&& value) noexcept
             {
-                try
-                {
-                    output.setValue(std::forward<U>(value));
-                }
-                catch(...)
-                {
-                    output.setFailed(std::current_exception());
-                }
-                finishSpawn(owner, std::move(scope));
-            }
-
-            void set_error(std::exception_ptr error) noexcept
-            {
-                output.setFailed(std::move(error));
+                output.setValue(std::forward<U>(value));
                 finishSpawn(owner, std::move(scope));
             }
 
@@ -177,8 +157,8 @@ namespace caravan
      * quiescent. The owner must provide progress and wait for that Event before
      * destruction; destroying an unjoined or non-quiescent scope terminates
      * instead of attempting hidden, potentially unbounded progress. The returned
-     * Event carries each sender's value/error channel; values are
-     * deliberately type-erased at this migration boundary.
+     * Event reports completion; values are deliberately type-erased at this boundary.
+     * After reserving a scope entry, construction and execution failures are fatal.
      */
     class AsyncScope
     {
@@ -202,17 +182,12 @@ namespace caravan
             EventSource output;
             auto result = output.event();
             m_state->reserve();
-            try
+            [&]() noexcept
             {
                 using Operation = detail::SpawnOperation<T_Sender, detail::ScopeReceiver, EventSource>;
                 auto* operation = new Operation(std::move(sender), m_state, output);
                 operation->start();
-            }
-            catch(...)
-            {
-                m_state->complete();
-                throw;
-            }
+            }();
             return result;
         }
 
@@ -223,17 +198,12 @@ namespace caravan
             Promise<T> output;
             auto result = output.future();
             m_state->reserve();
-            try
+            [&]() noexcept
             {
                 using Operation = detail::SpawnOperation<T_Sender, detail::FutureScopeReceiver, Promise<T>>;
                 auto* operation = new Operation(std::move(sender), m_state, output);
                 operation->start();
-            }
-            catch(...)
-            {
-                m_state->complete();
-                throw;
-            }
+            }();
             return result;
         }
 

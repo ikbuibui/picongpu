@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstddef>
-#include <exception>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <tuple>
@@ -25,11 +25,6 @@ namespace caravan
             void set_value(T&&... values) noexcept
             {
                 owner->template setValue<T_Index>(std::forward<T>(values)...);
-            }
-
-            void set_error(std::exception_ptr error) noexcept
-            {
-                owner->setError(std::move(error));
             }
 
             decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Environment const&>().get_env()))
@@ -118,28 +113,7 @@ namespace caravan
                 bool complete;
                 {
                     std::lock_guard lock(m_mutex);
-                    try
-                    {
-                        std::get<T_I>(m_values).emplace(std::forward<T>(values)...);
-                    }
-                    catch(...)
-                    {
-                        if(!m_error)
-                            m_error = std::current_exception();
-                    }
-                    complete = --m_remaining == 0u;
-                }
-                if(complete)
-                    finish();
-            }
-
-            void setError(std::exception_ptr error) noexcept
-            {
-                bool complete;
-                {
-                    std::lock_guard lock(m_mutex);
-                    if(!m_error)
-                        m_error = std::move(error);
+                    std::get<T_I>(m_values).emplace(std::forward<T>(values)...);
                     complete = --m_remaining == 0u;
                 }
                 if(complete)
@@ -149,31 +123,17 @@ namespace caravan
         private:
             void finish() noexcept
             {
-                if(m_error)
-                {
-                    this->m_receiver.set_error(std::move(m_error));
-                    return;
-                }
-
-                try
-                {
-                    auto values
-                        = std::apply([](auto&... value) { return std::tuple_cat(std::move(*value)...); }, m_values);
-                    std::apply(
-                        [this](auto&&... value)
-                        { this->m_receiver.set_value(std::forward<decltype(value)>(value)...); },
-                        std::move(values));
-                }
-                catch(...)
-                {
-                    this->m_receiver.set_error(std::current_exception());
-                }
+                auto values = std::apply(
+                    [](auto&... value) { return std::tuple_cat(std::move(*value)...); }, m_values);
+                std::apply(
+                    [this](auto&&... value)
+                    { this->m_receiver.set_value(std::forward<decltype(value)>(value)...); },
+                    std::move(values));
             }
 
             std::mutex m_mutex;
             std::size_t m_remaining = sizeof...(T_Senders);
             std::tuple<std::optional<ValueTupleOf<T_Senders>>...> m_values;
-            std::exception_ptr m_error;
         };
     } // namespace detail
 

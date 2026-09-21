@@ -6,7 +6,6 @@
 
 #include <array>
 #include <cstddef>
-#include <exception>
 #include <mutex>
 #include <tuple>
 #include <type_traits>
@@ -179,12 +178,7 @@ namespace caravan
             template<typename... T>
             void set_value(T&&...) noexcept
             {
-                owner->template complete<T_Index>({});
-            }
-
-            void set_error(std::exception_ptr error) noexcept
-            {
-                owner->template complete<T_Index>(std::move(error));
+                owner->template complete<T_Index>();
             }
 
             decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Environment const&>().get_env()))
@@ -267,39 +261,24 @@ namespace caravan
             }
 
             template<std::size_t T_I>
-            void complete(std::exception_ptr error) noexcept
+            void complete() noexcept
             {
                 std::array<std::size_t, nodeCount> ready{};
                 std::size_t readyCount = 0u;
                 bool finished = false;
-                std::exception_ptr finalError;
                 {
                     std::lock_guard lock(m_mutex);
                     resolve(T_I);
-                    if(error)
-                    {
-                        if(!m_error)
-                            m_error = std::move(error);
-                        skipDescendants(T_I);
-                    }
-                    else
-                    {
-                        for(std::size_t successor = T_I + 1u; successor < nodeCount; ++successor)
-                            if(!m_resolved[successor] && Topology::predecessors[successor][T_I]
-                               && --m_remainingPredecessors[successor] == 0u)
-                                ready[readyCount++] = successor;
-                    }
+                    for(std::size_t successor = T_I + 1u; successor < nodeCount; ++successor)
+                        if(!m_resolved[successor] && Topology::predecessors[successor][T_I]
+                           && --m_remainingPredecessors[successor] == 0u)
+                            ready[readyCount++] = successor;
                     finished = m_unresolved == 0u;
-                    if(finished)
-                        finalError = m_error;
                 }
 
                 if(finished)
                 {
-                    if(finalError)
-                        this->m_receiver.set_error(std::move(finalError));
-                    else
-                        this->m_receiver.set_value();
+                    this->m_receiver.set_value();
                     return;
                 }
                 if(readyCount != 0u)
@@ -311,24 +290,6 @@ namespace caravan
             {
                 m_resolved[node] = true;
                 --m_unresolved;
-            }
-
-            void skipDescendants(std::size_t failed) noexcept
-            {
-                std::array<std::size_t, nodeCount> skipped{};
-                std::size_t begin = 0u;
-                std::size_t end = 1u;
-                skipped[0] = failed;
-                while(begin != end)
-                {
-                    auto const predecessor = skipped[begin++];
-                    for(std::size_t successor = predecessor + 1u; successor < nodeCount; ++successor)
-                        if(!m_resolved[successor] && Topology::predecessors[successor][predecessor])
-                        {
-                            resolve(successor);
-                            skipped[end++] = successor;
-                        }
-                }
             }
 
             template<std::size_t T_I>
@@ -352,7 +313,6 @@ namespace caravan
             std::array<std::size_t, nodeCount> m_remainingPredecessors{};
             std::array<bool, nodeCount> m_resolved{};
             std::size_t m_unresolved = nodeCount;
-            std::exception_ptr m_error;
         };
     } // namespace detail
 
@@ -405,9 +365,8 @@ namespace caravan
      * @endcode
      *
      * Arguments must be in topological order. after() expresses ordering only: predecessor values are discarded.
-     * Every node is owned and started at most once. The generic path suppresses descendants of an observed error
-     * while already-started independent work is drained. Native fusion may already have enqueued descendants before
-     * asynchronous execution errors become observable, so it cannot retract that work.
+     * Every node is owned and started at most once. Callback, submission, and asynchronous execution failures
+     * are fatal.
      */
     template<detail::GraphNodeType... T_Nodes>
     auto graph(T_Nodes... nodes)

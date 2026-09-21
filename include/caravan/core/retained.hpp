@@ -13,7 +13,7 @@ namespace caravan
      *
      * The caller must supply an owner that keeps the value's referenced storage valid.
      * An async adapter stores this whole object until native work is quiescent, including
-     * failure cleanup, and passes only unwrap(value) to the native API. This wrapper does
+     * completion, and passes only unwrap(value) to the native API. This wrapper does
      * not synchronize, prevent conflicting accesses, or make a borrowed owner owning.
      */
     template<typename T_Value, typename T_Owner>

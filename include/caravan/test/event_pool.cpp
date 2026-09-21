@@ -11,7 +11,6 @@
 #include <chrono>
 #include <future>
 #include <optional>
-#include <stdexcept>
 #include <thread>
 
 #include <caravan/alpaka.hpp>
@@ -36,27 +35,22 @@ namespace
     {
         void set_value() noexcept
         {
-            finish(false);
+            finish();
         }
 
-        void set_error(std::exception_ptr) noexcept
-        {
-            finish(true);
-        }
-
-        void finish(bool failed) noexcept
+        void finish() noexcept
         {
             // The connected operation is still alive: recycling must precede receiver delivery.
             {
                 auto lease = pool->acquire();
                 assert(lease.event() == expected);
             }
-            result->set_value(failed);
+            result->set_value();
         }
 
         Pool* pool;
         Event expected;
-        std::promise<bool>* result;
+        std::promise<void>* result;
     };
 } // namespace
 
@@ -98,18 +92,13 @@ int main()
     }
 
     Queue queue{device};
-    // Fresh bookkeeping on every reuse, including destruction without start and submission failure.
+    // Fresh bookkeeping on every reuse, including destruction without start.
     for(unsigned iteration = 0u; iteration < 8u; ++iteration)
     {
         auto expected = Event{pool.acquire().event()};
-        std::promise<bool> result;
+        std::promise<void> result;
         auto completed = result.get_future();
-        auto submit = [iteration](Queue& q)
-        {
-            alpaka::enqueue(q, [] {});
-            if(iteration % 2u != 0u)
-                throw std::runtime_error("partial submission");
-        };
+        auto submit = [](Queue& q) { alpaka::enqueue(q, [] {}); };
         auto connect = [&]
         {
             return caravan::alpaka::detail::SubmitOperation{
@@ -126,12 +115,11 @@ int main()
         assert(pool.acquire().event() == expected);
         auto operation = connect();
         operation.start();
-        assert(completed.get() == (iteration % 2u != 0u));
+        completed.get();
     }
 
 #if ALPAKA_ACC_GPU_CUDA_ENABLED || ALPAKA_ACC_GPU_HIP_ENABLED
     // A completed branch must not recycle its event while another branch still borrows captures.
-    for(bool fail : {false, true})
     {
         Pool pendingPool{device};
         auto events = [&]
@@ -146,7 +134,7 @@ int main()
         std::promise<void> release, entered;
         auto gate = release.get_future().share();
         auto running = entered.get_future();
-        std::promise<bool> result;
+        std::promise<void> result;
         auto completed = result.get_future();
         auto readyBranch = [](Queue& q) { alpaka::enqueue(q, [] {}); };
         auto pendingBranch = [&](Queue& q)
@@ -158,8 +146,6 @@ int main()
                     entered.set_value();
                     gate.wait();
                 });
-            if(fail)
-                throw std::runtime_error("pending submission");
         };
         auto operation = caravan::alpaka::detail::SubmitOperation{
             std::array{&queue, &otherQueue},
@@ -177,7 +163,7 @@ int main()
             assert(spare.event() != events[0] && spare.event() != events[1]);
         }
         release.set_value();
-        assert(completed.get() == fail);
+        completed.get();
     }
 #endif
 

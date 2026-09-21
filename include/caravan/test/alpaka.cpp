@@ -260,27 +260,6 @@ int main()
         caravan::graph(std::move(graphNodeA), std::move(graphNodeB), std::move(graphNodeC), std::move(graphNodeD)));
     assert(graphA == 2u && graphB == 1u && graphC == 2u && graphD == 1u);
 
-    bool independentGraphNodeRan = false;
-    bool failedGraphDescendantSubmitted = false;
-    auto graphFailure = caravan::node<"failure">(
-        caravan::alpaka::submit(queue, [](Queue&) { throw std::runtime_error("graph submission failed"); }));
-    auto graphIndependent = caravan::node<"independent">(caravan::alpaka::submit(
-        secondQueue,
-        [&](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [&] { independentGraphNodeRan = true; }); }));
-    auto graphSkipped = caravan::node<"skipped">(
-        caravan::alpaka::submit(queue, [&](Queue&) { failedGraphDescendantSubmitted = true; }),
-        caravan::after(graphFailure));
-    try
-    {
-        caravan::syncWait(
-            caravan::graph(std::move(graphFailure), std::move(graphIndependent), std::move(graphSkipped)));
-        assert(false);
-    }
-    catch(std::runtime_error const&)
-    {
-    }
-    assert(independentGraphNodeRan && !failedGraphDescendantSubmitted);
-
     bool mixedNativeRan = false;
     bool mixedHostRan = false;
     auto mixedNative = caravan::node<"native">(caravan::alpaka::submit(
@@ -332,54 +311,9 @@ int main()
     for(auto& thread : submitters)
         thread.join();
 
-    auto expectFailed = [](caravan::Event const& event)
-    {
-        try
-        {
-            event.wait();
-            assert(false);
-        }
-        catch(std::exception const&)
-        {
-        }
-        assert(event.state() == caravan::CompletionState::failed);
-    };
-
-    auto failed
-        = scope.spawn(caravan::alpaka::submit(queue, [](Queue&) { throw std::runtime_error("submission failed"); }));
-    expectFailed(failed);
-
-    // Submission cleanup must not wait on the alpaka callback/completion path that started the successor.
-    auto reentrantFailure = scope.spawn(
-        caravan::alpaka::submit(queue, [](Queue&) {})
-        | caravan::letValue(
-            [&]
-            {
-                return caravan::alpaka::submit(queue, [](Queue&) { throw std::runtime_error("reentrant failure"); });
-            }));
-    expectFailed(reentrantFailure);
-
-#if !ALPAKA_ACC_GPU_CUDA_ENABLED && !ALPAKA_ACC_GPU_HIP_ENABLED
-    // CPU queue synchronization must surface exceptions from asynchronously executed tasks.
-    auto executionFailure = scope.spawn(
-        caravan::alpaka::submit(
-            queue,
-            [](Queue& nativeQueue)
-            { alpaka::enqueue(nativeQueue, [] { throw std::runtime_error("execution failed"); }); }));
-    expectFailed(executionFailure);
-#endif
-
     // No external owner: retained allocations are reclaimed only after terminal synchronization, off backend
     // callbacks.
     scope.spawn(caravan::alpaka::fill(queue, alpaka::allocBuf<int, Idx>(device, one), 0u)).wait();
-
-    caravan::RunLoop stoppedLoop;
-    auto stoppedScheduler = stoppedLoop.scheduler();
-    stoppedLoop.finish();
-    auto failedTransfer = scope.spawn(
-        caravan::alpaka::fill(queue, alpaka::allocBuf<int, Idx>(device, one), 0u)
-        | caravan::continuesOn(stoppedScheduler));
-    expectFailed(failedTransfer);
 
     scope.join().wait();
     assert(callbacks == 8u);

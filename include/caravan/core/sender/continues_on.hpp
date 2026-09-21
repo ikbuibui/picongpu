@@ -4,7 +4,6 @@
  */
 #pragma once
 
-#include <exception>
 #include <optional>
 #include <tuple>
 #include <type_traits>
@@ -27,11 +26,6 @@ namespace caravan
                     owner->transferValue(std::forward<T>(values)...);
                 }
 
-                void set_error(std::exception_ptr error) noexcept
-                {
-                    owner->transferError(std::move(error));
-                }
-
                 decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
                     requires requires(T_Receiver const& receiver) { receiver.get_env(); }
                 {
@@ -46,11 +40,6 @@ namespace caravan
                 void set_value() noexcept
                 {
                     owner->complete();
-                }
-
-                void set_error(std::exception_ptr error) noexcept
-                {
-                    owner->m_receiver.set_error(std::move(error));
                 }
 
                 decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
@@ -84,37 +73,19 @@ namespace caravan
             template<typename... T>
             void transferValue(T&&... values) noexcept
             {
-                try
-                {
-                    m_values.emplace(std::forward<T>(values)...);
-                }
-                catch(...)
-                {
-                    transferError(std::current_exception());
-                    return;
-                }
-                m_scheduled.start();
-            }
-
-            void transferError(std::exception_ptr error) noexcept
-            {
-                m_error = std::move(error);
+                m_values.emplace(std::forward<T>(values)...);
                 m_scheduled.start();
             }
 
             void complete() noexcept
             {
-                if(m_values)
-                    std::apply(
-                        [this](auto&&... values) { m_receiver.set_value(std::forward<decltype(values)>(values)...); },
-                        std::move(*m_values));
-                else
-                    m_receiver.set_error(std::move(m_error));
+                std::apply(
+                    [this](auto&&... values) { m_receiver.set_value(std::forward<decltype(values)>(values)...); },
+                    std::move(*m_values));
             }
 
             T_Receiver m_receiver;
             std::optional<StoredValueTuple<T_Sender>> m_values;
-            std::exception_ptr m_error;
             decltype(std::declval<T_Scheduler&>().schedule().connect(std::declval<ScheduleReceiver>())) m_scheduled;
             decltype(std::declval<T_Sender&&>().connect(std::declval<TransferReceiver>())) m_upstream;
         };
@@ -146,11 +117,7 @@ namespace caravan
         T_Scheduler m_scheduler;
     };
 
-    /** Transfer every upstream completion channel onto an explicit scheduler.
-     *
-     * Values remain owned by the connected operation until delivery. If scheduling
-     * fails or stops, that completion replaces the stored upstream completion.
-     */
+    /** Transfer upstream values onto an explicit scheduler. */
     template<Sender T_Sender, typename T_Scheduler>
     auto continuesOn(T_Sender sender, T_Scheduler scheduler)
     {

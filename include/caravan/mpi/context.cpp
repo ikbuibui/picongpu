@@ -58,6 +58,12 @@ namespace caravan
         return m_topology;
     }
 
+    bool MpiContext::accepting() const noexcept
+    {
+        std::lock_guard lock(m_queueMutex);
+        return m_accepting;
+    }
+
     void MpiContext::submitNative(detail::NativeSubmission submission)
     {
         submit(std::move(submission), [this](detail::NativeSubmission output) { startNative(std::move(output)); });
@@ -170,32 +176,12 @@ namespace caravan
     }
 
     bool MpiContext::NativeGroup::retire(
-        NativeMpiContext& context,
-        std::size_t index,
-        MPI_Status const& status,
-        std::exception_ptr error)
+        NativeMpiContext& context, std::size_t index, MPI_Status const& status)
     {
-        if(terminal)
-            return false;
         statuses[index] = status;
-        if(error && !failure)
-            failure = std::move(error);
         if(--remaining != 0u)
             return false;
-        terminal = true;
-        if(failure)
-            failed(std::move(failure));
-        else
-        {
-            try
-            {
-                completed(context, statuses);
-            }
-            catch(...)
-            {
-                failed(std::current_exception());
-            }
-        }
+        completed(context, statuses);
         return true;
     }
 
@@ -255,53 +241,19 @@ namespace caravan
     void MpiContext::submit(T_Output output, T_Start&& start)
     {
         if(detail::nativeCallbackDepth != 0u)
+            std::terminate();
+        std::function<void()> command
+            = [this, output = std::move(output), start = std::forward<T_Start>(start)]() mutable
         {
-            output.failed(std::make_exception_ptr(std::logic_error("Recursive native MPI submission is not allowed")));
-            return;
-        }
-        auto fail = output.failed;
-        std::function<void()> command;
-        try
-        {
-            command = [this, output = std::move(output), start = std::forward<T_Start>(start)]() mutable
-            {
-                try
-                {
-                    std::invoke(start, output);
-                }
-                catch(...)
-                {
-                    output.failed(std::current_exception());
-                    finishOperation();
-                }
-            };
-        }
-        catch(...)
-        {
-            fail(std::current_exception());
-            return;
-        }
+            std::invoke(start, output);
+        };
 
-        bool accepted = false;
-        try
         {
             std::lock_guard lock(m_queueMutex);
-            if(m_accepting)
-            {
-                m_queue.emplace_back(std::move(command));
-                ++m_outstanding;
-                accepted = true;
-            }
-        }
-        catch(...)
-        {
-            fail(std::current_exception());
-            return;
-        }
-        if(!accepted)
-        {
-            fail(std::make_exception_ptr(std::runtime_error("MPI context is shutting down")));
-            return;
+            if(!m_accepting)
+                std::terminate();
+            m_queue.emplace_back(std::move(command));
+            ++m_outstanding;
         }
         m_queueReady.notify_one();
     }
@@ -426,10 +378,7 @@ namespace caravan
                     values.capacity() + std::min(values.capacity(), values.max_size() - values.capacity())));
     }
 
-    void MpiContext::trackNative(
-        detail::NativeSubmission const& output,
-        NativeRequestBatch& batch,
-        std::exception_ptr failure)
+    void MpiContext::trackNative(detail::NativeSubmission const& output, NativeRequestBatch& batch)
     {
         auto context = nativeContext();
         auto const activeRequests = static_cast<std::size_t>(std::count_if(
@@ -440,10 +389,7 @@ namespace caravan
         if(batch.requests.empty())
         {
             detail::NativeAccess::release(batch);
-            if(failure)
-                output.failed(std::move(failure));
-            else
-                output.completed(context, {});
+            output.completed(context, {});
             finishOperation();
             return;
         }
@@ -454,11 +400,9 @@ namespace caravan
         std::vector<MPI_Status> statuses(batch.requests.size());
         auto group = std::make_shared<NativeGroup>(
             output.completed,
-            output.failed,
             std::move(statuses),
             std::vector<std::shared_ptr<void>>{},
-            batch.requests.size(),
-            std::move(failure));
+            batch.requests.size());
         group->lifetimes.swap(batch.lifetimes);
         for(std::size_t index = 0u; index < batch.requests.size(); ++index)
         {
@@ -483,48 +427,17 @@ namespace caravan
     void MpiContext::startNative(detail::NativeSubmission output)
     {
         assertOwner();
-        NativeRequestBatch recovered;
-        detail::NativeRequestRecoveryGuard recoveryGuard{recovered};
-        try
-        {
-            auto context = nativeContext();
-            auto batch = output.start(context);
-            output.start = {};
-            trackNative(output, batch);
-        }
-        catch(...)
-        {
-            auto failure = std::current_exception();
-            output.start = {};
-            if(recovered.requests.empty())
-            {
-                output.failed(std::move(failure));
-                finishOperation();
-                return;
-            }
-            try
-            {
-                trackNative(output, recovered, std::move(failure));
-            }
-            catch(...)
-            {
-                abortMpi();
-            }
-        }
+        auto context = nativeContext();
+        auto batch = output.start(context);
+        output.start = {};
+        trackNative(output, batch);
     }
 
     void MpiContext::invoke(detail::NativeInvocation output)
     {
         assertOwner();
-        try
-        {
-            auto context = nativeContext();
-            output.invoke(context);
-        }
-        catch(...)
-        {
-            output.failed(std::current_exception());
-        }
+        auto context = nativeContext();
+        output.invoke(context);
         finishOperation();
     }
 
@@ -541,10 +454,10 @@ namespace caravan
         }
     }
 
-    void MpiContext::retireActive(NativeCompletion& active, MPI_Status const& status, std::exception_ptr failure)
+    void MpiContext::retireActive(NativeCompletion& active, MPI_Status const& status)
     {
         auto context = nativeContext();
-        if(active.group->retire(context, active.index, status, std::move(failure)))
+        if(active.group->retire(context, active.index, status))
             finishOperation();
     }
 
@@ -575,11 +488,9 @@ namespace caravan
             auto const requestError = error == MPI_ERR_IN_STATUS ? m_statuses[position].MPI_ERROR : MPI_SUCCESS;
             if(requestError == MPI_ERR_PENDING || m_requests[index] != MPI_REQUEST_NULL)
                 continue;
-            retireActive(
-                m_active[index],
-                m_statuses[position],
-                requestError == MPI_SUCCESS ? std::exception_ptr{}
-                                            : std::make_exception_ptr(mpiError("MPI request", requestError)));
+            if(requestError != MPI_SUCCESS)
+                abortMpi(requestError);
+            retireActive(m_active[index], m_statuses[position]);
         }
 
         std::size_t output = 0u;

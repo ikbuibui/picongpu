@@ -191,7 +191,7 @@ int main()
         scope.join().wait();
     }
 
-    // Errors and retained storage stay isolated until earlier work on a shared queue is quiescent.
+    // Shared-queue operations retain their own storage until queued work is quiescent.
     {
         caravan::alpaka::SharedQueuePool<Queue> pool{device, 1u};
         caravan::AsyncScope scope;
@@ -200,7 +200,7 @@ int main()
         auto started = entered.get_future();
         auto storage = std::make_shared<int>(42);
         std::weak_ptr<int> retained = storage;
-        auto bad = scope.spawn(
+        auto first = scope.spawn(
             caravan::alpaka::withDevice(
                 pool,
                 caravan::alpaka::enqueue(
@@ -209,26 +209,19 @@ int main()
                         entered.set_value();
                         gate.wait();
                         assert(*storage == 42);
-                        throw std::runtime_error("bad graph");
                     })));
         started.get();
-        bool goodRan = false;
-        auto good = scope.spawn(caravan::alpaka::withDevice(pool, caravan::alpaka::enqueue([&] { goodRan = true; })));
-        assert(!retained.expired() && !goodRan);
-        assert(bad.state() == caravan::CompletionState::pending);
-        assert(good.state() == caravan::CompletionState::pending);
+        std::atomic<bool> secondRan = false;
+        auto second = scope.spawn(
+            caravan::alpaka::withDevice(pool, caravan::alpaka::enqueue([&] { secondRan = true; })));
+        assert(!retained.expired() && !secondRan);
+        assert(first.state() == caravan::CompletionState::pending);
+        assert(second.state() == caravan::CompletionState::pending);
         release.set_value();
-        try
-        {
-            bad.wait();
-            assert(false);
-        }
-        catch(std::runtime_error const&)
-        {
-        }
-        good.wait();
+        first.wait();
+        second.wait();
         scope.join().wait();
-        assert(goodRan && retained.expired());
+        assert(secondRan && retained.expired());
     }
 
     // Independently bound pool strategies compose without exposing their queues.

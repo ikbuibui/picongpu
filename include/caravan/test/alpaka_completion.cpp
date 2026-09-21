@@ -24,19 +24,6 @@ namespace
     thread_local unsigned allocationFailures = 0u;
     std::weak_ptr<int> fatalOwner;
     std::atomic<bool> fatalTaskFinished = false;
-
-    void expectFailed(caravan::Event const& event)
-    {
-        try
-        {
-            event.wait();
-            assert(false);
-        }
-        catch(std::exception const&)
-        {
-        }
-        assert(event.state() == caravan::CompletionState::failed);
-    }
 } // namespace
 
 // Inject only on the submitting thread, after a native task has borrowed retained storage.
@@ -137,13 +124,6 @@ int main(int argc, char** argv)
                     | caravan::then([&] { assert(stage == 2); })
                     | caravan::sequence(caravan::alpaka::enqueue([&] { stage = 3; }))));
         assert(stage == 3);
-
-        auto failed = scope.spawn(
-            caravan::alpaka::withDevice(
-                pool,
-                caravan::alpaka::enqueue([] { throw std::runtime_error("execution failure"); })));
-        expectFailed(failed);
-        caravan::syncWait(caravan::alpaka::withDevice(pool, caravan::alpaka::enqueue([] {})));
 
         std::promise<void> release, started;
         auto gate = release.get_future().share();
@@ -260,7 +240,6 @@ int main(int argc, char** argv)
     }
 
     // A mixed join falls back to host completion, waiting for both native work and the event.
-    for(bool fail : {false, true})
     {
         caravan::EventSource release;
         std::promise<void> nativeRelease;
@@ -272,17 +251,11 @@ int main(int argc, char** argv)
                 caravan::asSender(release.event()))
             | caravan::sequence(caravan::alpaka::submit(secondQueue, [&](Queue&) { submitted = true; })));
         assert(!submitted);
-        if(fail)
-            release.setFailed(std::make_exception_ptr(std::runtime_error("mixed join")));
-        else
-            release.setReady();
+        release.setReady();
         assert(!submitted && done.state() == caravan::CompletionState::pending);
         nativeRelease.set_value();
-        if(fail)
-            expectFailed(done);
-        else
-            done.wait();
-        assert(submitted == !fail);
+        done.wait();
+        assert(submitted);
     }
 
     // Neither an ordinary host callback nor explicit placement can be fused away.
@@ -314,56 +287,6 @@ int main(int argc, char** argv)
         assert(submitted);
     }
 
-    // Failed submission skips descendants, starts independent branches, and retains partially submitted work.
-    {
-        std::promise<void> release;
-        auto gate = release.get_future().share();
-        auto owner = std::make_shared<int>(42);
-        std::weak_ptr<int> observer = owner;
-        bool siblingSubmitted = false, descendantSubmitted = false, joinSubmitted = false;
-        caravan::AsyncScope failureScope;
-        auto failed = failureScope.spawn(
-            caravan::whenAll(
-                caravan::alpaka::submit(
-                    queue,
-                    [owner = std::move(owner), gate](Queue& q)
-                    {
-                        alpaka::enqueue(
-                            q,
-                            [raw = owner.get(), gate]
-                            {
-                                gate.wait();
-                                assert(*raw == 42);
-                            });
-                        throw std::runtime_error("partial branch");
-                    })
-                    | caravan::alpaka::sequence(
-                        caravan::alpaka::submit(queue, [&](Queue&) { descendantSubmitted = true; })),
-                caravan::alpaka::submit(secondQueue, [&](Queue&) { siblingSubmitted = true; }))
-            | caravan::alpaka::sequence(caravan::alpaka::submit(blockerQueue, [&](Queue&) { joinSubmitted = true; })));
-        assert(siblingSubmitted && !descendantSubmitted && !joinSubmitted);
-        assert(failed.state() == caravan::CompletionState::pending);
-        assert(!observer.expired());
-        release.set_value();
-        expectFailed(failed);
-        failureScope.join().wait();
-        assert(observer.expired());
-    }
-
-    // Asynchronous branch errors are reported at quiescence, not used to retract an already submitted join.
-    {
-        bool joinSubmitted = false;
-        auto failed = scope.spawn(
-            caravan::whenAll(
-                caravan::alpaka::submit(
-                    queue,
-                    [](Queue& q) { alpaka::enqueue(q, [] { throw std::runtime_error("branch execution"); }); }),
-                caravan::alpaka::submit(secondQueue, [](Queue&) {}))
-            | caravan::alpaka::sequence(caravan::alpaka::submit(blockerQueue, [&](Queue&) { joinSubmitted = true; })));
-        assert(joinSubmitted);
-        expectFailed(failed);
-    }
-
     // A pending queue must not hold up a ready queue whose continuation releases it.
     {
         std::promise<void> release;
@@ -377,24 +300,24 @@ int main(int argc, char** argv)
         pending.wait();
     }
 
-    // A late observer must not include a subsequent operation's error in an earlier operation's fence.
+    // A late observer does not wait for a later operation on the same queue.
     {
-        std::promise<void> release;
+        std::promise<void> release, entered;
         auto gate = release.get_future().share();
-        auto blocker = scope.spawn(
-            caravan::alpaka::submit(
-                blockerQueue,
-                [gate](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [gate] { gate.wait(); }); }));
-        auto good = scope.spawn(caravan::alpaka::submit(queue, [](Queue&) {}));
-        auto bad = scope.spawn(
+        auto started = entered.get_future();
+        auto earlier = scope.spawn(caravan::alpaka::submit(queue, [](Queue&) {}));
+        auto later = scope.spawn(
             caravan::alpaka::submit(
                 queue,
-                [](Queue& nativeQueue)
-                { alpaka::enqueue(nativeQueue, [] { throw std::runtime_error("later operation"); }); }));
+                [&](Queue& nativeQueue)
+                {
+                    alpaka::enqueue(nativeQueue, [&, gate] { entered.set_value(); gate.wait(); });
+                }));
+        started.get();
+        earlier.wait();
+        assert(later.state() == caravan::CompletionState::pending);
         release.set_value();
-        good.wait();
-        expectFailed(bad);
-        blocker.wait();
+        later.wait();
     }
 
     // Work appended after a sender may depend on that sender's completion without moving its fence.
@@ -413,30 +336,6 @@ int main(int argc, char** argv)
         alpaka::wait(queue);
     }
 
-    // Cross-queue error snapshots survive dependency waits, including a return to an earlier queue.
-    auto crossQueueFailure = scope.spawn(
-        caravan::alpaka::sequence(
-            caravan::alpaka::sequence(
-                caravan::alpaka::submit(
-                    queue,
-                    [](Queue& nativeQueue)
-                    { alpaka::enqueue(nativeQueue, [] { throw std::runtime_error("first queue"); }); }),
-                caravan::alpaka::submit(secondQueue, [](Queue&) {})),
-            caravan::alpaka::submit(queue, [](Queue&) {})));
-    expectFailed(crossQueueFailure);
-    scope.spawn(caravan::alpaka::submit(queue, [](Queue&) {})).wait();
-
-    // Cleanup fences the active same-queue run even when its final stages were never submitted.
-    bool skippedStageRan = false;
-    auto partialFailure = scope.spawn(
-        caravan::alpaka::sequence(
-            caravan::alpaka::submit(queue, [](Queue&) {}),
-            caravan::alpaka::sequence(
-                caravan::alpaka::submit(secondQueue, [](Queue&) { throw std::runtime_error("partial chain"); }),
-                caravan::alpaka::submit(secondQueue, [&](Queue&) { skippedStageRan = true; }))));
-    expectFailed(partialFailure);
-    assert(!skippedStageRan);
-
     // Blocking CPU queues exercise the native-event fence implementation too.
     alpaka::QueueCpuBlocking blockingQueue{device};
     alpaka::QueueCpuBlocking secondBlockingQueue{device};
@@ -448,41 +347,25 @@ int main(int argc, char** argv)
         .wait();
 
     // Receiver delivery uses the same blocking guards as the other Caravan progress authorities.
-    auto nestedWait = scope.spawn(
-        caravan::alpaka::submit(queue, [](Queue&) {})
-        | caravan::then(
-            [&]
-            {
-                assert(caravan::isExecutorThread());
-                caravan::syncWait(caravan::alpaka::submit(secondQueue, [](Queue&) {}));
-            }));
-    expectFailed(nestedWait);
-
-    // Failure to allocate the first fence must retain captures until a recovery fence proves completion.
-    std::promise<void> release;
-    auto gate = release.get_future().share();
-    auto storage = std::make_shared<int>(42);
-    std::weak_ptr<int> observer = storage;
-    auto failedFence = scope.spawn(
-        caravan::alpaka::submit(
-            queue,
-            [storage = std::move(storage), gate](Queue& nativeQueue)
-            {
-                alpaka::enqueue(
-                    nativeQueue,
-                    [raw = storage.get(), gate]
+    bool nestedWaitRejected = false;
+    scope
+        .spawn(
+            caravan::alpaka::submit(queue, [](Queue&) {})
+            | caravan::then(
+                [&]
+                {
+                    assert(caravan::isExecutorThread());
+                    try
                     {
-                        gate.wait();
-                        assert(*raw == 42);
-                    });
-                allocationFailures = 1u;
-            }));
-    scope.spawn(caravan::alpaka::submit(secondQueue, [](Queue&) {})).wait();
-    assert(failedFence.state() == caravan::CompletionState::pending);
-    assert(!observer.expired());
-    release.set_value();
-    expectFailed(failedFence);
+                        caravan::syncWait(caravan::alpaka::submit(secondQueue, [](Queue&) {}));
+                    }
+                    catch(std::logic_error const&)
+                    {
+                        nestedWaitRejected = true;
+                    }
+                }))
+        .wait();
+    assert(nestedWaitRejected);
 
     scope.join().wait();
-    assert(observer.expired());
 }

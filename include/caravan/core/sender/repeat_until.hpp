@@ -5,7 +5,6 @@
 #pragma once
 
 #include <atomic>
-#include <exception>
 #include <functional>
 #include <optional>
 #include <type_traits>
@@ -24,12 +23,7 @@ namespace caravan
             {
                 void set_value(bool done) noexcept
                 {
-                    owner->complete(done, {});
-                }
-
-                void set_error(std::exception_ptr error) noexcept
-                {
-                    owner->complete(false, std::move(error));
+                    owner->complete(done);
                 }
 
                 decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
@@ -68,10 +62,9 @@ namespace caravan
             }
 
         private:
-            void complete(bool done, std::exception_ptr error) noexcept
+            void complete(bool done) noexcept
             {
                 m_done = done;
-                m_error = std::move(error);
                 // If start() is still on the stack, its caller drives the next iteration.
                 // Otherwise this completion owns the driver. Do not access members after handing it off.
                 if(m_state.exchange(State::completed, std::memory_order_acq_rel) == State::waiting)
@@ -84,26 +77,13 @@ namespace caravan
                 {
                     // Completion permits destruction of the child, but never before its start() returns.
                     m_iteration.reset();
-                    if(m_error)
-                    {
-                        m_receiver.set_error(std::move(m_error));
-                        return;
-                    }
                     if(m_done)
                     {
                         m_receiver.set_value();
                         return;
                     }
                     m_state.store(State::starting, std::memory_order_relaxed);
-                    try
-                    {
-                        m_iteration.emplace(std::invoke(m_factory), m_iterationReceiver);
-                    }
-                    catch(...)
-                    {
-                        m_receiver.set_error(std::current_exception());
-                        return;
-                    }
+                    m_iteration.emplace(std::invoke(m_factory), m_iterationReceiver);
                     m_iteration->start();
                     // Inline (or racing) completion is drained iteratively, not recursively.
                     // Once waiting is published, completion may also destroy this operation.
@@ -117,7 +97,6 @@ namespace caravan
             Receiver m_iterationReceiver{this};
             std::atomic<State> m_state{State::starting};
             bool m_done = false;
-            std::exception_ptr m_error;
             std::optional<Iteration> m_iteration;
         };
     } // namespace detail
@@ -152,8 +131,8 @@ namespace caravan
 
     /** Lazily invoke a factory at least once, repeating until its sender completes with true.
      *
-     * Each iteration gets a fresh sender and forwards the receiver environment. Errors from the factory,
-     * connection, or child terminate the loop. The loop retains only one child operation and uses constant
+     * Each iteration gets a fresh sender and forwards the receiver environment. The loop retains
+     * only one child operation and uses constant
      * stack space for inline completion. The factory is owned by the operation, so its captures may hold
      * state borrowed by iteration senders. Like then/letValue, no scheduler hop is introduced.
      */

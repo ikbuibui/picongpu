@@ -4,7 +4,6 @@
  */
 #include <cassert>
 #include <memory>
-#include <stdexcept>
 #include <thread>
 
 #include <caravan/core.hpp>
@@ -16,11 +15,6 @@ namespace
         void set_value() noexcept
         {
             *completed = true;
-        }
-
-        void set_error(std::exception_ptr) noexcept
-        {
-            assert(false);
         }
 
         int get_env() const noexcept
@@ -128,33 +122,6 @@ namespace
         }
     }
 
-    void testFailureDrainsIndependentWork()
-    {
-        caravan::EventSource failedReady, independentReady;
-        unsigned skippedStarts = 0u, transitiveSkippedStarts = 0u;
-        auto failed = caravan::node<"failed">(caravan::asSender(failedReady.event()));
-        auto independent = caravan::node<"independent">(caravan::asSender(independentReady.event()));
-        auto skipped = caravan::node<"skipped">(ImmediateSender{&skippedStarts}, caravan::after(failed));
-        auto transitiveSkipped
-            = caravan::node<"transitive-skipped">(ImmediateSender{&transitiveSkippedStarts}, caravan::after(skipped));
-
-        caravan::AsyncScope scope;
-        auto completion = scope.spawn(
-            caravan::graph(
-                std::move(failed),
-                std::move(independent),
-                std::move(skipped),
-                std::move(transitiveSkipped)));
-        auto error = std::make_exception_ptr(std::runtime_error("graph failure"));
-        failedReady.setFailed(error);
-        assert(completion.state() == caravan::CompletionState::pending);
-        assert(skippedStarts == 0u && transitiveSkippedStarts == 0u);
-        independentReady.setReady();
-        assert(completion.state() == caravan::CompletionState::failed);
-        assert(completion.error() == error && skippedStarts == 0u && transitiveSkippedStarts == 0u);
-        scope.join().wait();
-    }
-
     void testEnvironmentForwarding()
     {
         auto first = caravan::node<"first">(EnvironmentSender{});
@@ -193,7 +160,6 @@ int main()
 {
     testArbitraryDag();
     testConcurrentConvergence();
-    testFailureDrainsIndependentWork();
     testEnvironmentForwarding();
     testMoveOnlyNode();
 }

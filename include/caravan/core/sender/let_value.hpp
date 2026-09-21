@@ -4,7 +4,6 @@
  */
 #pragma once
 
-#include <exception>
 #include <functional>
 #include <optional>
 #include <tuple>
@@ -26,11 +25,6 @@ namespace caravan
                 void set_value(T&&... values) noexcept
                 {
                     owner->startSuccessor(std::forward<T>(values)...);
-                }
-
-                void set_error(std::exception_ptr error) noexcept
-                {
-                    owner->m_receiver.set_error(std::move(error));
                 }
 
                 decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
@@ -66,18 +60,11 @@ namespace caravan
             template<typename... T>
             void startSuccessor(T&&... values) noexcept
             {
-                try
-                {
-                    m_values.emplace(std::forward<T>(values)...);
-                    auto successor
-                        = std::apply([this](auto&... stored) { return std::invoke(m_factory, stored...); }, *m_values);
-                    m_successor.emplace(std::move(successor), m_receiver);
-                    m_successor->start();
-                }
-                catch(...)
-                {
-                    m_receiver.set_error(std::current_exception());
-                }
+                m_values.emplace(std::forward<T>(values)...);
+                auto successor
+                    = std::apply([this](auto&... stored) { return std::invoke(m_factory, stored...); }, *m_values);
+                m_successor.emplace(std::move(successor), m_receiver);
+                m_successor->start();
             }
 
             T_Factory m_factory;

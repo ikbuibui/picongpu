@@ -22,7 +22,7 @@ namespace caravan
      * - spawnFuture() does the same while retaining one result value;
      * - runReady() executes a snapshot of queued control work without waiting;
      * - wait() pumps control work until its Event completes, then reports the
-     *   ready or failed outcome; and
+     *   ready outcome; and
      * - destruction closes and joins the scope while pumping the loop, then
      *   finishes the loop, so destruction may block.
      *
@@ -83,9 +83,8 @@ namespace caravan
             if(isExecutorThread() && event.state() == CompletionState::pending)
                 throw std::logic_error("A Caravan control continuation cannot wait on pending work");
             auto scheduler = m_loop.scheduler();
-            // This all-channel wakeup must survive a throwing progress hook and
-            // also work while m_scope is joining; a stack operation or spawn into
-            // that scope cannot provide both guarantees.
+            // This wakeup also works while m_scope is joining; a stack operation
+            // or spawn into that scope cannot provide that guarantee.
             auto wake = event.continueWith(scheduler, [](Event) {});
             static_cast<void>(wake);
             while(event.state() == CompletionState::pending)

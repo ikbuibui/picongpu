@@ -9,8 +9,6 @@
 #include "pmacc/traits/NumberOfExchanges.hpp"
 #include "pmacc/type/Exchange.hpp"
 
-#include <array>
-#include <exception>
 #include <iostream>
 #include <optional>
 #include <type_traits>
@@ -27,8 +25,7 @@ namespace pmacc::particles
         template<typename T_Particles>
         struct InsertNonEmptySender
         {
-            using completion_signatures = caravan::
-                CompletionSignatures<caravan::ValueSignature<>, caravan::ErrorSignature<std::exception_ptr>>;
+            using completion_signatures = caravan::CompletionSignatures<caravan::ValueSignature<>>;
 
             template<typename T_Receiver>
             class Operation
@@ -56,17 +53,10 @@ namespace pmacc::particles
                         m_receiver.set_value();
                         return;
                     }
-                    try
-                    {
-                        m_insert.emplace(
-                            m_sender.particles.insertParticlesAsync(m_sender.exchange, m_sender.count),
-                            m_receiver);
-                        m_insert->start();
-                    }
-                    catch(...)
-                    {
-                        m_receiver.set_error(std::current_exception());
-                    }
+                    m_insert.emplace(
+                        m_sender.particles.insertParticlesAsync(m_sender.exchange, m_sender.count),
+                        m_receiver);
+                    m_insert->start();
                 }
 
             private:

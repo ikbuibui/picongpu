@@ -158,14 +158,7 @@ namespace caravan
 
             void start() & noexcept
             {
-                try
-                {
-                    m_scheduler.post([this] { m_receiver.set_value(); });
-                }
-                catch(...)
-                {
-                    m_receiver.set_error(std::current_exception());
-                }
+                m_scheduler.post([this] { m_receiver.set_value(); });
             }
 
         private:

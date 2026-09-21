@@ -15,8 +15,8 @@ namespace caravan::alpaka
      * sequence retains logical affinity, while whenAll branches may serialize on the same physical queue.
      * There are no exclusive leases or completion-time admission waits. The cap applies to this pool instance.
      *
-     * Entire graph submissions (including error fences) are serialized to keep CPU queue errors attributable
-     * to their graph. Nonblocking queues can execute different graphs concurrently after submission. Callables
+     * Entire graph submissions are serialized. Nonblocking queues can execute different graphs concurrently
+     * after submission. Backend, submission, and CPU task failures are fatal. Callables
      * must only enqueue work on the supplied queue: no recursive graph starts, external queue submissions, or
      * blocking on other branches. Queue references must not escape for later use. The pool must outlive all its
      * senders and connected operations. Cross-pool native composition is rejected, as for QueuePool.

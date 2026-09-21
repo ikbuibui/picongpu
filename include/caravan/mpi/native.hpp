@@ -30,10 +30,8 @@ namespace caravan
 
     /** Native requests and lifetime tokens transferred to the MPI context.
      *
-     * Build the batch before starting requests. If a native start hook throws
-     * after partial submission, Caravan transfers the batch into normal progress
-     * and delays failure until every request is terminal. Destroying a live batch
-     * anywhere else is a fatal contract violation.
+     * Build the batch before starting requests. Destroying a live batch is a fatal
+     * contract violation; callbacks must not fail after starting requests.
      */
     class NativeRequestBatch
     {
@@ -76,28 +74,6 @@ namespace caravan
         friend struct detail::NativeAccess;
     };
 
-    namespace detail
-    {
-        inline thread_local NativeRequestBatch* nativeRequestRecovery = nullptr;
-
-        class NativeRequestRecoveryGuard
-        {
-        public:
-            explicit NativeRequestRecoveryGuard(NativeRequestBatch& batch) noexcept
-                : m_previous(std::exchange(nativeRequestRecovery, &batch))
-            {
-            }
-
-            ~NativeRequestRecoveryGuard()
-            {
-                nativeRequestRecovery = m_previous;
-            }
-
-        private:
-            NativeRequestBatch* m_previous;
-        };
-    } // namespace detail
-
     inline NativeRequestBatch::~NativeRequestBatch()
     {
         if(!m_ownsRequests)
@@ -108,12 +84,7 @@ namespace caravan
         if(!active)
             return;
 
-        auto* recovery = detail::nativeRequestRecovery;
-        if(recovery == nullptr || recovery == this || !recovery->requests.empty())
-            std::terminate();
-        recovery->requests.swap(requests);
-        recovery->lifetimes.swap(lifetimes);
-        m_ownsRequests = false;
+        std::terminate();
     }
 
     namespace detail
@@ -122,13 +93,11 @@ namespace caravan
         {
             std::function<NativeRequestBatch(NativeMpiContext&)> start;
             std::function<void(NativeMpiContext&, std::span<MPI_Status const>)> completed;
-            std::function<void(std::exception_ptr)> failed;
         };
 
         struct NativeInvocation
         {
             std::function<void(NativeMpiContext&)> invoke;
-            std::function<void(std::exception_ptr)> failed;
         };
 
         inline thread_local std::size_t nativeCallbackDepth = 0u;
@@ -359,9 +328,7 @@ namespace caravan
                     if(std::exchange(m_started, true))
                         std::terminate();
 
-                    try
-                    {
-                        detail::NativeAccess::submit(
+                    detail::NativeAccess::submit(
                             *m_context,
                             detail::NativeSubmission{
                                 [this](NativeMpiContext& context)
@@ -401,13 +368,7 @@ namespace caravan
                                     }
                                     else
                                         m_receiver.set_value(complete());
-                                },
-                                [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); }});
-                    }
-                    catch(...)
-                    {
-                        m_receiver.set_error(std::current_exception());
-                    }
+                                }});
                 }
 
             private:
@@ -521,18 +482,10 @@ namespace caravan
                     if(std::exchange(m_started, true))
                         std::terminate();
 
-                    try
-                    {
-                        detail::NativeAccess::invoke(
+                    detail::NativeAccess::invoke(
                             *m_context,
                             detail::NativeInvocation{
-                                [this](NativeMpiContext& context) { complete(context); },
-                                [this](std::exception_ptr error) { m_receiver.set_error(std::move(error)); }});
-                    }
-                    catch(...)
-                    {
-                        m_receiver.set_error(std::current_exception());
-                    }
+                                [this](NativeMpiContext& context) { complete(context); }});
                 }
 
             private:

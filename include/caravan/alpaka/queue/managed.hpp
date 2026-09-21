@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <exception>
+#include <memory>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -77,11 +77,6 @@ namespace caravan::alpaka
                 receiver.set_value(std::forward<T>(values)...);
             }
 
-            void set_error(std::exception_ptr error) noexcept
-            {
-                receiver.set_error(std::move(error));
-            }
-
             auto get_env() const noexcept
             {
                 return DeviceContextEnvironment<T_Context, T_Receiver>{context, &receiver};
@@ -142,7 +137,7 @@ namespace caravan::alpaka
 
     public:
         static constexpr auto stage_count = stageCount;
-        using completion_signatures = CompletionSignatures<ValueSignature<>, ErrorSignature<std::exception_ptr>>;
+        using completion_signatures = CompletionSignatures<ValueSignature<>>;
 
         ManagedSubmitSender(
             std::tuple<T_Submits...> submits,

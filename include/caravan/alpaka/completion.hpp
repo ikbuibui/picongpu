@@ -9,7 +9,6 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
-#include <exception>
 #include <future>
 #include <mutex>
 #include <optional>
@@ -47,20 +46,12 @@ namespace caravan::alpaka::detail
             ::alpaka::wait(queue, m_event);
         }
 
-        bool poll(std::exception_ptr&) noexcept
+        bool poll() noexcept
         {
             if(!m_recorded || m_complete)
                 return true;
-            try
-            {
-                m_complete = ::alpaka::isComplete(m_event);
-                return m_complete;
-            }
-            catch(...)
-            {
-                // An unsuccessful query is not a lifetime fence, even if it reports a device execution error.
-                std::terminate();
-            }
+            m_complete = ::alpaka::isComplete(m_event);
+            return m_complete;
         }
 
     private:
@@ -93,23 +84,15 @@ namespace caravan::alpaka::detail
             queue.m_spQueueImpl->m_workerThread.submit([future = m_future] { future.wait(); });
         }
 
-        bool poll(std::exception_ptr& error) noexcept
+        bool poll() noexcept
         {
             if(!m_future.valid() || m_complete)
                 return true;
             if(m_future.wait_for(std::chrono::seconds{0}) != std::future_status::ready)
                 return false;
             m_complete = true;
-            try
-            {
-                m_future.get();
-            }
-            catch(...)
-            {
-                // Unlike fence construction/query failure, this exception is delivered by a completed barrier.
-                if(!error)
-                    error = std::current_exception();
-            }
+            // get() terminates through this noexcept boundary if a CPU task failed.
+            m_future.get();
             return true;
         }
 

@@ -52,16 +52,7 @@ namespace caravan::mpi
             void release(std::function<void()> start)
             {
                 auto* context = std::exchange(m_context, nullptr);
-                auto const ticket = m_ticket;
-                try
-                {
-                    caravan::detail::CollectiveAccess::release(*context, ticket, std::move(start));
-                }
-                catch(...)
-                {
-                    caravan::detail::CollectiveAccess::abandon(*context, ticket);
-                    throw;
-                }
+                caravan::detail::CollectiveAccess::release(*context, m_ticket, std::move(start));
             }
 
             template<typename T_Sender>
@@ -84,12 +75,6 @@ namespace caravan::mpi
                 void set_value(T&&... values) noexcept
                 {
                     owner->prepareSuccessor(std::forward<T>(values)...);
-                }
-
-                void set_error(std::exception_ptr error) noexcept
-                {
-                    owner->release([owner = owner, error = std::move(error)]() mutable noexcept
-                                   { owner->m_receiver.set_error(std::move(error)); });
                 }
 
                 decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
@@ -131,36 +116,19 @@ namespace caravan::mpi
             template<typename... T>
             void prepareSuccessor(T&&... values) noexcept
             {
-                try
-                {
-                    m_values.emplace(std::forward<T>(values)...);
-                    auto successor
-                        = std::apply([this](auto&... stored) { return std::invoke(m_factory, stored...); }, *m_values);
-                    if(!m_token.accepts(successor))
-                        throw std::invalid_argument(
-                            "CollectiveLane successor does not match its context and communicator");
-                    m_successor.emplace(std::move(successor), m_receiver);
-                    release([this]() noexcept { m_successor->start(); });
-                }
-                catch(...)
-                {
-                    auto error = std::current_exception();
-                    release([this, error = std::move(error)]() mutable noexcept
-                            { m_receiver.set_error(std::move(error)); });
-                }
+                m_values.emplace(std::forward<T>(values)...);
+                auto successor
+                    = std::apply([this](auto&... stored) { return std::invoke(m_factory, stored...); }, *m_values);
+                if(!m_token.accepts(successor))
+                    std::terminate();
+                m_successor.emplace(std::move(successor), m_receiver);
+                release([this]() noexcept { m_successor->start(); });
             }
 
             template<typename T_Start>
             void release(T_Start start) noexcept
             {
-                try
-                {
-                    m_token.release(std::function<void()>{std::move(start)});
-                }
-                catch(...)
-                {
-                    m_receiver.set_error(std::current_exception());
-                }
+                m_token.release(std::function<void()>{std::move(start)});
             }
 
             ManagedCollectiveToken m_token;
@@ -204,14 +172,12 @@ namespace caravan::mpi
 
     /** Plan local collective initiation order independently of predecessor readiness.
      *
-     * Every rank must reserve and start the same sequence on this communicator, and
-     * each corresponding predecessor must complete with the same value/error decision.
+     * Every rank must reserve and start the same sequence on this communicator.
      * Abandonment must also match across ranks. Violating this distributed
      * contract can mismatch collectives or hang MPI.
      *
      * A value successor must be an immediate Caravan MPI collective on this lane's
-     * context and communicator. Failed predecessors forward their terminal completion
-     * without initiating MPI. MpiContext must outlive all entries.
+     * context and communicator. MpiContext must outlive all entries.
      */
     class CollectiveLane
     {

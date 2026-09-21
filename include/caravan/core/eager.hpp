@@ -8,7 +8,6 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -26,8 +25,7 @@ namespace caravan
     enum class CompletionState : std::uint8_t
     {
         pending,
-        ready,
-        failed
+        ready
     };
 
     class ExecutorThreadGuard
@@ -102,11 +100,6 @@ namespace caravan
                 return m_completion.load(std::memory_order_acquire);
             }
 
-            std::exception_ptr error() const noexcept
-            {
-                return get() == CompletionState::failed ? m_error : std::exception_ptr{};
-            }
-
             void wait() const
             {
                 std::unique_lock lock(m_mutex);
@@ -131,14 +124,14 @@ namespace caravan
                 dispatch(std::move(task));
             }
 
-            bool complete(CompletionState completion, std::exception_ptr error = {})
+            bool complete(CompletionState completion)
             {
-                return complete(completion, std::move(error), [] {});
+                return complete(completion, [] {});
             }
 
         protected:
             template<typename T_Prepare>
-            bool complete(CompletionState completion, std::exception_ptr error, T_Prepare&& prepare)
+            bool complete(CompletionState completion, T_Prepare&& prepare)
             {
                 std::vector<std::unique_ptr<DispatchTask>> continuations;
                 {
@@ -146,7 +139,6 @@ namespace caravan
                     if(m_completion.load(std::memory_order_relaxed) != CompletionState::pending)
                         return false;
                     std::forward<T_Prepare>(prepare)();
-                    m_error = std::move(error);
                     m_completion.store(completion, std::memory_order_release);
                     continuations.swap(m_continuations);
                 }
@@ -160,7 +152,6 @@ namespace caravan
             std::atomic<CompletionState> m_completion{CompletionState::pending};
             mutable std::mutex m_mutex;
             mutable std::condition_variable m_completed;
-            std::exception_ptr m_error;
             std::vector<std::unique_ptr<DispatchTask>> m_continuations;
         };
 
@@ -173,7 +164,6 @@ namespace caravan
             {
                 return State::complete(
                     CompletionState::ready,
-                    {},
                     [this, &value] { m_value.emplace(std::forward<U>(value)); });
             }
 
@@ -238,24 +228,13 @@ namespace caravan
             return state() == CompletionState::ready;
         }
 
-        std::exception_ptr error() const noexcept
-        {
-            return m_state ? m_state->error() : std::exception_ptr{};
-        }
-
         void wait() const
         {
             if(m_state)
                 m_state->wait();
-            reportFailure();
         }
 
-        /** Eager observation for runtime wait/wakeup boundaries.
-         *
-         * Unlike sender then(), this observes failed predecessors too. The subscription
-         * and queued callback own their captures independently of the returned Event,
-         * including when a progress hook throws during wait.
-         */
+        /** Eager observation for runtime wait/wakeup boundaries. */
         template<typename T_Executor, typename T_Continuation>
         Event continueWith(T_Executor executor, T_Continuation&& continuation) const;
 
@@ -270,12 +249,6 @@ namespace caravan
                 m_state->subscribe(std::move(continuation));
             else
                 detail::dispatch(std::make_unique<detail::DispatchTask>(std::move(continuation)));
-        }
-
-        void reportFailure() const
-        {
-            if(state() == CompletionState::failed)
-                std::rethrow_exception(error());
         }
 
         std::shared_ptr<detail::State> m_state;
@@ -305,13 +278,6 @@ namespace caravan
             return m_state->complete(CompletionState::ready);
         }
 
-        bool setFailed(std::exception_ptr error) const
-        {
-            if(!error)
-                error = std::make_exception_ptr(std::runtime_error("Caravan operation failed without an error"));
-            return m_state->complete(CompletionState::failed, std::move(error));
-        }
-
     private:
         std::shared_ptr<detail::State> m_state;
     };
@@ -329,29 +295,15 @@ namespace caravan
         auto predecessor = *this;
         auto work = std::make_shared<std::decay_t<T_Continuation>>(std::forward<T_Continuation>(continuation));
         subscribe(
-            [predecessor, successor, work, executor = std::move(executor)]() mutable
+            [predecessor, successor, work, executor = std::move(executor)]() mutable noexcept
             {
-                auto task = [predecessor, successor, work]
+                auto task = [predecessor, successor, work]() noexcept
                 {
                     ExecutorThreadGuard guard;
-                    try
-                    {
-                        std::invoke(*work, predecessor);
-                        successor.setReady();
-                    }
-                    catch(...)
-                    {
-                        successor.setFailed(std::current_exception());
-                    }
+                    std::invoke(*work, predecessor);
+                    successor.setReady();
                 };
-                try
-                {
-                    executor.post(std::move(task));
-                }
-                catch(...)
-                {
-                    successor.setFailed(std::current_exception());
-                }
+                executor.post(std::move(task));
             });
         return result;
     }
@@ -365,35 +317,14 @@ namespace caravan
             {
             }
 
-            void arrive(Event const& event)
+            void arrive(Event const&)
             {
-                {
-                    std::lock_guard lock(m_resultMutex);
-                    if(event.state() == CompletionState::failed && m_result != CompletionState::failed)
-                    {
-                        m_result = CompletionState::failed;
-                        m_error = event.error();
-                    }
-                }
-
                 if(m_remaining.fetch_sub(1u, std::memory_order_acq_rel) == 1u)
-                {
-                    CompletionState result;
-                    std::exception_ptr error;
-                    {
-                        std::lock_guard lock(m_resultMutex);
-                        result = m_result;
-                        error = m_error;
-                    }
-                    complete(result, std::move(error));
-                }
+                    complete(CompletionState::ready);
             }
 
         private:
             std::atomic<std::size_t> m_remaining;
-            std::mutex m_resultMutex;
-            CompletionState m_result = CompletionState::ready;
-            std::exception_ptr m_error;
         };
     } // namespace detail
 
@@ -485,13 +416,6 @@ namespace caravan
             return m_state->setValue(std::forward<U>(value));
         }
 
-        bool setFailed(std::exception_ptr error) const
-        {
-            if(!error)
-                error = std::make_exception_ptr(std::runtime_error("Caravan operation failed without an error"));
-            return m_state->complete(CompletionState::failed, std::move(error));
-        }
-
     private:
         std::shared_ptr<detail::FutureState<T>> m_state;
     };
@@ -516,30 +440,15 @@ namespace caravan
 
         void start() & noexcept
         {
-            try
-            {
-                m_event.subscribe([this] { complete(); });
-            }
-            catch(...)
-            {
-                m_receiver.set_error(std::current_exception());
-            }
+            m_event.subscribe([this] { complete(); });
         }
 
     private:
         void complete() noexcept
         {
-            switch(m_event.state())
-            {
-            case CompletionState::ready:
-                m_receiver.set_value();
-                break;
-            case CompletionState::failed:
-                m_receiver.set_error(m_event.error());
-                break;
-            case CompletionState::pending:
+            if(m_event.state() != CompletionState::ready)
                 std::terminate();
-            }
+            m_receiver.set_value();
         }
 
         Event m_event;
@@ -593,19 +502,7 @@ namespace caravan
             template<typename U>
             void set_value(U&& value) noexcept
             {
-                try
-                {
-                    output.setValue(std::forward<U>(value));
-                }
-                catch(...)
-                {
-                    output.setFailed(std::current_exception());
-                }
-            }
-
-            void set_error(std::exception_ptr error) noexcept
-            {
-                output.setFailed(std::move(error));
+                output.setValue(std::forward<U>(value));
             }
 
             Promise<T> output;
@@ -616,11 +513,6 @@ namespace caravan
             void set_value() noexcept
             {
                 output.setReady();
-            }
-
-            void set_error(std::exception_ptr error) noexcept
-            {
-                output.setFailed(std::move(error));
             }
 
             EventSource output;

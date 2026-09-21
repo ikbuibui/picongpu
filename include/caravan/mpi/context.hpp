@@ -9,7 +9,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -160,22 +159,18 @@ namespace caravan
 
         TopologySnapshot topology() const;
 
+        /** True while the context accepts new native submissions; false once shutdown has begun. */
+        bool accepting() const noexcept;
+
     private:
         struct NativeGroup
         {
             std::function<void(NativeMpiContext&, std::span<MPI_Status const>)> completed;
-            std::function<void(std::exception_ptr)> failed;
             std::vector<MPI_Status> statuses;
             std::vector<std::shared_ptr<void>> lifetimes;
             std::size_t remaining;
-            std::exception_ptr failure;
-            bool terminal = false;
 
-            bool retire(
-                NativeMpiContext& context,
-                std::size_t index,
-                MPI_Status const& status,
-                std::exception_ptr error = {});
+            bool retire(NativeMpiContext& context, std::size_t index, MPI_Status const& status);
         };
 
         struct NativeCompletion
@@ -242,15 +237,12 @@ namespace caravan
         NativeMpiContext nativeContext();
         template<typename T>
         static void reserveForAppend(std::vector<T>& values, std::size_t additional);
-        void trackNative(
-            detail::NativeSubmission const& output,
-            NativeRequestBatch& batch,
-            std::exception_ptr failure = {});
+        void trackNative(detail::NativeSubmission const& output, NativeRequestBatch& batch);
         [[noreturn]] void abortMpi(int error = MPI_ERR_OTHER) const noexcept;
         void startNative(detail::NativeSubmission output);
         void invoke(detail::NativeInvocation output);
         void releaseCommunicators();
-        void retireActive(NativeCompletion& active, MPI_Status const& status, std::exception_ptr failure = {});
+        void retireActive(NativeCompletion& active, MPI_Status const& status);
         void progressRequests();
         void finishOperation();
 

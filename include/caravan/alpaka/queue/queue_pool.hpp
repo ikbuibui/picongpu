@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <exception>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -199,12 +198,6 @@ namespace caravan::alpaka
                     receiver.set_value(std::forward<T>(values)...);
                 }
 
-                void set_error(std::exception_ptr error) noexcept
-                {
-                    binding->reset();
-                    receiver.set_error(std::move(error));
-                }
-
                 decltype(auto) get_env() const noexcept(noexcept(std::declval<T_Receiver const&>().get_env()))
                     requires requires(T_Receiver const& output) { output.get_env(); }
                 {
@@ -272,7 +265,7 @@ namespace caravan::alpaka
 
     public:
         static constexpr auto stage_count = stageCount;
-        using completion_signatures = CompletionSignatures<ValueSignature<>, ErrorSignature<std::exception_ptr>>;
+        using completion_signatures = CompletionSignatures<ValueSignature<>>;
 
         PoolSubmitSender(
             T_Pool& pool,
