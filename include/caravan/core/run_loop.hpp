@@ -4,12 +4,16 @@
  */
 #pragma once
 
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 #include <caravan/core/eager.hpp>
@@ -18,6 +22,20 @@ namespace caravan
 {
     class RunLoopScheduler;
     class RunLoopScheduleSender;
+
+    /** Bounded active-polling window (microseconds) before the run loop blocks on its task condition variable.
+     *
+     * Zero disables the spin. Set CARAVAN_RUNLOOP_LINGER_US to override the default.
+     */
+    inline std::uint64_t runLoopLingerMicroseconds() noexcept
+    {
+        static std::uint64_t const value = []
+        {
+            auto const* env = std::getenv("CARAVAN_RUNLOOP_LINGER_US");
+            return env == nullptr ? 50u : std::strtoull(env, nullptr, 10);
+        }();
+        return value;
+    }
 
     /** Manually driven single-thread queue for host/control work. */
     class RunLoop
@@ -39,6 +57,28 @@ namespace caravan
             std::function<void()> task;
             {
                 std::unique_lock lock(m_mutex);
+                if(m_tasks.empty() && !m_finished)
+                {
+                    auto const lingerUs = runLoopLingerMicroseconds();
+                    if(lingerUs != 0u)
+                    {
+                        // Bounded active wait: catch a task posted by another thread without a
+                        // condition-variable wakeup. The lock is not held while spinning.
+                        lock.unlock();
+                        auto const deadline
+                            = std::chrono::steady_clock::now() + std::chrono::microseconds{lingerUs};
+                        while(std::chrono::steady_clock::now() < deadline)
+                        {
+                            {
+                                std::lock_guard probe(m_mutex);
+                                if(m_finished || !m_tasks.empty())
+                                    break;
+                            }
+                            std::this_thread::yield();
+                        }
+                        lock.lock();
+                    }
+                }
                 m_ready.wait(lock, [this] { return m_finished || !m_tasks.empty(); });
                 if(m_tasks.empty())
                     return false;

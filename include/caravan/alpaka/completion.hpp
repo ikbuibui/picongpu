@@ -119,12 +119,16 @@ namespace caravan::alpaka::detail
         continuous
     };
 
+    /** Bounded active-polling window (microseconds) before the completion thread blocks idle. */
+    inline std::uint64_t completionLingerMicroseconds() noexcept;
+
     /** Observes terminal fences and delivers receivers without blocking on pending backend work. */
     class CompletionThread
     {
     public:
         explicit CompletionThread(CompletionPollingPolicy pollingPolicy = CompletionPollingPolicy::timed)
             : m_pollingPolicy(pollingPolicy)
+            , m_lingerUs(completionLingerMicroseconds())
             , m_thread([this] { run(); })
         {
         }
@@ -164,9 +168,27 @@ namespace caravan::alpaka::detail
             {
                 {
                     std::unique_lock lock(m_mutex);
+                    if(!pending && m_lingerUs != 0u)
+                    {
+                        // Bounded active polling across an idle gap: catch a post without a condition-variable
+                        // wakeup. The lock is not held while spinning so a concurrent post() can proceed.
+                        lock.unlock();
+                        auto const deadline
+                            = std::chrono::steady_clock::now() + std::chrono::microseconds{m_lingerUs};
+                        while(std::chrono::steady_clock::now() < deadline)
+                        {
+                            {
+                                std::lock_guard probe(m_mutex);
+                                if(m_head || m_stopped)
+                                    break;
+                            }
+                            std::this_thread::yield();
+                        }
+                        lock.lock();
+                    }
                     if(pending && m_pollingPolicy == CompletionPollingPolicy::timed)
                         m_ready.wait_for(lock, std::chrono::microseconds{100}, [this] { return m_head; });
-                    else if(!pending)
+                    else if(!pending && !m_head)
                         m_ready.wait(lock, [this] { return m_stopped || m_head; });
                     if(m_head)
                     {
@@ -178,19 +200,23 @@ namespace caravan::alpaka::detail
                         return;
                 }
 
-                CompletionTask* deferred = nullptr;
-                auto** tail = &deferred;
-                while(pending)
+                if(pending == nullptr)
+                    continue;
                 {
-                    auto* task = pending;
-                    pending = std::exchange(task->next, nullptr);
-                    if(!task->poll())
+                    CompletionTask* deferred = nullptr;
+                    auto** tail = &deferred;
+                    while(pending)
                     {
-                        *tail = task;
-                        tail = &task->next;
+                        auto* task = pending;
+                        pending = std::exchange(task->next, nullptr);
+                        if(!task->poll())
+                        {
+                            *tail = task;
+                            tail = &task->next;
+                        }
                     }
+                    pending = deferred;
                 }
-                pending = deferred;
             }
         }
 
@@ -200,15 +226,27 @@ namespace caravan::alpaka::detail
         CompletionTask* m_tail = nullptr;
         bool m_stopped = false;
         CompletionPollingPolicy m_pollingPolicy;
+        std::uint64_t m_lingerUs;
         std::thread m_thread;
     };
 
-    /** Select the diagnostic low-latency policy before the process first submits alpaka work. */
+    /** Select the completion policy before the process first submits alpaka work.
+     *
+     * Continuous polling is the default because it keeps short-step latency low. Set the environment
+     * variable to "timed" to restore the lower-CPU 100 us polling policy.
+     */
     inline CompletionPollingPolicy completionPollingPolicy() noexcept
     {
         auto const* value = std::getenv("CARAVAN_ALPAKA_COMPLETION_POLLING");
-        return value && std::string_view{value} == "continuous" ? CompletionPollingPolicy::continuous
-                                                                : CompletionPollingPolicy::timed;
+        return value && std::string_view{value} == "timed" ? CompletionPollingPolicy::timed
+                                                           : CompletionPollingPolicy::continuous;
+    }
+
+    /** Bounded active-polling window before the completion thread blocks. 0 disables the spin. */
+    inline std::uint64_t completionLingerMicroseconds() noexcept
+    {
+        auto const* value = std::getenv("CARAVAN_COMPLETION_LINGER_US");
+        return value == nullptr ? 50u : std::strtoull(value, nullptr, 10);
     }
 
     inline CompletionThread& completionThread()
