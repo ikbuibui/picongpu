@@ -72,6 +72,12 @@ namespace picongpu
                         , restoreFromDuplicateField(false)
                         , cellDescription(cellDescription)
                     {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+                        static_assert(
+                            !FieldBackground::InfluenceParticlePusher,
+                            "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support an E/B field background "
+                            "influencing the pusher");
+#endif
                         if(isEnabled && useDuplicateField)
                         {
 #if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)

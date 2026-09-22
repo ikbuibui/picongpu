@@ -53,11 +53,14 @@ namespace picongpu
             using FrameType = typename SpeciesType::FrameType;
 
             /** @return completion of the species push and boundary application */
-            HINLINE caravan::Event operator()(caravan::ControlContext& context, uint32_t const currentStep) const
+            HINLINE caravan::Event operator()(
+                caravan::ControlContext& context,
+                caravan::Event predecessor,
+                uint32_t const currentStep) const
             {
                 DataConnector& dc = Environment<>::get().DataConnector();
                 auto species = dc.get<SpeciesType>(FrameType::getName());
-                auto pushed = species->update(context, currentStep);
+                auto pushed = species->update(context, std::move(predecessor), currentStep);
                 return species->applyBoundary(context, std::move(pushed), currentStep);
             }
         };
@@ -96,12 +99,13 @@ namespace picongpu
                 template<typename... TSpecies, std::size_t... TIndex>
                 HINLINE ParticlePushEvents pushAndCommunicate(
                     caravan::ControlContext& context,
+                    caravan::Event predecessor,
                     uint32_t const currentStep,
                     pmacc::mp_list<TSpecies...>,
                     std::index_sequence<TIndex...>)
                 {
                     std::array<caravan::Event, sizeof...(TSpecies)> pushed{
-                        particles::PushSpecies<TSpecies>{}(context, currentStep)...};
+                        particles::PushSpecies<TSpecies>{}(context, predecessor, currentStep)...};
                     std::array<caravan::Event, sizeof...(TSpecies)> communicated{
                         particles::CommunicateSpecies<TSpecies>{}(context, pushed[TIndex])...};
                     return {
@@ -112,6 +116,7 @@ namespace picongpu
 
             ParticlePushEvents ParticlePush::operator()(
                 caravan::ControlContext& context,
+                caravan::Event predecessor,
                 uint32_t const currentStep) const
             {
                 using VectorSpeciesWithPusher =
@@ -119,6 +124,7 @@ namespace picongpu
                 constexpr auto numSpecies = pmacc::mp_size<VectorSpeciesWithPusher>::value;
                 return detail::pushAndCommunicate(
                     context,
+                    std::move(predecessor),
                     currentStep,
                     VectorSpeciesWithPusher{},
                     std::make_index_sequence<numSpecies>{});

@@ -30,7 +30,6 @@
 
 #include <pmacc/dataManagement/DataConnector.hpp>
 #include <pmacc/dimensions/SuperCellDescription.hpp>
-#include <pmacc/fields/Communication.hpp>
 #include <pmacc/mappings/kernel/ExchangeMapping.hpp>
 #include <pmacc/math/Vector.hpp>
 #include <pmacc/memory/buffers/GridBuffer.hpp>
@@ -132,10 +131,12 @@ namespace picongpu
 
         caravan::Event EMFieldBase::spawnCommunication(caravan::ControlContext& context, caravan::Event previous)
         {
-            /* Use the additive field helper: guard insertion uses += and neighboring
-             * receive directions overlap at edges, so PMacc's ordered tail logic must be retained.
+            /* E/B exchanges are registered with `addExchange(GUARD, ...)`, so the receive buffer
+             * aliases the field guard and the generic buffer communication performs the
+             * overwrite. Do not use the additive field helper here: that path uses a separate
+             * exchange buffer with `AddExchangeToBorder` and is reserved for J/derived fields.
              */
-            return pmacc::fields::spawnCommunication(context, *this, std::move(previous));
+            return buffer->spawnCommunication(context, std::move(previous));
         }
 
         caravan::Event EMFieldBase::syncToDevice(caravan::ControlContext& context, caravan::Event previous)

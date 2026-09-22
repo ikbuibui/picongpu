@@ -117,9 +117,13 @@ namespace picongpu
          * covers the move-and-mark kernel and the following supercell shift.
          *
          * @param context simulation-owned operation scope
+         * @param predecessor completion of prior-step and pre-push dependencies
          * @param currentStep current time iteration
          */
-        [[nodiscard]] caravan::Event update(caravan::ControlContext& context, uint32_t const currentStep);
+        [[nodiscard]] caravan::Event update(
+            caravan::ControlContext& context,
+            caravan::Event predecessor,
+            uint32_t const currentStep);
 
         /** Update the supercell storage for particles in the area according to particle attributes
          *

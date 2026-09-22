@@ -68,4 +68,28 @@ namespace picongpu::fields::incidentField
         !boost::mp11::mp_any_of<EnabledProfiles, detail::IsFromOpenPMDPulse>::value,
         "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support the FromOpenPMDPulse incident-field profile");
 #endif
+
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+    namespace detail
+    {
+        /** Detect the disabled incident-field profile. */
+        template<typename T_Profile>
+        struct IsNoneProfile : std::false_type
+        {
+        };
+
+        template<>
+        struct IsNoneProfile<profiles::None> : std::true_type
+        {
+        };
+    } // namespace detail
+
+    /* Non-None incident-field profiles update fields through discarded lazy kernels
+     * (`updateField`), so the slice rejects them explicitly rather than silently
+     * skipping the incident-field contribution.
+     */
+    static_assert(
+        boost::mp11::mp_all_of<EnabledProfiles, detail::IsNoneProfile>::value,
+        "PICONGPU_MINIMAL_CARAVAN_THERMAL supports only the None incident-field profile");
+#endif
 } // namespace picongpu::fields::incidentField

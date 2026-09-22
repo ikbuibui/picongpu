@@ -504,29 +504,39 @@ namespace picongpu
             auto& device = Environment<>::get().DeviceContext();
             fieldBackground->enable(currentStep);
             IterationStart{}(currentStep);
-            /* The momentum backup must complete before the pusher updates momentum. */
-            asyncContext.wait(
-                asyncContext.spawn(caravan::alpaka::withDevice(device, MomentumBackup{}(currentStep))));
+            /* Pre-push writers: momentum backup (particles) and J reset (field). */
+            auto momentumBackup
+                = asyncContext.spawn(caravan::alpaka::withDevice(device, MomentumBackup{}(currentStep)));
             auto currentReset = CurrentReset{}(asyncContext, caravan::readyEvent(), currentStep);
             Collision{deviceHeap}(*cellDescription, currentStep);
             ParticleIonization{*cellDescription}(currentStep);
             (*atomicPhysics)(*cellDescription, currentStep);
             (*synchrotronRadiation)(currentStep);
-            auto pushEvents = ParticlePush{}(asyncContext, currentStep);
+            /* The push reads the old E/B and the backed-up momentum. Communication starts after
+             * each species' own push completion.
+             */
+            auto pushEvents = ParticlePush{}(asyncContext, std::move(momentumBackup), currentStep);
             fieldBackground->disable(currentStep);
             /* The field pre-update must not overwrite E/B before the push has read them; it can
              * overlap the particle exchange.
              */
             auto fieldsReady = myFieldSolver->update_beforeCurrent(asyncContext, pushEvents.pushed, currentStep);
-            /* Temporary bridge until the synchronous current stages are composed into the step graph
-             * (WP5): the exchange, field pre-update, and J reset must finish before deposition.
-             */
-            asyncContext.wait(
-                caravan::whenAll(std::array{std::move(fieldsReady), pushEvents.communicated, std::move(currentReset)}));
+            /* J background is inactive in minimal mode (rejected elsewhere) and is a host-side no-op. */
             (*currentBackground)(currentStep);
-            CurrentDeposition{}(currentStep);
-            auto currentAdded
-                = (*currentInterpolationAndAdditionToEMF)(asyncContext, caravan::readyEvent(), *myFieldSolver);
+            /* Current deposition reads the communicated frames and writes J, so it must observe
+             * the J reset but not the field pre-update.
+             */
+            auto currentReady = CurrentDeposition{}(
+                asyncContext,
+                caravan::whenAll(std::array{std::move(pushEvents.communicated), std::move(currentReset)}),
+                currentStep);
+            /* Adding J to E writes the pre-updated E/B, so it must follow both deposition and the
+             * field pre-update.
+             */
+            auto currentAdded = (*currentInterpolationAndAdditionToEMF)(
+                asyncContext,
+                caravan::whenAll(std::array{std::move(currentReady), std::move(fieldsReady)}),
+                *myFieldSolver);
             asyncContext.wait(currentAdded);
             asyncContext.wait(myFieldSolver->update_afterCurrent(asyncContext, currentAdded, currentStep));
         }

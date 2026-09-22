@@ -267,10 +267,15 @@ namespace picongpu
             {
                 HINLINE auto operator()(uint32_t const currentStep) const
                 {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+                    static_assert(
+                        !std::is_same_v<T_Functor, T_Functor>,
+                        "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support time-step conditional init "
+                        "functors; use an unconditional functor");
+#else
                     if(T_Comparator{}(currentStep, T_timeStep))
-                        return T_Functor{}(currentStep);
-                    else
-                        return caravan::asSender(caravan::readyEvent());
+                        T_Functor{}(currentStep);
+#endif
                 }
             };
         } // namespace detail

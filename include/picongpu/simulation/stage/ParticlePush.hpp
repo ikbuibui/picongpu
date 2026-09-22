@@ -52,14 +52,18 @@ namespace picongpu
                 /** Push and communicate all particle species with a pusher.
                  *
                  * Each species' communication depends on its own push/boundary completion, so a
-                 * species exchange is not delayed by another species' push.
+                 * species exchange is not delayed by another species' push. All pushes depend on
+                 * @p predecessor, which must cover the prior-step completion and any pre-push
+                 * momentum/particle writers.
                  *
                  * @param context simulation-owned operation scope
+                 * @param predecessor completion of prior-step and pre-push dependencies
                  * @param currentStep current time iteration
                  * @return completion milestones for push and communication
                  */
                 [[nodiscard]] ParticlePushEvents operator()(
                     caravan::ControlContext& context,
+                    caravan::Event predecessor,
                     uint32_t const currentStep) const;
             };
 

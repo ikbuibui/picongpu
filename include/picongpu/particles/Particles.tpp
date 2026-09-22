@@ -269,6 +269,7 @@ namespace picongpu
         template<typename T_Particles>
         caravan::Event operator()(
             caravan::ControlContext& context,
+            caravan::Event predecessor,
             T_Particles&& particles,
             uint32_t const currentStep) const
         {
@@ -282,16 +283,26 @@ namespace picongpu
                  */
                 auto activePusherIdx = T_Pusher::activePusherIdx(currentStep);
                 if(activePusherIdx == 1)
-                    return PushLauncher<typename T_Pusher::FirstPusher>{}(context, particles, currentStep);
+                    return PushLauncher<typename T_Pusher::FirstPusher>{}(
+                        context,
+                        std::move(predecessor),
+                        particles,
+                        currentStep);
                 else if(activePusherIdx == 2)
-                    return PushLauncher<typename T_Pusher::SecondPusher>{}(context, particles, currentStep);
-                return caravan::readyEvent();
+                    return PushLauncher<typename T_Pusher::SecondPusher>{}(
+                        context,
+                        std::move(predecessor),
+                        particles,
+                        currentStep);
+                return predecessor;
             }
             else
             {
                 auto& device = Environment<>::get().DeviceContext();
-                return context.spawn(
-                    caravan::alpaka::withDevice(device, particles.template push<T_Pusher>(currentStep)));
+                return context.spawn(caravan::alpaka::withDevice(
+                    device,
+                    caravan::asSender(std::move(predecessor))
+                        | caravan::sequence(particles.template push<T_Pusher>(currentStep))));
             }
         }
     };
@@ -299,12 +310,13 @@ namespace picongpu
     template<typename T_Name, typename T_Flags, typename T_Attributes>
     caravan::Event Particles<T_Name, T_Flags, T_Attributes>::update(
         caravan::ControlContext& context,
+        caravan::Event predecessor,
         uint32_t const currentStep)
     {
         using PusherAlias = typename pmacc::traits::GetFlagType<FrameType, particlePusher<>>::type;
         using ParticlePush = typename pmacc::traits::Resolve<PusherAlias>::type;
         // Because of composite pushers, we have to defer using the launcher
-        return PushLauncher<ParticlePush>{}(context, *this, currentStep);
+        return PushLauncher<ParticlePush>{}(context, std::move(predecessor), *this, currentStep);
     }
 
     template<typename T_Name, typename T_Flags, typename T_Attributes>
