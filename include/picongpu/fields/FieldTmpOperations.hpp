@@ -32,7 +32,6 @@
 #include <pmacc/dimensions/SuperCellDescription.hpp>
 #include <pmacc/fields/operations/AddExchangeToBorder.hpp>
 #include <pmacc/fields/operations/CopyGuardToExchange.hpp>
-#include <pmacc/fields/tasks/FieldFactory.hpp>
 #include <pmacc/lockstep/lockstep.hpp>
 #include <pmacc/mappings/simulation/GridController.hpp>
 #include <pmacc/math/Vector.hpp>

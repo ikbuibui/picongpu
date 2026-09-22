@@ -103,21 +103,12 @@ namespace picongpu
          */
         caravan::Event spawnCommunication(caravan::ControlContext& context, caravan::Event previous = {});
 
-        /** Reset the host-device buffer for field values
+        /** Start a device-to-host copy of the current density after all writers.
          *
-         * @param currentStep index of time iteration
+         * Host observation or reuse is valid only after the returned event
+         * completes; the field, its buffers, and the device context must outlive it.
          */
-        void reset(uint32_t currentStep) override;
-
-        //! Synchronize device data with host data
-        void syncToDevice() override
-        {
-            ValueType tmp = float3_X(0., 0., 0.);
-            buffer.getDeviceBuffer().setValue(tmp);
-        }
-
-        //! Synchronize host data with device data
-        void synchronize() override;
+        [[nodiscard]] caravan::Event synchronize(caravan::ControlContext& context, caravan::Event previous = {});
 
         //! Get id
         SimulationDataId getUniqueId() override;
@@ -142,20 +133,6 @@ namespace picongpu
          * @param value value to assign all elements to
          */
         void assign(ValueType value);
-
-        /** Bash field in a direction.
-         *
-         * Copy all particles from the guard of a direction to the device exchange buffer
-         *
-         * @param exchangeType exchange type
-         */
-        void bashField(uint32_t exchangeType);
-
-        /** Insert all fields which are in device exchange buffer
-         *
-         * @param exchangeType exchange type
-         */
-        void insertField(uint32_t exchangeType);
 
     private:
         //! Host-device buffer for current density values

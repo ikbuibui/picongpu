@@ -32,8 +32,13 @@ namespace picongpu
      */
     using NativeFileCheckpointFields = MakeSeq_t<FieldE, FieldB>;
 
-    // These fields have to be always part of the list, the no-PML case is handled internally
+    // These fields have to be always part of the list, the no-PML case is handled internally.
+    // Minimal mode excludes the PML implementation and checkpointing, so the list is empty.
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+    using AdditionalFileCheckpointFields = MakeSeq_t<>;
+#else
     using AdditionalFileCheckpointFields = MakeSeq_t<fields::absorber::pml::FieldE, fields::absorber::pml::FieldB>;
+#endif
 
     /* List of particle species for checkpoint/restart */
     using FileCheckpointParticles = VectorAllSpecies;

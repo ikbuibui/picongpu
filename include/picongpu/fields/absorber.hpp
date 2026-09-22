@@ -21,4 +21,8 @@
 
 #include "picongpu/fields/absorber/exponential/Exponential.hpp"
 #include "picongpu/fields/absorber/none/None.hpp"
-#include "picongpu/fields/absorber/pml/Pml.hpp"
+// The PML implementation is not migrated to Caravan. Minimal mode supports only periodic
+// boundaries with the None absorber (see AbsorberPolicy.hpp).
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+#    include "picongpu/fields/absorber/pml/Pml.hpp"
+#endif

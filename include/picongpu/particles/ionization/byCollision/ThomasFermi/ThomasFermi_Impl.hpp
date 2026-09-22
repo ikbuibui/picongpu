@@ -19,6 +19,11 @@
 
 #pragma once
 
+// Thomas-Fermi by-collision ionization is not migrated to Caravan. Minimal mode
+// excludes this implementation; a configured ionizer is rejected at the
+// ParticleIonization stage. The declaration in ThomasFermi.def is retained.
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+
 #include "picongpu/defines.hpp"
 #include "picongpu/fields/FieldTmpOperations.hpp"
 #include "picongpu/fields/YeeCell.hpp"
@@ -334,3 +339,5 @@ namespace picongpu
         } // namespace ionization
     } // namespace particles
 } // namespace picongpu
+
+#endif // !PICONGPU_MINIMAL_CARAVAN_THERMAL

@@ -19,6 +19,8 @@
  */
 
 #include "picongpu/fields/FieldTmp.hpp"
+#include "picongpu/fields/detail/FieldBufferOperations.hpp"
+#include "picongpu/fields/detail/FieldCommunicationOperations.hpp"
 
 #include "picongpu/defines.hpp"
 #include "picongpu/fields/FieldTmp.kernel"
@@ -30,9 +32,7 @@
 
 #include <pmacc/dataManagement/DataConnector.hpp>
 #include <pmacc/dimensions/SuperCellDescription.hpp>
-#include <pmacc/fields/operations/AddExchangeToBorder.hpp>
-#include <pmacc/fields/operations/CopyGuardToExchange.hpp>
-#include <pmacc/fields/tasks/FieldFactory.hpp>
+#include <pmacc/fields/Communication.hpp>
 #include <pmacc/lockstep/lockstep.hpp>
 #include <pmacc/mappings/simulation/GridController.hpp>
 #include <pmacc/math/Vector.hpp>
@@ -41,6 +41,7 @@
 #include <pmacc/traits/GetUniqueTypeId.hpp>
 
 #include <memory>
+#include <array>
 #include <string>
 
 namespace picongpu
@@ -176,49 +177,22 @@ namespace picongpu
         return getUniqueId(m_slotId);
     }
 
-    void FieldTmp::synchronize()
+    caravan::Event FieldTmp::spawnCommunication(caravan::ControlContext& context, caravan::Event previous)
     {
-        fieldTmp->deviceToHost();
+        return fields::detail::scatter(context, *this, std::move(previous), m_scatterEv, m_gatherEv);
     }
 
-    void FieldTmp::syncToDevice()
-    {
-        fieldTmp->hostToDevice();
-    }
-
-    EventTask FieldTmp::asyncCommunication(EventTask serialEvent)
-    {
-        EventTask ret;
-        eventSystem::startTransaction(serialEvent + m_gatherEv + m_scatterEv);
-        FieldFactory::getInstance().createTaskFieldReceiveAndInsert(*this);
-        ret = eventSystem::endTransaction();
-
-        eventSystem::startTransaction(serialEvent + m_gatherEv + m_scatterEv);
-        FieldFactory::getInstance().createTaskFieldSend(*this);
-        ret += eventSystem::endTransaction();
-        m_scatterEv = ret;
-        return ret;
-    }
-
-    EventTask FieldTmp::asyncCommunicationGather(EventTask serialEvent)
+    caravan::Event FieldTmp::spawnCommunicationGather(caravan::ControlContext& context, caravan::Event previous)
     {
         PMACC_VERIFY_MSG(
             fieldTmpSupportGatherCommunication == true,
             "fieldTmpSupportGatherCommunication in memory.param must be set to true");
 
-        if(fieldTmpRecv != nullptr)
-            m_gatherEv = fieldTmpRecv->asyncCommunication(serialEvent + m_scatterEv + m_gatherEv);
-        return m_gatherEv;
-    }
-
-    void FieldTmp::bashField(uint32_t exchangeType)
-    {
-        pmacc::fields::operations::CopyGuardToExchange{}(*fieldTmp, SuperCellSize{}, exchangeType);
-    }
-
-    void FieldTmp::insertField(uint32_t exchangeType)
-    {
-        pmacc::fields::operations::AddExchangeToBorder{}(*fieldTmp, SuperCellSize{}, exchangeType);
+        // Without a gather buffer there is no work, but outstanding communication must
+        // still be preserved rather than dropped.
+        if(!fieldTmpRecv)
+            return caravan::whenAll(std::array{std::move(previous), m_scatterEv, m_gatherEv});
+        return fields::detail::gather(context, *fieldTmpRecv, std::move(previous), m_scatterEv, m_gatherEv);
     }
 
     FieldTmp::DataBoxType FieldTmp::getDeviceDataBox()
@@ -241,10 +215,29 @@ namespace picongpu
         return cellDescription.getGridLayout();
     }
 
-    void FieldTmp::reset(uint32_t)
+    caravan::Event FieldTmp::reset(caravan::ControlContext& context, caravan::Event previous)
     {
-        fieldTmp->getHostBuffer().reset(true);
-        fieldTmp->getDeviceBuffer().reset(false);
+        // Storage operations must wait for all outstanding communication, but they
+        // do not become part of the communication tails: a later scatter or gather
+        // must be given this returned event as its producer.
+        std::array dependencies{std::move(previous), m_scatterEv, m_gatherEv};
+        return fields::detail::reset(
+            context,
+            *fieldTmp,
+            ValueType::create(0.0_X),
+            caravan::whenAll(dependencies));
+    }
+
+    caravan::Event FieldTmp::syncToDevice(caravan::ControlContext& context, caravan::Event previous)
+    {
+        std::array dependencies{std::move(previous), m_scatterEv, m_gatherEv};
+        return fields::detail::upload(context, *fieldTmp, caravan::whenAll(dependencies));
+    }
+
+    caravan::Event FieldTmp::synchronize(caravan::ControlContext& context, caravan::Event previous)
+    {
+        std::array dependencies{std::move(previous), m_scatterEv, m_gatherEv};
+        return fields::detail::download(context, *fieldTmp, caravan::whenAll(dependencies));
     }
 
     std::string FieldTmp::getName()

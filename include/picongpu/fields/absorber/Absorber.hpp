@@ -20,6 +20,7 @@
 #pragma once
 
 #include "picongpu/defines.hpp"
+#include "picongpu/fields/absorber/AbsorberPolicy.hpp"
 #include "picongpu/fields/absorber/Thickness.hpp"
 
 #include <pmacc/traits/GetStringProperties.hpp>
@@ -42,18 +43,13 @@ namespace picongpu
             class Absorber
             {
             public:
-                /** Supported absorber kinds, same for all absorbing boundaries
+                /** Supported absorber kinds, see AbsorberPolicy.hpp for the selection policy
                  *
                  * Exponential - exponential damping absorber.
                  * None - all boundaries are periodic, no absorber.
                  * Pml - perfectly matched layer absorber.
                  */
-                enum class Kind
-                {
-                    Exponential,
-                    None,
-                    Pml
-                };
+                using Kind = AbsorberKind;
 
                 //! Destructor needs to be public due to internal use of std::unique_ptr
                 virtual ~Absorber() = default;

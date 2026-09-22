@@ -28,7 +28,9 @@
 #include "picongpu/fields/FieldJ.hpp"
 #include "picongpu/fields/FieldTmp.hpp"
 #include "picongpu/fields/MaxwellSolver/Solvers.hpp"
-#include "picongpu/fields/absorber/pml/Field.hpp"
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+#    include "picongpu/fields/absorber/pml/Field.hpp"
+#endif
 #include "picongpu/initialization/InitialiserController.hpp"
 #include "picongpu/initialization/ParserGridDistribution.hpp"
 #include "picongpu/particles/ParticlesFunctors.hpp"
@@ -731,6 +733,16 @@ namespace picongpu
          */
         void resetFields(uint32_t const currentStep)
         {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+            static_cast<void>(currentStep);
+            // This is an outer initialization/moving-window boundary. Do not let
+            // the subsequent particle/field initialization observe a lazy clear.
+            DataConnector& dc = Environment<>::get().DataConnector();
+            std::array resets{
+                dc.get<FieldE>(FieldE::getName())->reset(asyncContext),
+                dc.get<FieldB>(FieldB::getName())->reset(asyncContext)};
+            asyncContext.wait(caravan::whenAll(resets));
+#else
             auto resetField = [currentStep](std::string const name)
             {
                 DataConnector& dc = Environment<>::get().DataConnector();
@@ -770,6 +782,7 @@ namespace picongpu
                  fields::absorber::pml::FieldE::getName(),
                  fields::absorber::pml::FieldB::getName()}};
             std::for_each(fieldNames.cbegin(), fieldNames.cend(), resetField);
+#endif
         }
     };
 } /* namespace picongpu */

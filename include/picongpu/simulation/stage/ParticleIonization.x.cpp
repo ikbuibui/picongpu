@@ -25,10 +25,15 @@
 #include "picongpu/defines.hpp"
 #include "picongpu/particles/creation/creation.hpp"
 #include "picongpu/particles/filter/filter.hpp"
-#include "picongpu/particles/ionization/byCollision/ionizers.hpp"
-#include "picongpu/particles/ionization/byField/ionizers.hpp"
+// The ionization implementations depend on unmigrated field/event APIs. Minimal mode
+// excludes them and rejects any configured ionizer in ParticleIonization::operator().
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+#    include "picongpu/particles/ionization/byCollision/ionizers.hpp"
+#    include "picongpu/particles/ionization/byField/ionizers.hpp"
+#endif
 #include "picongpu/particles/traits/GetIonizerList.hpp"
 
+#include <boost/mp11/list.hpp>
 #include <pmacc/meta/ForEach.hpp>
 #include <pmacc/particles/traits/FilterByFlag.hpp>
 
@@ -36,6 +41,7 @@
 
 namespace picongpu
 {
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
     namespace particles
     {
         /** Call an ionization method upon an ion species
@@ -120,6 +126,7 @@ namespace picongpu
             }
         };
     } // namespace particles
+#endif // !PICONGPU_MINIMAL_CARAVAN_THERMAL
 
     namespace simulation
     {
@@ -131,11 +138,20 @@ namespace picongpu
              */
             void ParticleIonization::operator()(uint32_t const step) const
             {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+                using pmacc::particles::traits::FilterByFlag;
+                using SpeciesWithIonizers = typename FilterByFlag<VectorAllSpecies, ionizers<>>::type;
+                static_assert(
+                    pmacc::mp_empty<SpeciesWithIonizers>::value,
+                    "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support configured ionization");
+                static_cast<void>(step);
+#else
                 using pmacc::particles::traits::FilterByFlag;
                 using SpeciesWithIonizers = typename FilterByFlag<VectorAllSpecies, ionizers<>>::type;
                 pmacc::meta::ForEach<SpeciesWithIonizers, particles::CallIonization<boost::mpl::_1>>
                     particleIonization;
                 particleIonization(cellDescription, step);
+#endif
             }
         } // namespace stage
     } // namespace simulation

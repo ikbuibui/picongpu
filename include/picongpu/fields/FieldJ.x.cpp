@@ -20,6 +20,7 @@
 
 
 #include "picongpu/fields/FieldJ.hpp"
+#include "picongpu/fields/detail/FieldBufferOperations.hpp"
 
 #include "picongpu/defines.hpp"
 #include "picongpu/fields/currentInterpolation/CurrentInterpolation.hpp"
@@ -31,8 +32,6 @@
 
 #include <pmacc/Environment.hpp>
 #include <pmacc/fields/Communication.hpp>
-#include <pmacc/fields/operations/AddExchangeToBorder.hpp>
-#include <pmacc/fields/operations/CopyGuardToExchange.hpp>
 #include <pmacc/mappings/kernel/AreaMapping.hpp>
 #include <pmacc/math/Vector.hpp>
 #include <pmacc/particles/memory/boxes/ParticlesBox.hpp>
@@ -161,13 +160,9 @@ namespace picongpu
         return communicated;
     }
 
-    void FieldJ::reset(uint32_t)
+    caravan::Event FieldJ::synchronize(caravan::ControlContext& context, caravan::Event previous)
     {
-    }
-
-    void FieldJ::synchronize()
-    {
-        buffer.deviceToHost();
+        return fields::detail::download(context, buffer, std::move(previous));
     }
 
     SimulationDataId FieldJ::getUniqueId()
@@ -203,18 +198,11 @@ namespace picongpu
 
     void FieldJ::assign(ValueType value)
     {
+        // Migration blocker (deferred with CurrentReset): this must become a
+        // context-owned lazy fill whose completion feeds the J-writer dependencies
+        // in Simulation::runOneStep(). `setValue` is the removed synchronous API;
+        // do not replace it with a hidden wait or a discarded event here.
         buffer.getDeviceBuffer().setValue(value);
-        // fieldJ.reset(false);
-    }
-
-    void FieldJ::bashField(uint32_t exchangeType)
-    {
-        pmacc::fields::operations::CopyGuardToExchange{}(buffer, SuperCellSize{}, exchangeType);
-    }
-
-    void FieldJ::insertField(uint32_t exchangeType)
-    {
-        pmacc::fields::operations::AddExchangeToBorder{}(buffer, SuperCellSize{}, exchangeType);
     }
 
 } // namespace picongpu

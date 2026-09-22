@@ -21,14 +21,18 @@
 #include "picongpu/simulation/stage/Collision.hpp"
 
 #include "picongpu/defines.hpp"
-#include "picongpu/particles/collision/collision.hpp"
-#include "picongpu/particles/collision/fieldSlots.hpp"
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+#    include "picongpu/particles/collision/collision.hpp"
+#    include "picongpu/particles/collision/fieldSlots.hpp"
+#endif
 #include "picongpu/particles/filter/filter.hpp"
 #include "picongpu/particles/param.hpp"
-#include "picongpu/particles/particleToGrid/ComputeFieldValue.hpp"
-#include "picongpu/particles/particleToGrid/FoldDeriveFields.hpp"
-#include "picongpu/particles/particleToGrid/combinedAttributes/CombinedAttributes.def"
-#include "picongpu/particles/particleToGrid/combinedAttributes/CombinedAttributes.hpp"
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+#    include "picongpu/particles/particleToGrid/ComputeFieldValue.hpp"
+#    include "picongpu/particles/particleToGrid/FoldDeriveFields.hpp"
+#    include "picongpu/particles/particleToGrid/combinedAttributes/CombinedAttributes.def"
+#    include "picongpu/particles/particleToGrid/combinedAttributes/CombinedAttributes.hpp"
+#endif
 #include "picongpu/unitless/checkpoints.unitless"
 
 #include <pmacc/Environment.hpp>
@@ -49,6 +53,10 @@ namespace picongpu
     {
         namespace stage
         {
+            // The collider and derived-field machinery depends on unmigrated PMacc
+            // APIs. Minimal mode excludes it and rejects any nonempty collision
+            // configuration in Collision::operator() below.
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
             namespace collision
             {
                 //! For each implementation for calling collisions with a loop index
@@ -109,6 +117,9 @@ namespace picongpu
                 };
             } // namespace collision
 
+            // The derived-field screening machinery depends on the unmigrated
+            // particle-to-grid transaction API; minimal mode rejects any collision
+            // configuration that would need it (see the operator() assertions).
             void debug(uint32_t const currentStep, std::shared_ptr<FieldTmp> const& screeningLengthSquared)
             {
                 // write Debye length averaged over the whole simulation volume to a text file for debugging
@@ -150,9 +161,20 @@ namespace picongpu
                     }
                 }
             }
+#endif
 
             void Collision::operator()(MappingDesc const cellDescription, uint32_t const currentStep) const
             {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+                static_assert(
+                    pmacc::mp_empty<particles::collision::CollisionScreeningSpecies>::value,
+                    "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support collision screening species");
+                static_assert(
+                    pmacc::mp_empty<particles::collision::CollisionPipeline>::value,
+                    "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support collisions");
+                static_cast<void>(cellDescription);
+                static_cast<void>(currentStep);
+#else
                 // Calculate squared Debye length using the formula form [Perez 2012].
                 // A species temperature is assumed to be (2/3)<E_kin>
                 constexpr auto numScreeningSpecies
@@ -208,6 +230,7 @@ namespace picongpu
                 constexpr size_t numColliders = pmacc::mp_size<particles::collision::CollisionPipeline>::value;
                 std::make_index_sequence<numColliders> indexColliders{};
                 collision::CallColliders{}(indexColliders, m_heap, currentStep);
+#endif
             }
 
 

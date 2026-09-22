@@ -1,0 +1,69 @@
+/* Negative-test incident-field configuration for the minimal Caravan target.
+ *
+ * Selects FromOpenPMDPulse<> inside a profile list on the XMin boundary,
+ * exercising the EnabledProfiles rejection for typelist (MakeSeq_t) selection
+ * rather than a single profile.
+ */
+
+#pragma once
+
+#include "picongpu/fields/incidentField/profiles/profiles.def"
+
+namespace picongpu
+{
+    namespace fields
+    {
+        namespace incidentField
+        {
+            class UserFunctorIncidentE
+            {
+            public:
+                PMACC_ALIGN(m_unitField, float3_64 const);
+
+                HDINLINE UserFunctorIncidentE(float_X const currentStep, float3_64 const unitField)
+                    : m_unitField(unitField)
+                {
+                }
+
+                HDINLINE float3_X operator()(floatD_X const& totalCellIdx) const
+                {
+                    auto const fieldSI = float3_X(0.0_X, 0.0_X, 0.0_X);
+                    return fieldSI / precisionCast<float_X>(m_unitField);
+                }
+            };
+
+            class UserFunctorIncidentB
+            {
+            public:
+                PMACC_ALIGN(m_unitField, float3_64 const);
+
+                HDINLINE UserFunctorIncidentB(float_X const currentStep, float3_64 const unitField)
+                    : m_unitField(unitField)
+                {
+                }
+
+                HDINLINE float3_X operator()(floatD_X const& totalCellIdx) const
+                {
+                    auto const fieldSI = float3_X(0.0_X, 0.0_X, 0.0_X);
+                    return fieldSI / precisionCast<float_X>(m_unitField);
+                }
+            };
+
+            using MyProfile = profiles::Free<UserFunctorIncidentE, UserFunctorIncidentB>;
+
+            //! Deliberately unsupported in minimal mode; nested MakeSeq_t must be flattened.
+            using XMin = pmacc::MakeSeq_t<profiles::None, profiles::FromOpenPMDPulse<>>;
+            using XMax = profiles::None;
+            using YMin = profiles::None;
+            using YMax = profiles::None;
+            using ZMin = profiles::None;
+            using ZMax = profiles::None;
+
+            constexpr int32_t POSITION[3][2] = {
+                {16, -16},
+                {16, -16},
+                {16, -16}};
+
+        } // namespace incidentField
+    } // namespace fields
+} // namespace picongpu

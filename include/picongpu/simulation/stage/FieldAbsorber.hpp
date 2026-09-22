@@ -25,6 +25,7 @@
 
 #include <boost/program_options/options_description.hpp>
 
+#include <array>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -48,6 +49,7 @@ namespace picongpu
                  */
                 void registerHelp(po::options_description& desc)
                 {
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
                     desc.add_options()(
                         "fieldAbsorber",
                         po::value<std::string>(&kindName),
@@ -55,6 +57,12 @@ namespace picongpu
                             "Field absorber kind [exponential, pml] default: " + kindName
                             + ".\nWhen changing absorber, adjust parameters in fieldAbsorber.param")
                             .c_str());
+#else
+                    /* Minimal mode is periodic/no-absorber only. Do not advertise an option
+                     * that the policy would ignore or reject.
+                     */
+                    static_cast<void>(desc);
+#endif
                 }
 
                 /** Load the stage during loading of the simulation.
@@ -64,22 +72,30 @@ namespace picongpu
                 void load()
                 {
                     using namespace fields::absorber;
-                    auto kind = Absorber::Kind{};
-                    /* For the all-periodic boundaries case, we override the user's choice and use None.
-                     * This is done for two reasons:
-                     *     - easier compatibility with pre-existing checkpoints with such boundaries;
-                     *     - optimization purposes to not have empty PML fields in checkpoints.
+                    AbsorberKind requested = AbsorberKind::None;
+                    /* For the all-periodic boundaries case the policy overrides the user's choice
+                     * and uses None. This keeps compatibility with pre-existing checkpoints and
+                     * avoids empty PML fields. Keep the ordinary parse behavior unchanged.
                      */
-                    if(areAllBoundariesPeriodic())
-                        kind = Absorber::Kind::None;
-                    else if(kindName == "exponential")
-                        kind = Absorber::Kind::Exponential;
-                    else if(kindName == "pml")
-                        kind = Absorber::Kind::Pml;
-                    else
-                        throw std::runtime_error("Unsupported field absorber type");
+                    if(!areAllBoundariesPeriodic())
+                    {
+                        if(kindName == "exponential")
+                            requested = AbsorberKind::Exponential;
+                        else if(kindName == "pml")
+                            requested = AbsorberKind::Pml;
+                        else
+                            throw std::runtime_error("Unsupported field absorber type");
+                    }
+                    DataSpace<DIM3> const isPeriodicBoundary
+                        = Environment<simDim>::get().GridController().getCommunicator().getPeriodic();
+                    std::array<bool, 3> isPeriodic{};
+                    for(uint32_t axis = 0u; axis < 3u; ++axis)
+                        isPeriodic[axis] = static_cast<bool>(isPeriodicBoundary[axis]);
+                    /* The policy runs here, during stage load and before any absorber instance is
+                     * constructed by the field solver, so an unsupported configuration fails early.
+                     */
                     auto& absorberFactory = AbsorberFactory::get();
-                    absorberFactory.setKind(kind);
+                    absorberFactory.setKind(effectiveAbsorberKind(requested, isPeriodic, simDim));
                 }
 
             private:

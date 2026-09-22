@@ -1,0 +1,50 @@
+/* Negative-test species definition for the minimal Caravan target.
+ *
+ * Same as include-thomasfermi, but the ThomasFermi ionizer is nested inside a
+ * multi-element ionizer list, exercising rejection when it is not the only
+ * configured model.
+ */
+
+#pragma once
+
+
+#include "picongpu/particles/Particles.hpp"
+#include "picongpu/particles/ionization/byCollision/ionizers.def"
+
+#include <pmacc/identifier/value_identifier.hpp>
+#include <pmacc/meta/String.hpp>
+#include <pmacc/meta/conversion/MakeSeq.hpp>
+#include <pmacc/particles/Identifier.hpp>
+#include <pmacc/particles/traits/FilterByFlag.hpp>
+
+namespace picongpu
+{
+    using DefaultParticleAttributes = MakeSeq_t<position<position_pic>, momentum, weighting>;
+
+    value_identifier(float_X, MassRatioElectrons, 1.0);
+    value_identifier(float_X, ChargeRatioElectrons, 1.0);
+
+    //! Synthetic destination type; only selection is tested, not instantiation.
+    struct NegThomasFermiDest
+    {
+    };
+
+    //! A second, unrelated configured ionizer so the ThomasFermi entry is not the sole list element.
+    struct NegOtherIonizer
+    {
+    };
+
+    using ParticleFlagsElectrons = MakeSeq_t<
+        particlePusher<UsedParticlePusher>,
+        shape<UsedParticleShape>,
+        interpolation<UsedField2Particle>,
+        current<UsedParticleCurrentSolver>,
+        massRatio<MassRatioElectrons>,
+        chargeRatio<ChargeRatioElectrons>,
+        ionizers<
+            MakeSeq_t<NegOtherIonizer, particles::ionization::ThomasFermi<NegThomasFermiDest>>>>;
+
+    using PIC_Electrons = Particles<PMACC_CSTRING("e"), ParticleFlagsElectrons, DefaultParticleAttributes>;
+
+    using VectorAllSpecies = MakeSeq_t<PIC_Electrons>;
+} // namespace picongpu

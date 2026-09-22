@@ -28,7 +28,10 @@
 #include "picongpu/fields/MaxwellSolver/FDTD/FDTDBase.kernel"
 #include "picongpu/fields/MaxwellSolver/GetTimeStep.hpp"
 #include "picongpu/fields/absorber.hpp"
-#include "picongpu/fields/absorber/pml/Pml.hpp"
+#include "picongpu/fields/absorber/AbsorberPolicy.hpp"
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+#    include "picongpu/fields/absorber/pml/Pml.hpp"
+#endif
 #include "picongpu/fields/currentInterpolation/CurrentInterpolation.hpp"
 #include "picongpu/fields/incidentField/Solver.hpp"
 #include "picongpu/traits/GetMargin.hpp"
@@ -239,6 +242,15 @@ namespace picongpu
                         auto const mapper = pmacc::makeAreaMapper<T_Area>(cellDescription);
 
                         // The ugly transition from run-time to compile-time polymorphism is contained here
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+                        // Minimal mode supports only the None absorber, so use the vacuum kernel.
+                        static_cast<void>(updatePsiB);
+                        PMACC_LOCKSTEP_KERNEL(Kernel{}).config(mapper.getGridDim(), SuperCellSize{})(
+                            mapper,
+                            fdtd::UpdateBHalfFunctor<CurlE>{},
+                            fieldE->getDeviceDataBox(),
+                            fieldB->getDeviceDataBox());
+#else
                         auto& absorber = absorber::Absorber::get();
                         if(absorber.getKind() == absorber::Absorber::Kind::Pml)
                         {
@@ -259,6 +271,7 @@ namespace picongpu
                                 fieldE->getDeviceDataBox(),
                                 fieldB->getDeviceDataBox());
                         }
+#endif
                     }
 
                     /** Propagate E values in the given area by a timeStep.
@@ -275,6 +288,14 @@ namespace picongpu
                         auto const mapper = pmacc::makeAreaMapper<T_Area>(cellDescription);
 
                         // The ugly transition from run-time to compile-time polymorphism is contained here
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+                        // Minimal mode supports only the None absorber, so use the vacuum kernel.
+                        PMACC_LOCKSTEP_KERNEL(Kernel{}).config(mapper.getGridDim(), SuperCellSize{})(
+                            mapper,
+                            fdtd::UpdateEFunctor<CurlB>{},
+                            fieldB->getDeviceDataBox(),
+                            fieldE->getDeviceDataBox());
+#else
                         auto& absorber = absorber::Absorber::get();
                         if(absorber.getKind() == absorber::Absorber::Kind::Pml)
                         {
@@ -294,6 +315,7 @@ namespace picongpu
                                 fieldB->getDeviceDataBox(),
                                 fieldE->getDeviceDataBox());
                         }
+#endif
                     }
 
                     MappingDesc const cellDescription;

@@ -21,7 +21,9 @@
 
 #include "picongpu/fields/absorber/exponential/Exponential.hpp"
 #include "picongpu/fields/absorber/none/None.hpp"
-#include "picongpu/fields/absorber/pml/Pml.hpp"
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+#    include "picongpu/fields/absorber/pml/Pml.hpp"
+#endif
 #include "picongpu/particles/filter/filter.hpp"
 
 #include <cstdint>
@@ -62,6 +64,7 @@ namespace picongpu
                 return *result;
             }
 
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
             pml::PmlImpl& AbsorberImpl::asPmlImpl()
             {
                 auto* result = dynamic_cast<pml::PmlImpl*>(this);
@@ -69,6 +72,7 @@ namespace picongpu
                     throw std::runtime_error("Invalid conversion of absorber to PmlImpl");
                 return *result;
             }
+#endif
 
             std::unique_ptr<Absorber> AbsorberFactory::make() const
             {
@@ -89,8 +93,10 @@ namespace picongpu
                     return std::make_unique<exponential::ExponentialImpl>(cellDescription);
                 case Absorber::Kind::None:
                     return std::make_unique<none::NoneImpl>(cellDescription);
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
                 case Absorber::Kind::Pml:
                     return std::make_unique<pml::PmlImpl>(cellDescription);
+#endif
                 default:
                     throw std::runtime_error("Unsupported absorber kind requested to be made");
                 }

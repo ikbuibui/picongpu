@@ -30,6 +30,8 @@
 #include <pmacc/memory/boxes/PitchedBox.hpp>
 #include <pmacc/memory/buffers/GridBuffer.hpp>
 
+#include <caravan/core.hpp>
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -85,27 +87,32 @@ namespace picongpu
         //! Get the device data box for the field values
         DataBoxType getDeviceDataBox();
 
-        /** Start asynchronous send of field values
+        /** Start the additive guard-to-border scatter after its producers.
          *
-         * Add data from the local guard of the GPU to the border of the neighboring GPUs.
-         * This method can be called before or after asyncCommunicationGather without
-         * explicit handling to avoid race conditions between both methods.
-         *
-         * @param serialEvent event to depend on
+         * Both previous scatter/gather tails are also predecessors because the
+         * scatter and gather buffers alias device storage. The returned event
+         * retains PMacc's own per-direction tails.
          */
-        virtual EventTask asyncCommunication(EventTask serialEvent);
+        [[nodiscard]] caravan::Event spawnCommunication(caravan::ControlContext& context, caravan::Event previous = {});
 
-        /** Reset the host-device buffer for field values
+        /** Restore full extent and clear device storage after all communication.
          *
-         * @param currentStep index of time iteration
+         * Host contents are preserved; host reads require a later synchronize().
+         * The result includes both previous communication tails. It is not stored
+         * as a communication tail, so any later scatter/gather must take the
+         * returned event as its producer.
          */
-        void reset(uint32_t currentStep) override;
+        [[nodiscard]] caravan::Event reset(caravan::ControlContext& context, caravan::Event previous = {});
 
-        //! Synchronize device data with host data
-        void syncToDevice() override;
+        /** Start a host-to-device copy after all communication; see reset() for chaining. */
+        [[nodiscard]] caravan::Event syncToDevice(caravan::ControlContext& context, caravan::Event previous = {});
 
-        //! Synchronize host data with device data
-        void synchronize() override;
+        /** Start a device-to-host copy after all writers; host reads only afterwards.
+         *
+         * The result includes both previous communication tails and is not stored
+         * as a communication tail.
+         */
+        [[nodiscard]] caravan::Event synchronize(caravan::ControlContext& context, caravan::Event previous = {});
 
         /** Get id
          *
@@ -145,26 +152,13 @@ namespace picongpu
         //! Get text name
         static std::string getName();
 
-        /** Gather data from neighboring GPUs
+        /** Gather overwrite border-to-guard data after its producers.
          *
-         * Copy data from the border of neighboring GPUs into the local guard.
-         * This method can be called before or after asyncCommunication without
-         * explicit handling to avoid race conditions between both methods.
+         * Depends on the supplied producer and both previous communication tails.
          */
-        EventTask asyncCommunicationGather(EventTask serialEvent);
-
-        /** Bash particles in a direction.
-         * Copy all particles from the guard of a direction to the device exchange buffer
-         *
-         * @param exchangeType exchange type
-         */
-        void bashField(uint32_t exchangeType);
-
-        /** Insert all particles which are in device exchange buffer
-         *
-         * @param exchangeType exchange type
-         */
-        void insertField(uint32_t exchangeType);
+        [[nodiscard]] caravan::Event spawnCommunicationGather(
+            caravan::ControlContext& context,
+            caravan::Event previous = {});
 
     private:
         //! Host-device buffer for current density values
@@ -177,8 +171,8 @@ namespace picongpu
         uint32_t m_slotId;
 
         //! Events for communication
-        EventTask m_scatterEv;
-        EventTask m_gatherEv;
+        caravan::Event m_scatterEv;
+        caravan::Event m_gatherEv;
 
         //! Tags for communication
         uint32_t m_commTagScatter;

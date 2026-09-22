@@ -20,61 +20,72 @@
 #include "picongpu/simulation/stage/AtomicPhysics.hpp"
 
 #include "picongpu/defines.hpp"
-#include "picongpu/particles/Manipulate.hpp"
-#include "picongpu/particles/atomicPhysics/AtomicPhysicsSuperCellFields.hpp"
+// Lightweight tags detection only; the implementation headers are included below
+// exclusively outside minimal mode.
 #include "picongpu/particles/atomicPhysics/ParticleType.hpp"
-#include "picongpu/particles/atomicPhysics/SetTemperature.hpp"
-#include "picongpu/particles/atomicPhysics/debug/param.hpp"
-#include "picongpu/particles/atomicPhysics/debug/stage/DumpAllIonsToConsole.hpp"
-#include "picongpu/particles/atomicPhysics/debug/stage/DumpRateCacheToConsole.hpp"
-#include "picongpu/particles/atomicPhysics/debug/stage/DumpSuperCellDataToConsole.hpp"
-#include "picongpu/particles/atomicPhysics/param.hpp"
-#include "picongpu/particles/atomicPhysics/stage/BinElectrons.hpp"
-#include "picongpu/particles/atomicPhysics/stage/CalculateStepLength.hpp"
-#include "picongpu/particles/atomicPhysics/stage/CheckForFieldEnergyOverSubscription.hpp"
-#include "picongpu/particles/atomicPhysics/stage/CheckForOverSubscription.hpp"
-#include "picongpu/particles/atomicPhysics/stage/CheckPresence.hpp"
-#include "picongpu/particles/atomicPhysics/stage/ChooseInstantTransition.hpp"
-#include "picongpu/particles/atomicPhysics/stage/ChooseTransition.hpp"
-#include "picongpu/particles/atomicPhysics/stage/ChooseTransitionGroup.hpp"
-#include "picongpu/particles/atomicPhysics/stage/DecelerateElectrons.hpp"
-#include "picongpu/particles/atomicPhysics/stage/FillRateCache.hpp"
-#include "picongpu/particles/atomicPhysics/stage/FixAtomicState.hpp"
-#include "picongpu/particles/atomicPhysics/stage/LoadAtomicInputData.hpp"
-#include "picongpu/particles/atomicPhysics/stage/RecordChanges.hpp"
-#include "picongpu/particles/atomicPhysics/stage/RecordSuggestedChanges.hpp"
-#include "picongpu/particles/atomicPhysics/stage/RecordSuggestedFieldEnergyUse.hpp"
-#include "picongpu/particles/atomicPhysics/stage/ResetAcceptedStatus.hpp"
-#include "picongpu/particles/atomicPhysics/stage/ResetRateCache.hpp"
-#include "picongpu/particles/atomicPhysics/stage/ResetSharedResources.hpp"
-#include "picongpu/particles/atomicPhysics/stage/ResetTimeStepField.hpp"
-#include "picongpu/particles/atomicPhysics/stage/RollForOverSubscription.hpp"
-#include "picongpu/particles/atomicPhysics/stage/SpawnIonizationElectrons.hpp"
-#include "picongpu/particles/atomicPhysics/stage/UpdateElectricField.hpp"
-#include "picongpu/particles/atomicPhysics/stage/UpdateIonAtomicState.hpp"
-#include "picongpu/particles/atomicPhysics/stage/UpdateTimeRemaining.hpp"
-#include "picongpu/particles/filter/filter.hpp"
 
-#include <pmacc/device/Reduce.hpp>
-#include <pmacc/dimensions/DataSpace.hpp>
-#include <pmacc/math/operation.hpp>
-#include <pmacc/memory/boxes/DataBoxDim1Access.hpp>
+#include <boost/mp11/list.hpp>
 #include <pmacc/meta/ForEach.hpp>
-#include <pmacc/particles/traits/FilterByFlag.hpp>
-#include <pmacc/traits/Resolve.hpp>
 
 #include <cstdint>
 #include <string>
 #include <type_traits>
 
-// debug only
-#include "picongpu/particles/atomicPhysics/debug/TestIonizationPotentialDepression.hpp"
-#include "picongpu/particles/atomicPhysics/debug/TestRateCalculation.hpp"
+// The atomic-physics/IPD implementation is not migrated to Caravan. It is compiled
+// only outside minimal mode; minimal mode provides an explicitly rejecting stub for
+// the public AtomicPhysics interface below.
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+#    include "picongpu/particles/Manipulate.hpp"
+#    include "picongpu/particles/atomicPhysics/AtomicPhysicsSuperCellFields.hpp"
+#    include "picongpu/particles/atomicPhysics/SetTemperature.hpp"
+#    include "picongpu/particles/atomicPhysics/debug/param.hpp"
+#    include "picongpu/particles/atomicPhysics/debug/stage/DumpAllIonsToConsole.hpp"
+#    include "picongpu/particles/atomicPhysics/debug/stage/DumpRateCacheToConsole.hpp"
+#    include "picongpu/particles/atomicPhysics/debug/stage/DumpSuperCellDataToConsole.hpp"
+#    include "picongpu/particles/atomicPhysics/param.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/BinElectrons.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/CalculateStepLength.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/CheckForFieldEnergyOverSubscription.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/CheckForOverSubscription.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/CheckPresence.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/ChooseInstantTransition.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/ChooseTransition.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/ChooseTransitionGroup.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/DecelerateElectrons.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/FillRateCache.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/FixAtomicState.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/LoadAtomicInputData.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/RecordChanges.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/RecordSuggestedChanges.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/RecordSuggestedFieldEnergyUse.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/ResetAcceptedStatus.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/ResetRateCache.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/ResetSharedResources.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/ResetTimeStepField.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/RollForOverSubscription.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/SpawnIonizationElectrons.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/UpdateElectricField.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/UpdateIonAtomicState.hpp"
+#    include "picongpu/particles/atomicPhysics/stage/UpdateTimeRemaining.hpp"
+#    include "picongpu/particles/filter/filter.hpp"
 
-#include <iostream>
+#    include <pmacc/device/Reduce.hpp>
+#    include <pmacc/dimensions/DataSpace.hpp>
+#    include <pmacc/math/operation.hpp>
+#    include <pmacc/memory/boxes/DataBoxDim1Access.hpp>
+#    include <pmacc/particles/traits/FilterByFlag.hpp>
+#    include <pmacc/traits/Resolve.hpp>
+
+#    include <iostream>
+
+// debug only
+#    include "picongpu/particles/atomicPhysics/debug/TestIonizationPotentialDepression.hpp"
+#    include "picongpu/particles/atomicPhysics/debug/TestRateCalculation.hpp"
+#endif
 
 namespace picongpu::simulation::stage
 {
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
     namespace detail
     {
         namespace enums
@@ -779,18 +790,60 @@ namespace picongpu::simulation::stage
             }
         };
     } // namespace detail
+#else // PICONGPU_MINIMAL_CARAVAN_THERMAL
+    namespace detail
+    {
+        // Minimal mode compiles out the atomic-physics/IPD implementation. Any
+        // configured atomic-physics species must be rejected explicitly instead of
+        // being silently dropped. These detection traits are header-only and do not
+        // require the excluded implementation.
+        using OnlyIPDIonSpecies = particles::atomicPhysics::traits::FilterByParticleType_t<
+            VectorAllSpecies,
+            picongpu::particles::atomicPhysics::Tags::OnlyIPDIon>;
+        using OnlyIPDElectronSpecies = particles::atomicPhysics::traits::FilterByParticleType_t<
+            VectorAllSpecies,
+            picongpu::particles::atomicPhysics::Tags::OnlyIPDElectron>;
+        //! Catch-all for any species carrying the atomicPhysicsParticle flag, including
+        //! tag types added in the future that the explicit checks above do not name.
+        using AllAtomicPhysicsSpecies =
+            typename pmacc::particles::traits::FilterByFlag<VectorAllSpecies, atomicPhysicsParticle<>>::type;
+
+        static_assert(
+            pmacc::mp_empty<AtomicPhysics::SpeciesRepresentingAtomicPhysicsIons>::value,
+            "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support atomic-physics ion species");
+        static_assert(
+            pmacc::mp_empty<AtomicPhysics::SpeciesRepresentingAtomicPhysicsElectrons>::value,
+            "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support atomic-physics electron species");
+        static_assert(
+            pmacc::mp_empty<OnlyIPDIonSpecies>::value,
+            "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support only-IPD ion species");
+        static_assert(
+            pmacc::mp_empty<OnlyIPDElectronSpecies>::value,
+            "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support only-IPD electron species");
+        static_assert(
+            pmacc::mp_empty<AllAtomicPhysicsSpecies>::value,
+            "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support atomic-physics species");
+    } // namespace detail
+#endif // PICONGPU_MINIMAL_CARAVAN_THERMAL
 
     void AtomicPhysics::loadAtomicInputData(DataConnector& dataConnector)
     {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+        static_cast<void>(dataConnector);
+#else
         pmacc::meta::ForEach<
             SpeciesRepresentingAtomicPhysicsIons,
             particles::atomicPhysics::stage::LoadAtomicInputData<boost::mpl::_1>>
             ForEachIonSpeciesLoadAtomicInputData;
         ForEachIonSpeciesLoadAtomicInputData(dataConnector);
+#endif
     }
 
     AtomicPhysics::AtomicPhysics(picongpu::MappingDesc const mappingDesc)
     {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+        static_cast<void>(mappingDesc);
+#else
         // init atomicPhysics fields and buffers
         if constexpr(atomicPhysicsActive)
         {
@@ -827,18 +880,27 @@ namespace picongpu::simulation::stage
             std::cout << "TestIonizationPotentialDepression:" << std::endl;
             test.testAll();
         }
+#endif // PICONGPU_MINIMAL_CARAVAN_THERMAL
     }
 
     void AtomicPhysics::fixAtomicStateInit(picongpu::MappingDesc const mappingDesc)
     {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+        static_cast<void>(mappingDesc);
+#else
         using ForEachIonSpeciesFixAtomicState = pmacc::meta::ForEach<
             SpeciesRepresentingAtomicPhysicsIons,
             particles::atomicPhysics::stage::FixAtomicState<boost::mpl::_1>>;
         ForEachIonSpeciesFixAtomicState{}(mappingDesc);
+#endif
     }
 
     void AtomicPhysics::operator()(picongpu::MappingDesc const mappingDesc, uint32_t const currentStep) const
     {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+        static_cast<void>(mappingDesc);
+        static_cast<void>(currentStep);
+#else
         if constexpr(atomicPhysicsActive)
         {
             //! list of all species of macro particles that partake in atomicPhysics as ions
@@ -862,5 +924,6 @@ namespace picongpu::simulation::stage
                 OnlyIPDElectronSpecies,
                 numberAtomicPhysicsIonSpecies>{}(mappingDesc, currentStep);
         }
+#endif // PICONGPU_MINIMAL_CARAVAN_THERMAL
     }
 } // namespace picongpu::simulation::stage
