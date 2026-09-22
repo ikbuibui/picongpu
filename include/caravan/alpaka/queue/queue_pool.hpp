@@ -138,8 +138,18 @@ namespace caravan::alpaka
             QueuePool* m_pool;
         };
 
-        explicit QueuePool(::alpaka::Dev<T_Queue> device) : m_device(std::move(device)), m_events(m_device)
+        /** Create a growable pool and optionally pre-create idle queues.
+         *
+         * Pre-creating queues avoids native queue construction during the first connections. The pool still grows
+         * on demand when concurrent connected graphs require more queues than are currently available.
+         */
+        explicit QueuePool(::alpaka::Dev<T_Queue> device, std::size_t initialQueueCount = 0u)
+            : m_device(std::move(device))
+            , m_events(m_device)
         {
+            m_entries.reserve(initialQueueCount);
+            for(std::size_t i = 0u; i < initialQueueCount; ++i)
+                m_entries.push_back(std::make_unique<Entry>(m_device));
         }
 
         QueuePool(QueuePool const&) = delete;
@@ -386,6 +396,8 @@ namespace caravan::alpaka
         requires(detail::isPoolSubmitSenderFor<typename T_Nodes::sender_type, T_Pool> && ...)
         auto transform(GraphTag, T_Nodes... nodes) const
         {
+            // Each node currently receives a disjoint logical lane range. A future graph-coloring pass could
+            // reuse lanes for ordered nodes whose lifetimes do not overlap, reducing the number of bound queues.
             auto flattened = merge(std::move(nodes).releaseSender()...);
             detail::addGraphDependencies<caravan::detail::GraphTopology<T_Nodes...>>(
                 flattened.m_dependencies,

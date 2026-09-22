@@ -31,7 +31,13 @@ namespace caravan::alpaka
         template<std::size_t T_Count>
         struct SubmissionDependencies
         {
-            // O(N^2) storage/scans for fixed submission expressions; use sparse edges if large graphs matter.
+            /** Direct dependency edges between stages stored in topological order.
+             *
+             * If predecessors[stage][predecessor] is true, predecessor must be smaller than stage. Sender
+             * composition and graph lowering must preserve this invariant so submission can process stages in
+             * tuple order and inspect only earlier stages. The matrix uses O(N^2) storage and scans for fixed
+             * submission expressions; use sparse edges if large graphs matter.
+             */
             std::array<std::array<bool, T_Count>, T_Count> predecessors{};
 
             static auto linear()

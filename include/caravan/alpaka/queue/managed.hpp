@@ -85,6 +85,17 @@ namespace caravan::alpaka
             T_Context* context;
             T_Receiver receiver;
         };
+
+        template<typename T_Receiver>
+        concept ReceiverWithDeviceContext
+            = requires(T_Receiver const& receiver) { getDeviceContext(caravan::detail::getEnvironment(receiver)); };
+
+        struct MissingDeviceContextOperation
+        {
+            void start() & noexcept
+            {
+            }
+        };
     } // namespace detail
 
     /** Bind a queue-free alpaka graph to a device context through its receiver environment.
@@ -154,8 +165,7 @@ namespace caravan::alpaka
 
         auto query(GetDomain) const noexcept -> ManagedSubmissionDomain;
 
-        template<typename T_Receiver>
-        requires requires(T_Receiver const& receiver) { getDeviceContext(caravan::detail::getEnvironment(receiver)); }
+        template<detail::ReceiverWithDeviceContext T_Receiver>
         auto connect(T_Receiver&& receiver) &&
         {
             auto& context = getDeviceContext(caravan::detail::getEnvironment(receiver));
@@ -167,6 +177,17 @@ namespace caravan::alpaka
                 std::move(m_submits),
                 m_dependencies,
                 std::forward<T_Receiver>(receiver)};
+        }
+
+        template<typename T_Receiver>
+        requires(!detail::ReceiverWithDeviceContext<T_Receiver>)
+        auto connect(T_Receiver&&) && -> detail::MissingDeviceContextOperation
+        {
+            static_assert(
+                detail::ReceiverWithDeviceContext<T_Receiver>,
+                "Caravan managed alpaka sender has no device context; wrap it with "
+                "caravan::alpaka::withDevice(context, sender)");
+            return {};
         }
 
         template<typename...>
@@ -236,6 +257,8 @@ namespace caravan::alpaka
         requires(detail::isManagedSubmitSender<typename T_Nodes::sender_type> && ...)
         auto transform(GraphTag, T_Nodes... nodes) const
         {
+            // Each node currently receives a disjoint logical lane range. A future graph-coloring pass could
+            // reuse lanes for ordered nodes whose lifetimes do not overlap, reducing the number of leased queues.
             auto flattened = merge(std::move(nodes).releaseSender()...);
             detail::addGraphDependencies<caravan::detail::GraphTopology<T_Nodes...>>(
                 flattened.m_dependencies,
