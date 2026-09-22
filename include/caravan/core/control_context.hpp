@@ -101,6 +101,18 @@ namespace caravan
             m_loop.runReady();
         }
 
+        /** Close the scope to new work and pump the control loop until every owned
+         * operation is terminal.
+         *
+         * Idempotent. Call this before destroying or resetting resources borrowed by
+         * outstanding operations (for example fields, particle buffers, or queues).
+         * After the first call, `spawn()` rejects new work.
+         */
+        void drain()
+        {
+            wait(m_scope.join());
+        }
+
         RunLoopScheduler scheduler() noexcept
         {
             return m_loop.scheduler();

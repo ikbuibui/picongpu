@@ -104,13 +104,23 @@ namespace picongpu
                     pmacc::mp_list<TSpecies...>,
                     std::index_sequence<TIndex...>)
                 {
-                    std::array<caravan::Event, sizeof...(TSpecies)> pushed{
-                        particles::PushSpecies<TSpecies>{}(context, predecessor, currentStep)...};
-                    std::array<caravan::Event, sizeof...(TSpecies)> communicated{
-                        particles::CommunicateSpecies<TSpecies>{}(context, pushed[TIndex])...};
-                    return {
-                        caravan::whenAll(std::span<caravan::Event const>{pushed}),
-                        caravan::whenAll(std::span<caravan::Event const>{communicated})};
+                    if constexpr(sizeof...(TSpecies) == 0u)
+                    {
+                        /* No pushed species: preserve the input predecessor so downstream
+                         * stages still wait for prior-step/pre-push work.
+                         */
+                        return {predecessor, predecessor};
+                    }
+                    else
+                    {
+                        std::array<caravan::Event, sizeof...(TSpecies)> pushed{
+                            particles::PushSpecies<TSpecies>{}(context, predecessor, currentStep)...};
+                        std::array<caravan::Event, sizeof...(TSpecies)> communicated{
+                            particles::CommunicateSpecies<TSpecies>{}(context, pushed[TIndex])...};
+                        return {
+                            caravan::whenAll(std::span<caravan::Event const>{pushed}),
+                            caravan::whenAll(std::span<caravan::Event const>{communicated})};
+                    }
                 }
             } // namespace detail
 

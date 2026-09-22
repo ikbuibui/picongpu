@@ -302,11 +302,22 @@ namespace picongpu
             }
         }
 
+        ~Simulation() override
+        {
+            /* Complete outstanding operations while derived fields, particles, mappings,
+             * and the device heap still exist. Idempotent with pluginUnload().
+             */
+            asyncContext.drain();
+        }
+
         void pluginUnload() override
         {
             DataConnector& dc = Environment<>::get().DataConnector();
 
             SimHelper::pluginUnload();
+
+            /* Complete all owned operations before unsharing/cleaning derived resources. */
+            asyncContext.drain();
 
             /** unshare all registered ISimulationData sets
              *
@@ -545,6 +556,7 @@ namespace picongpu
             auto stepComplete = myFieldSolver->update_afterCurrent(asyncContext, currentAdded, currentStep);
             /* Deliberate end-of-step boundary until asynchronous cross-step orchestration is proven. */
             asyncContext.wait(stepComplete);
+            lastStepComplete = stepComplete;
         }
 
         void dumpOneStep(uint32_t currentStep) override
@@ -605,7 +617,7 @@ namespace picongpu
             pmacc::mp_list<TSpecies...>)
         {
             std::array<caravan::Event, sizeof...(TSpecies)> events{
-                particles::CallReset<TSpecies>{}(context, currentStep)...};
+                particles::CallReset<TSpecies>{}(context, lastStepComplete, currentStep)...};
             context.wait(caravan::whenAll(std::span<caravan::Event const>{events}));
         }
 
@@ -640,6 +652,11 @@ namespace picongpu
 
     protected:
         std::shared_ptr<DeviceHeap> deviceHeap;
+
+        /* Completion of the most recent fully waited step; the predecessor for any
+         * live particle reset so it cannot race the step that produced them.
+         */
+        caravan::Event lastStepComplete;
 
         std::shared_ptr<fields::Solver> myFieldSolver;
         std::shared_ptr<simulation::stage::CurrentInterpolationAndAdditionToEMF> currentInterpolationAndAdditionToEMF;

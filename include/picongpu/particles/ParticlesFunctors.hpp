@@ -128,14 +128,20 @@ namespace picongpu
             using SpeciesType = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, T_SpeciesType>;
             using FrameType = typename SpeciesType::FrameType;
 
-            /** @return completion of the species reset */
-            HINLINE caravan::Event operator()(caravan::ControlContext& context, uint32_t const currentStep)
+            /** @return completion of the species reset, after @p previous */
+            HINLINE caravan::Event operator()(
+                caravan::ControlContext& context,
+                caravan::Event previous,
+                uint32_t const currentStep)
             {
                 static_cast<void>(currentStep);
                 DataConnector& dc = Environment<>::get().DataConnector();
                 auto species = dc.get<SpeciesType>(FrameType::getName());
                 auto& device = Environment<>::get().DeviceContext();
-                return context.spawn(caravan::alpaka::withDevice(device, species->resetAsync()));
+                return context.spawn(caravan::alpaka::withDevice(
+                    device,
+                    caravan::asSender(std::move(previous))
+                        | caravan::sequence(species->resetAsync())));
             }
         };
     } // namespace particles

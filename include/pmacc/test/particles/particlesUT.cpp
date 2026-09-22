@@ -194,8 +194,8 @@ namespace
 TEST_CASE("Particle chunk senders are lazy", "[particles][async]")
 {
     auto& device = pmacc::Environment<>::get().DeviceContext();
-    caravan::ControlContext context;
     MockParticles particles;
+    caravan::ControlContext context;
     auto sender = pmacc::particles::sendChunks(particles, 1u);
     static_assert(caravan::Sender<decltype(sender)>);
     static_assert(caravan::Sender<decltype(pmacc::particles::receiveChunks(particles, 1u))>);
@@ -206,8 +206,8 @@ TEST_CASE("Particle chunk senders are lazy", "[particles][async]")
 
 TEST_CASE("Particle communication handles exact and partial chunks", "[particles][async]")
 {
-    caravan::ControlContext context;
     MockParticles particles;
+    caravan::ControlContext context;
     context.wait(pmacc::particles::spawnCommunication(context, particles));
     CHECK(particles.buffer.sendChunk == 2u);
     CHECK(particles.buffer.receiveChunk == 2u);
@@ -219,8 +219,8 @@ TEST_CASE("Particle communication handles exact and partial chunks", "[particles
 
 TEST_CASE("Particle communication handles empty chunks", "[particles][async]")
 {
-    caravan::ControlContext context;
     MockParticles particles;
+    caravan::ControlContext context;
     particles.buffer.sendChunks = {0u, 0u};
     particles.buffer.receiveChunks = {0u, 0u};
     context.wait(pmacc::particles::spawnCommunication(context, particles));
@@ -236,8 +236,8 @@ TEST_CASE("Full particle chunks require an empty terminator", "[particles][async
 {
     for(size_t fullChunks : {1u, 32u})
     {
-        caravan::ControlContext context;
         MockParticles particles;
+        caravan::ControlContext context;
         particles.buffer.sendChunks.assign(fullChunks, 2u);
         particles.buffer.sendChunks.push_back(0u);
         particles.buffer.receiveChunks = particles.buffer.sendChunks;
@@ -253,8 +253,8 @@ TEST_CASE("Full particle chunks require an empty terminator", "[particles][async
 
 TEST_CASE("Particle communication waits for its predecessor", "[particles][async]")
 {
-    caravan::ControlContext context;
     MockParticles particles;
+    caravan::ControlContext context;
     caravan::EventSource push;
     ReleaseGate release{push};
     auto communication = pmacc::particles::spawnCommunication(context, particles, push.event());
@@ -274,9 +274,9 @@ TEST_CASE("Particle communication waits for its predecessor", "[particles][async
 
 TEST_CASE("Independent species communication can advance separately", "[particles][async]")
 {
-    caravan::ControlContext context;
     MockParticles first;
     MockParticles second;
+    caravan::ControlContext context;
     caravan::EventSource firstPush;
     caravan::EventSource secondPush;
     ReleaseGates2 release{firstPush, secondPush};
@@ -297,8 +297,8 @@ TEST_CASE("Independent species communication can advance separately", "[particle
 
 TEST_CASE("Particle exchange storage is reused only after the previous exchange", "[particles][async]")
 {
-    caravan::ControlContext context;
     MockParticles particles;
+    caravan::ControlContext context;
     particles.buffer.sendChunks = {2u, 0u, 2u, 0u};
     particles.buffer.receiveChunks = {2u, 0u, 2u, 0u};
     caravan::EventSource firstPush;
