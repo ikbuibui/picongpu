@@ -44,14 +44,15 @@ namespace picongpu
                 /** Copy the momentums
                  *
                  * @param step index of time iteration
+                 * @return lazy sender copying the momentums
                  */
-                void operator()(uint32_t const step) const
+                [[nodiscard]] auto operator()(uint32_t const step) const
                 {
                     using pmacc::particles::traits::FilterByIdentifier;
                     using SpeciesWithMomentumPrev1 =
                         typename FilterByIdentifier<VectorAllSpecies, momentumPrev1>::type;
                     using CopyMomentum = particles::manipulators::unary::CopyAttribute<momentumPrev1, momentum>;
-                    particles::manipulate<CopyMomentum, SpeciesWithMomentumPrev1>(step);
+                    return particles::manipulate<CopyMomentum, SpeciesWithMomentumPrev1>(step);
                 }
             };
 

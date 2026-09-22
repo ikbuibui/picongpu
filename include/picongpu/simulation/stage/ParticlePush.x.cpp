@@ -26,19 +26,23 @@
 #include "picongpu/particles/param.hpp"
 
 #include <pmacc/Environment.hpp>
-#include <pmacc/communication/AsyncCommunication.hpp>
-#include <pmacc/eventSystem/Manager.hpp>
+#include <pmacc/particles/Communication.hpp>
 #include <pmacc/particles/meta/FindByNameOrType.hpp>
+#include <pmacc/particles/traits/FilterByFlag.hpp>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <span>
+#include <utility>
 
 namespace picongpu
 {
     namespace particles
     {
-        /** Push a species and apply boundary conditions
+        /** Push a species and apply its boundary conditions
          *
-         * Both operations only affect species with a pusher
+         * Both operations only affect species with a pusher.
          *
          * @tparam T_SpeciesType type or name as PMACC_CSTRING of particle species that is checked
          */
@@ -48,25 +52,17 @@ namespace picongpu
             using SpeciesType = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, T_SpeciesType>;
             using FrameType = typename SpeciesType::FrameType;
 
-            template<typename T_EventList>
-            HINLINE void operator()(uint32_t const currentStep, EventTask const& eventInt, T_EventList& updateEvent)
-                const
+            /** @return completion of the species push and boundary application */
+            HINLINE caravan::Event operator()(caravan::ControlContext& context, uint32_t const currentStep) const
             {
                 DataConnector& dc = Environment<>::get().DataConnector();
                 auto species = dc.get<SpeciesType>(FrameType::getName());
-
-                eventSystem::startTransaction(eventInt);
-                species->update(currentStep);
-                // No need to wait here
-                species->applyBoundary(currentStep);
-                EventTask ev = eventSystem::endTransaction();
-                updateEvent.push_back(ev);
+                auto pushed = species->update(context, currentStep);
+                return species->applyBoundary(context, std::move(pushed), currentStep);
             }
         };
 
-        /** Communicate a species
-         *
-         * communication is only triggered for species with a pusher
+        /** Communicate a species after its own push completion
          *
          * @tparam T_SpeciesType type or name as PMACC_CSTRING of particle species that is checked
          */
@@ -76,60 +72,12 @@ namespace picongpu
             using SpeciesType = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, T_SpeciesType>;
             using FrameType = typename SpeciesType::FrameType;
 
-            template<typename T_EventList>
-            HINLINE void operator()(T_EventList& updateEventList, T_EventList& commEventList) const
+            /** @return completion of the species halo exchange */
+            HINLINE caravan::Event operator()(caravan::ControlContext& context, caravan::Event pushed) const
             {
                 DataConnector& dc = Environment<>::get().DataConnector();
                 auto species = dc.get<SpeciesType>(FrameType::getName());
-
-                EventTask updateEvent(*(updateEventList.begin()));
-
-                updateEventList.pop_front();
-                commEventList.push_back(communication::asyncCommunication(*species, updateEvent));
-            }
-        };
-
-        //! Push, apply boundaries, and communicate all species with pusher flag
-        struct PushAllSpecies
-        {
-            /** Process and communicate all species
-             *
-             * @param currentStep current simulation step
-             * @param pushEvent[out] grouped event that marks the end of the species push
-             * @param commEvent[out] grouped event that marks the end of the species communication
-             */
-            HINLINE void operator()(
-                uint32_t const currentStep,
-                EventTask const& eventInt,
-                EventTask& pushEvent,
-                EventTask& commEvent) const
-            {
-                using EventList = std::list<EventTask>;
-                EventList updateEventList;
-                EventList commEventList;
-
-                /* push all species */
-                using VectorSpeciesWithPusher =
-                    typename pmacc::particles::traits::FilterByFlag<VectorAllSpecies, particlePusher<>>::type;
-                meta::ForEach<VectorSpeciesWithPusher, PushSpecies<boost::mpl::_1>> pushSpecies;
-                pushSpecies(currentStep, eventInt, updateEventList);
-
-                /* join all push events */
-                for(auto iter = updateEventList.begin(); iter != updateEventList.end(); ++iter)
-                {
-                    pushEvent += *iter;
-                }
-
-                /* call communication for all species */
-                meta::ForEach<VectorSpeciesWithPusher, particles::CommunicateSpecies<boost::mpl::_1>>
-                    communicateSpecies;
-                communicateSpecies(updateEventList, commEventList);
-
-                /* join all communication events */
-                for(auto iter = commEventList.begin(); iter != commEventList.end(); ++iter)
-                {
-                    commEvent += *iter;
-                }
+                return pmacc::particles::spawnCommunication(context, *species, std::move(pushed));
             }
         };
     } // namespace particles
@@ -138,13 +86,42 @@ namespace picongpu
     {
         namespace stage
         {
-            void ParticlePush::operator()(uint32_t const step, pmacc::EventTask& commEvent) const
+            namespace detail
             {
-                pmacc::EventTask initEvent = eventSystem::getTransactionEvent();
-                pmacc::EventTask updateEvent;
-                picongpu::particles::PushAllSpecies pushAllSpecies;
-                pushAllSpecies(step, initEvent, updateEvent, commEvent);
-                eventSystem::setTransactionEvent(updateEvent);
+                /** Push every species and start its own communication.
+                 *
+                 * The two arrays preserve per-species dependency: `communicated[i]` depends on
+                 * `pushed[i]`, not on the joined push milestone.
+                 */
+                template<typename... TSpecies, std::size_t... TIndex>
+                HINLINE ParticlePushEvents pushAndCommunicate(
+                    caravan::ControlContext& context,
+                    uint32_t const currentStep,
+                    pmacc::mp_list<TSpecies...>,
+                    std::index_sequence<TIndex...>)
+                {
+                    std::array<caravan::Event, sizeof...(TSpecies)> pushed{
+                        particles::PushSpecies<TSpecies>{}(context, currentStep)...};
+                    std::array<caravan::Event, sizeof...(TSpecies)> communicated{
+                        particles::CommunicateSpecies<TSpecies>{}(context, pushed[TIndex])...};
+                    return {
+                        caravan::whenAll(std::span<caravan::Event const>{pushed}),
+                        caravan::whenAll(std::span<caravan::Event const>{communicated})};
+                }
+            } // namespace detail
+
+            ParticlePushEvents ParticlePush::operator()(
+                caravan::ControlContext& context,
+                uint32_t const currentStep) const
+            {
+                using VectorSpeciesWithPusher =
+                    typename pmacc::particles::traits::FilterByFlag<VectorAllSpecies, particlePusher<>>::type;
+                constexpr auto numSpecies = pmacc::mp_size<VectorSpeciesWithPusher>::value;
+                return detail::pushAndCommunicate(
+                    context,
+                    currentStep,
+                    VectorSpeciesWithPusher{},
+                    std::make_index_sequence<numSpecies>{});
             }
         } // namespace stage
     } // namespace simulation

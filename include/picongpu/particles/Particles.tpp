@@ -48,6 +48,8 @@
 #include <type_traits>
 #include <utility>
 
+#include <caravan/alpaka.hpp>
+
 namespace picongpu
 {
     using namespace pmacc;
@@ -246,17 +248,6 @@ namespace picongpu
         return m_datasetID;
     }
 
-    template<typename T_Name, typename T_Flags, typename T_Attributes>
-    void Particles<T_Name, T_Flags, T_Attributes>::synchronize()
-    {
-        this->particlesBuffer->deviceToHost();
-    }
-
-    template<typename T_Name, typename T_Flags, typename T_Attributes>
-    void Particles<T_Name, T_Flags, T_Attributes>::syncToDevice()
-    {
-    }
-
     /** Launcher of the particle push
      *
      * @tparam T_Pusher pusher type
@@ -265,13 +256,21 @@ namespace picongpu
     template<typename T_Pusher>
     struct PushLauncher
     {
-        /** Launch the pusher for all particles of a species
+        /** Start the pusher for all particles of a species
+         *
+         * A composite pusher selects its active sub-pusher at runtime, so both branches are started
+         * through the same context and returned as one completion milestone.
          *
          * @tparam T_Particles particles type
+         * @param context simulation-owned operation scope
+         * @param particles species instance to push
          * @param currentStep current time iteration
          */
         template<typename T_Particles>
-        void operator()(T_Particles&& particles, uint32_t const currentStep) const
+        caravan::Event operator()(
+            caravan::ControlContext& context,
+            T_Particles&& particles,
+            uint32_t const currentStep) const
         {
             constexpr bool isCompositePusher = particles::pusher::IsComposite<T_Pusher>::value;
             if constexpr(isCompositePusher)
@@ -283,33 +282,45 @@ namespace picongpu
                  */
                 auto activePusherIdx = T_Pusher::activePusherIdx(currentStep);
                 if(activePusherIdx == 1)
-                    PushLauncher<typename T_Pusher::FirstPusher>{}(particles, currentStep);
+                    return PushLauncher<typename T_Pusher::FirstPusher>{}(context, particles, currentStep);
                 else if(activePusherIdx == 2)
-                    PushLauncher<typename T_Pusher::SecondPusher>{}(particles, currentStep);
+                    return PushLauncher<typename T_Pusher::SecondPusher>{}(context, particles, currentStep);
+                return caravan::readyEvent();
             }
             else
-                particles.template push<T_Pusher>(currentStep);
+            {
+                auto& device = Environment<>::get().DeviceContext();
+                return context.spawn(
+                    caravan::alpaka::withDevice(device, particles.template push<T_Pusher>(currentStep)));
+            }
         }
     };
 
     template<typename T_Name, typename T_Flags, typename T_Attributes>
-    void Particles<T_Name, T_Flags, T_Attributes>::update(uint32_t const currentStep)
+    caravan::Event Particles<T_Name, T_Flags, T_Attributes>::update(
+        caravan::ControlContext& context,
+        uint32_t const currentStep)
     {
         using PusherAlias = typename pmacc::traits::GetFlagType<FrameType, particlePusher<>>::type;
         using ParticlePush = typename pmacc::traits::Resolve<PusherAlias>::type;
         // Because of composite pushers, we have to defer using the launcher
-        PushLauncher<ParticlePush>{}(*this, currentStep);
+        return PushLauncher<ParticlePush>{}(context, *this, currentStep);
     }
 
     template<typename T_Name, typename T_Flags, typename T_Attributes>
-    void Particles<T_Name, T_Flags, T_Attributes>::applyBoundary(uint32_t const currentStep)
+    caravan::Event Particles<T_Name, T_Flags, T_Attributes>::applyBoundary(
+        caravan::ControlContext& context,
+        caravan::Event previous,
+        uint32_t const currentStep)
     {
         using HasMomentum = typename pmacc::traits::HasIdentifier<FrameType, momentum>::type;
         /* We have to templatize lambda parameter to defer its instantiation.
          * Otherwise it would have been instantiated for all species, not just supported ones.
          */
         if constexpr(HasMomentum::value)
-            particles::boundary::apply(*this, currentStep);
+            return particles::boundary::apply(context, std::move(previous), *this, currentStep);
+        else
+            return previous;
     }
 
     /** Do the particle push stage using the given pusher
@@ -319,7 +330,7 @@ namespace picongpu
      */
     template<typename T_Name, typename T_Flags, typename T_Attributes>
     template<typename T_Pusher>
-    void Particles<T_Name, T_Flags, T_Attributes>::push(uint32_t const currentStep)
+    auto Particles<T_Name, T_Flags, T_Attributes>::push(uint32_t const currentStep)
     {
         /* Particle push logic requires that a particle cannot pass more than a cell in a time step.
          * For 2d this concerns only steps in x, y.
@@ -353,27 +364,29 @@ namespace picongpu
 
         auto const mapper = makeAreaMapper<CORE + BORDER>(this->cellDescription);
 
-        PMACC_LOCKSTEP_KERNEL(KernelMoveAndMarkParticles<BlockArea>{})
-            .config(mapper.getGridDim(), *this)(
-                this->getDeviceParticlesBox(),
-                fieldE->getDeviceDataBox(),
-                fieldB->getDeviceDataBox(),
-                currentStep,
-                FrameSolver(),
-                mapper);
+        auto push = PMACC_LOCKSTEP_KERNEL(KernelMoveAndMarkParticles<BlockArea>{})
+                        .config(mapper.getGridDim(), *this)(
+                            this->getDeviceParticlesBox(),
+                            fieldE->getDeviceDataBox(),
+                            fieldB->getDeviceDataBox(),
+                            currentStep,
+                            FrameSolver(),
+                            mapper);
 
         // The move-and-mark kernel sets mustShift for supercells, so we can call the optimized version of shift
         auto const onlyProcessMustShiftSupercells = true;
-        shiftBetweenSupercells(pmacc::AreaMapperFactory<CORE + BORDER>{}, onlyProcessMustShiftSupercells);
+        return std::move(push)
+               | caravan::sequence(
+                   shiftBetweenSupercells(pmacc::AreaMapperFactory<CORE + BORDER>{}, onlyProcessMustShiftSupercells));
     }
 
     template<typename T_Name, typename T_Flags, typename T_Attributes>
     template<typename T_MapperFactory>
-    void Particles<T_Name, T_Flags, T_Attributes>::shiftBetweenSupercells(
+    auto Particles<T_Name, T_Flags, T_Attributes>::shiftBetweenSupercells(
         T_MapperFactory const& mapperFactory,
         bool const onlyProcessMustShiftSupercells)
     {
-        ParticlesBaseType::shiftParticles(mapperFactory, onlyProcessMustShiftSupercells);
+        return ParticlesBaseType::shiftParticlesAsync(mapperFactory, onlyProcessMustShiftSupercells);
     }
 
     template<typename T_Name, typename T_Flags, typename T_Attributes>

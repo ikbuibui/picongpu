@@ -26,6 +26,9 @@
 #include "picongpu/particles/manipulators/unary/FreeTotalCellOffset.hpp"
 
 #include <cstdint>
+#include <utility>
+
+#include <caravan/core.hpp>
 
 namespace picongpu
 {
@@ -77,9 +80,10 @@ namespace picongpu
              *
              * @param species particle species
              * @param currentStep current time iteration
+             * @return lazy sender removing the particles and filling the resulting frame gaps
              */
             template<typename T_Species>
-            inline void removeOuterParticles(T_Species& species, uint32_t currentStep)
+            inline auto removeOuterParticles(T_Species& species, uint32_t currentStep)
             {
                 // Here we do basically same as in absorbing boundaries, but for all axes and the whole domain
                 pmacc::DataSpace<simDim> beginInternalCellsTotal, endInternalCellsTotal;
@@ -87,9 +91,9 @@ namespace picongpu
                 AbsorbParticleIfOutsideAnyBoundary::parameters().beginInternalCellsTotal = beginInternalCellsTotal;
                 AbsorbParticleIfOutsideAnyBoundary::parameters().endInternalCellsTotal = endInternalCellsTotal;
                 using Manipulator = manipulators::unary::FreeTotalCellOffset<AbsorbParticleIfOutsideAnyBoundary>;
-                particles::manipulate<Manipulator, T_Species>(currentStep);
+                auto manipulated = particles::manipulate<Manipulator, T_Species>(currentStep);
                 // Fill gaps to finalize deletion
-                species.fillAllGaps();
+                return std::move(manipulated) | caravan::sequence(species.fillAllGapsAsync());
             }
 
         } // namespace boundary

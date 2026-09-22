@@ -70,7 +70,7 @@ namespace picongpu
             typename T_Species,
             typename T_Filter = filter::All,
             uint32_t T_area = CORE + BORDER>
-        void manipulate(uint32_t const currentStep);
+        auto manipulate(uint32_t const currentStep);
 
         /** Version for a custom area mapper factory
          *
@@ -84,7 +84,7 @@ namespace picongpu
             typename T_Species,
             typename T_AreaMapperFactory,
             typename T_Filter = filter::All>
-        void manipulate(uint32_t const currentStep, T_AreaMapperFactory const& areaMapperFactory);
+        auto manipulate(uint32_t const currentStep, T_AreaMapperFactory const& areaMapperFactory);
 
         /** @} */
 

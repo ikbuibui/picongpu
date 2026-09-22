@@ -206,6 +206,13 @@ namespace picongpu
                 template<typename T_Species>
                 void operator()(T_Species& species, uint32_t exchangeType, uint32_t currentStep)
                 {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+                    static_cast<void>(species);
+                    static_cast<void>(exchangeType);
+                    static_cast<void>(currentStep);
+                    throw std::runtime_error(
+                        "PICONGPU_MINIMAL_CARAVAN_THERMAL requires periodic particle boundaries");
+#else
                     // Positive offset is required for thermal boundaries until #3850 is resolved
                     if(getOffsetCells(species, exchangeType) <= 0)
                         throw std::runtime_error("Thermal particle boundaries require a positive offset");
@@ -228,6 +235,7 @@ namespace picongpu
                     particles::manipulate<Manipulator, T_Species>(currentStep, mapperFactory);
                     auto const onlyProcessMustShiftSupercells = false;
                     species.shiftBetweenSupercells(mapperFactory, onlyProcessMustShiftSupercells);
+#endif
                 }
             };
 

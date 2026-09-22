@@ -74,11 +74,17 @@ namespace picongpu
                     {
                         if(isEnabled && useDuplicateField)
                         {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+                            throw std::runtime_error(
+                                "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support "
+                                "--fieldBackground.duplicateFields");
+#else
                             // Allocate a duplicate field buffer and copy the values
                             DataConnector& dc = Environment<>::get().DataConnector();
                             auto field = dc.get<Field>(Field::getName());
                             auto const& gridBuffer = field->getGridBuffer();
                             duplicateBuffer = pmacc::makeDeepCopy(gridBuffer.getDeviceBuffer());
+#endif
                         }
                     }
 
@@ -95,9 +101,15 @@ namespace picongpu
                         // Always add to the field, conditionally make a copy of the old values first
                         if(useDuplicateField)
                         {
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
                             auto& gridBuffer = field.getGridBuffer();
                             duplicateBuffer->copyFrom(gridBuffer.getDeviceBuffer());
                             restoreFromDuplicateField = true;
+#else
+                            throw std::runtime_error(
+                                "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support "
+                                "--fieldBackground.duplicateFields");
+#endif
                         }
                         apply(step, pmacc::math::operation::Add(), field);
                     }
@@ -118,9 +130,15 @@ namespace picongpu
                          */
                         if(restoreFromDuplicateField)
                         {
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
                             auto& gridBuffer = field.getGridBuffer();
                             gridBuffer.getDeviceBuffer().copyFrom(*duplicateBuffer);
                             restoreFromDuplicateField = false;
+#else
+                            throw std::runtime_error(
+                                "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support "
+                                "--fieldBackground.duplicateFields");
+#endif
                         }
                         else
                             apply(step, pmacc::math::operation::Sub(), field);
@@ -291,7 +309,7 @@ namespace picongpu
                  * Synchronizes simulation data, meaning accessing (host side) data
                  * will return up-to-date values.
                  */
-                void synchronize() override {};
+                void synchronize() {};
 
             private:
                 /** Add field background to the electromagnetic field

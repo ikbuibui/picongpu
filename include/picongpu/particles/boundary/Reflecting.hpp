@@ -95,6 +95,13 @@ namespace picongpu
                 template<typename T_Species>
                 void operator()(T_Species& species, uint32_t exchangeType, uint32_t currentStep)
                 {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+                    static_cast<void>(species);
+                    static_cast<void>(exchangeType);
+                    static_cast<void>(currentStep);
+                    throw std::runtime_error(
+                        "PICONGPU_MINIMAL_CARAVAN_THERMAL requires periodic particle boundaries");
+#else
                     pmacc::DataSpace<simDim> beginInternalCellsTotal, endInternalCellsTotal;
                     getInternalCellsTotal(species, exchangeType, &beginInternalCellsTotal, &endInternalCellsTotal);
                     auto const axis = pmacc::boundary::getAxis(exchangeType);
@@ -112,6 +119,7 @@ namespace picongpu
                      */
                     auto const onlyProcessMustShiftSupercells = false;
                     species.shiftBetweenSupercells(mapperFactory, onlyProcessMustShiftSupercells);
+#endif
                 }
             };
 

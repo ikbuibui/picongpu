@@ -34,6 +34,9 @@
 
 #include <cstdint>
 #include <type_traits>
+#include <utility>
+
+#include <caravan/core.hpp>
 
 namespace picongpu
 {
@@ -92,23 +95,64 @@ namespace picongpu
         {
         };
 
+        namespace detail
+        {
+            /** Sequentially compose senders, preserving native ordering where the domain supports it. */
+            HINLINE auto sequenceAll()
+            {
+                return caravan::asSender(caravan::readyEvent());
+            }
+
+            template<typename T_Sender>
+            HINLINE auto sequenceAll(T_Sender&& sender)
+            {
+                return std::forward<T_Sender>(sender);
+            }
+
+            template<typename T_First, typename T_Second, typename... TRest>
+            HINLINE auto sequenceAll(T_First&& first, T_Second&& second, TRest&&... rest)
+            {
+                auto sequenced = caravan::sequence(std::forward<T_First>(first), std::forward<T_Second>(second));
+                if constexpr(sizeof...(TRest) == 0u)
+                    return sequenced;
+                else
+                    return sequenceAll(std::move(sequenced), std::forward<TRest>(rest)...);
+            }
+
+            template<typename T_Manipulator, typename T_Filter, uint32_t T_area, typename... TSpecies>
+            HINLINE auto manipulateSeq(uint32_t const currentStep, pmacc::mp_list<TSpecies...>)
+            {
+                return sequenceAll(
+                    Manipulate<T_Manipulator, TSpecies, T_Filter, std::integral_constant<uint32_t, T_area>>{}(
+                        currentStep)...);
+            }
+
+            template<typename T_Manipulator, typename T_Filter, typename T_AreaMapperFactory, typename... TSpecies>
+            HINLINE auto manipulateSeqMapper(
+                uint32_t const currentStep,
+                T_AreaMapperFactory const& areaMapperFactory,
+                pmacc::mp_list<TSpecies...>)
+            {
+                return sequenceAll(
+                    Manipulate<T_Manipulator, TSpecies, T_Filter>{}(currentStep, areaMapperFactory)...);
+            }
+        } // namespace detail
+
         template<typename T_Manipulator, typename T_Species, typename T_Filter, uint32_t T_area>
-        void manipulate(uint32_t const currentStep)
+        auto manipulate(uint32_t const currentStep)
         {
             using SpeciesSeq = pmacc::ToSeq<T_Species>;
-            using Functor
-                = Manipulate<T_Manipulator, boost::mpl::_1, T_Filter, std::integral_constant<uint32_t, T_area>>;
-            pmacc::meta::ForEach<SpeciesSeq, Functor> forEach;
-            forEach(currentStep);
+            return detail::manipulateSeq<T_Manipulator, T_Filter, T_area>(currentStep, SpeciesSeq{});
         }
 
         template<typename T_Manipulator, typename T_Species, typename T_AreaMapperFactory, typename T_Filter>
-        void manipulate(uint32_t const currentStep, T_AreaMapperFactory const& areaMapperFactory)
+        auto manipulate(uint32_t const currentStep, T_AreaMapperFactory const& areaMapperFactory)
         {
             using SpeciesSeq = pmacc::ToSeq<T_Species>;
-            using Functor = Manipulate<T_Manipulator, boost::mpl::_1, T_Filter>;
-            pmacc::meta::ForEach<SpeciesSeq, Functor> forEach;
-            forEach(currentStep, areaMapperFactory);
+            return detail::manipulateSeqMapper<T_Manipulator, T_Filter>(
+                currentStep,
+                areaMapperFactory,
+                SpeciesSeq{});
         }
 
         /** @} */

@@ -73,6 +73,33 @@ value oracle for the intermediate `17`/`17`/`136` results. A failed-predecessor
 case is not included because this revision only distinguishes pending from ready
 completion and treats submission/connection failures as fatal.
 
+## Focused particle-exchange test
+
+The `particle-exchange/` subdirectory is a standalone CMake project that builds
+the PMacc particle unit test (`include/pmacc/test/particles/particlesUT.cpp`) so
+that `pmacc::particles::spawnCommunication` can be exercised without the
+still-unmigrated application translation units:
+
+```bash
+cmake -S /path/to/picongpu/share/picongpu/tests/CaravanThermal/particle-exchange \
+  -B /tmp/picongpu-particle-exchange-test \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DPMacc_DIR=/path/to/picongpu/include/pmacc \
+  -Dalpaka_ACC_CPU_B_SEQ_T_SEQ_ENABLE=ON \
+  -Dalpaka_ACC_GPU_CUDA_ENABLE=OFF \
+  -Dalpaka_ACC_GPU_HIP_ENABLE=OFF
+cmake --build /tmp/picongpu-particle-exchange-test --target picongpu-particle-exchange-test -j4
+ctest --test-dir /tmp/picongpu-particle-exchange-test --output-on-failure
+```
+
+Recorded 2026-09-22 on the HAL CPU Debug profile: `ctest` passed 1/1; the direct
+run reported **1082 assertions in 9 test cases**. In addition to the existing
+chunk send/receive cases, the suite covers a delayed push predecessor (no chunk
+starts while the predecessor is pending), independent species communication
+(one species' exchange completes while another's push is still pending), and
+exchange-buffer reuse (a second exchange with an already-ready predecessor still
+waits for the first exchange's buffer-reuse tail).
+
 ## Compile-time isolation checks
 
 Two standalone, build-independent drivers validate minimal-mode exclusions with

@@ -79,20 +79,22 @@ namespace
 
         caravan::Event sendCompletion(uint32_t) const
         {
-            return {};
+            return sendTail;
         }
 
         caravan::Event receiveCompletion(uint32_t) const
         {
-            return {};
+            return receiveTail;
         }
 
-        void setSendCompletion(uint32_t, caravan::Event)
+        void setSendCompletion(uint32_t, caravan::Event completion)
         {
+            sendTail = std::move(completion);
         }
 
-        void setReceiveCompletion(uint32_t, caravan::Event)
+        void setReceiveCompletion(uint32_t, caravan::Event completion)
         {
+            receiveTail = std::move(completion);
         }
 
         auto sendParticles(uint32_t)
@@ -116,6 +118,8 @@ namespace
         size_t receiveChunk = 0u;
         size_t sendSize = 0u;
         size_t receiveSize = 0u;
+        caravan::Event sendTail;
+        caravan::Event receiveTail;
     };
 
     struct MockParticles
@@ -221,4 +225,71 @@ TEST_CASE("Full particle chunks require an empty terminator", "[particles][async
         CHECK(particles.inserted == fullChunks * 2u);
         CHECK(particles.gapsFilled);
     }
+}
+
+TEST_CASE("Particle communication waits for its predecessor", "[particles][async]")
+{
+    caravan::ControlContext context;
+    MockParticles particles;
+    caravan::EventSource push;
+    auto communication = pmacc::particles::spawnCommunication(context, particles, push.event());
+
+    // Nothing may start while the push predecessor is pending.
+    context.runReady();
+    CHECK(particles.buffer.sendChunk == 0u);
+    CHECK(particles.buffer.sentChunks.empty());
+    CHECK(particles.inserted == 0u);
+
+    push.setReady();
+    context.wait(communication);
+    CHECK(particles.buffer.sendChunk == 2u);
+    CHECK(particles.inserted == 3u);
+    CHECK(particles.gapsFilled);
+}
+
+TEST_CASE("Independent species communication can advance separately", "[particles][async]")
+{
+    caravan::ControlContext context;
+    MockParticles first;
+    MockParticles second;
+    caravan::EventSource firstPush;
+    caravan::EventSource secondPush;
+    auto firstCommunication = pmacc::particles::spawnCommunication(context, first, firstPush.event());
+    auto secondCommunication = pmacc::particles::spawnCommunication(context, second, secondPush.event());
+
+    firstPush.setReady();
+    context.wait(firstCommunication);
+    CHECK(first.buffer.sendChunk == 2u);
+    // The second species must not advance while its own push is still pending.
+    CHECK(second.buffer.sendChunk == 0u);
+
+    secondPush.setReady();
+    context.wait(secondCommunication);
+    CHECK(second.buffer.sendChunk == 2u);
+    CHECK(second.inserted == 3u);
+}
+
+TEST_CASE("Particle exchange storage is reused only after the previous exchange", "[particles][async]")
+{
+    caravan::ControlContext context;
+    MockParticles particles;
+    particles.buffer.sendChunks = {2u, 0u, 2u, 0u};
+    particles.buffer.receiveChunks = {2u, 0u, 2u, 0u};
+    caravan::EventSource firstPush;
+    caravan::EventSource secondPush;
+    auto first = pmacc::particles::spawnCommunication(context, particles, firstPush.event());
+    /* Start the reuse with an already-ready predecessor: it must still wait for the first
+     * exchange's buffer-reuse tail before touching the shared exchange storage.
+     */
+    auto second = pmacc::particles::spawnCommunication(context, particles, secondPush.event());
+    secondPush.setReady();
+
+    context.runReady();
+    CHECK(particles.buffer.sendChunk == 0u);
+
+    firstPush.setReady();
+    context.wait(first);
+    context.wait(second);
+    CHECK(particles.buffer.sendChunk == 4u);
+    CHECK(particles.inserted == 4u);
 }

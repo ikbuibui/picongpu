@@ -34,6 +34,8 @@
 #include <list>
 #include <stdexcept>
 
+#include <caravan/core.hpp>
+
 namespace picongpu
 {
     namespace particles
@@ -65,14 +67,24 @@ namespace picongpu
 
             /** Apply boundary conditions to the given species
              *
-             * @tparam T_Species particle species type
+             * In this slice only periodic boundaries are supported; unsupported kinds reject at
+             * runtime (and in minimal mode at compile time). The returned event is the given
+             * predecessor, so the boundary stage does not introduce an ordering hazard.
              *
+             * @param context simulation-owned operation scope
+             * @param previous completion of the particle push
              * @param species particle species
              * @param currentStep current time iteration
+             * @return completion after boundary application
              */
             template<typename T_Species>
-            inline void apply(T_Species&& species, uint32_t currentStep)
+            inline caravan::Event apply(
+                caravan::ControlContext& context,
+                caravan::Event previous,
+                T_Species&& species,
+                uint32_t currentStep)
             {
+                static_cast<void>(context);
                 auto const communicationMask = Environment<simDim>::get().GridController().getCommunicationMask();
                 for(auto exchange : getAllAxisAlignedExchanges())
                 {
@@ -112,6 +124,7 @@ namespace picongpu
                         throw std::runtime_error("Unsupported boundary kind when trying to apply particle boundary");
                     }
                 }
+                return previous;
             }
 
         } // namespace boundary

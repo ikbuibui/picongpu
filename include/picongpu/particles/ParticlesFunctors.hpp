@@ -27,6 +27,10 @@
 #include <pmacc/Environment.hpp>
 #include <pmacc/particles/meta/FindByNameOrType.hpp>
 
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
+
+#include <cstdint>
 #include <memory>
 
 namespace picongpu
@@ -104,11 +108,14 @@ namespace picongpu
             using SpeciesType = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, T_SpeciesType>;
             using FrameType = typename SpeciesType::FrameType;
 
-            HINLINE void operator()(uint32_t const currentStep)
+            /** @return completion of the species reset */
+            HINLINE caravan::Event operator()(caravan::ControlContext& context, uint32_t const currentStep)
             {
+                static_cast<void>(currentStep);
                 DataConnector& dc = Environment<>::get().DataConnector();
                 auto species = dc.get<SpeciesType>(FrameType::getName());
-                species->reset(currentStep);
+                auto& device = Environment<>::get().DeviceContext();
+                return context.spawn(caravan::alpaka::withDevice(device, species->resetAsync()));
             }
         };
     } // namespace particles

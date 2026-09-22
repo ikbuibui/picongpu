@@ -21,9 +21,9 @@
 
 #pragma once
 
-#include <pmacc/eventSystem/Manager.hpp>
-
 #include <cstdint>
+
+#include <caravan/core.hpp>
 
 namespace picongpu
 {
@@ -31,15 +31,36 @@ namespace picongpu
     {
         namespace stage
         {
+            /** Named completion milestones of the particle push stage.
+             *
+             * `pushed` completes when every species has been pushed and its boundary conditions
+             * have been applied. `communicated` completes when every species' halo exchange that
+             * started from its own push has finished. Keeping them separate lets orchestration
+             * overlap unrelated field work with the exchange.
+             */
+            struct ParticlePushEvents
+            {
+                //! all species pushed and boundaries applied
+                caravan::Event pushed;
+                //! all species communicated after their own push
+                caravan::Event communicated;
+            };
+
             //! Functor for the stage of the PIC loop performing particle push
             struct ParticlePush
             {
-                /** Push all particle species
+                /** Push and communicate all particle species with a pusher.
                  *
-                 * @param step index of time iteration
-                 * @param[out] commEvent particle communication event
+                 * Each species' communication depends on its own push/boundary completion, so a
+                 * species exchange is not delayed by another species' push.
+                 *
+                 * @param context simulation-owned operation scope
+                 * @param currentStep current time iteration
+                 * @return completion milestones for push and communication
                  */
-                void operator()(uint32_t const step, pmacc::EventTask& commEvent) const;
+                [[nodiscard]] ParticlePushEvents operator()(
+                    caravan::ControlContext& context,
+                    uint32_t const currentStep) const;
             };
 
         } // namespace stage

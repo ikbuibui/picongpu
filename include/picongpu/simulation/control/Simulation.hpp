@@ -85,6 +85,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -464,7 +465,7 @@ namespace picongpu
                 }
                 else
                 {
-                    simulation::stage::ParticleInit{}(step);
+                    asyncContext.wait(simulation::stage::ParticleInit{}(asyncContext, step));
                     (*atomicPhysics).fixAtomicStateInit(*cellDescription);
                     // Check Debye resolution
                     particles::debyeLength::check(*cellDescription);
@@ -483,7 +484,6 @@ namespace picongpu
             auto fieldB = dc.get<FieldB>(FieldB::getName());
 
             // generate valid GUARDS (overwrite)
-            eventSystem::getTransactionEvent().waitForFinished();
             std::array communications{
                 fieldE->getGridBuffer().spawnCommunication(asyncContext),
                 fieldB->getGridBuffer().spawnCommunication(asyncContext)};
@@ -501,25 +501,28 @@ namespace picongpu
         void runOneStep(uint32_t currentStep) override
         {
             using namespace simulation::stage;
+            auto& device = Environment<>::get().DeviceContext();
             fieldBackground->enable(currentStep);
             IterationStart{}(currentStep);
-            MomentumBackup{}(currentStep);
+            /* The momentum backup must complete before the pusher updates momentum. */
+            asyncContext.wait(
+                asyncContext.spawn(caravan::alpaka::withDevice(device, MomentumBackup{}(currentStep))));
             CurrentReset{}(currentStep);
             Collision{deviceHeap}(*cellDescription, currentStep);
             ParticleIonization{*cellDescription}(currentStep);
             (*atomicPhysics)(*cellDescription, currentStep);
             (*synchrotronRadiation)(currentStep);
-            EventTask commEvent;
-            ParticlePush{}(currentStep, commEvent);
+            auto pushEvents = ParticlePush{}(asyncContext, currentStep);
             fieldBackground->disable(currentStep);
             myFieldSolver->update_beforeCurrent(currentStep);
-            eventSystem::setTransactionEvent(commEvent);
+            /* Temporary bridge until the synchronous current stages are composed into the step graph
+             * (WP5): the particle exchange must complete before current deposition reads the frames.
+             */
+            asyncContext.wait(pushEvents.communicated);
             (*currentBackground)(currentStep);
             CurrentDeposition{}(currentStep);
-            // Bridge the remaining legacy current producers into the Caravan graph.
-            eventSystem::getTransactionEvent().waitForFinished();
             auto currentAdded
-                = (*currentInterpolationAndAdditionToEMF)(asyncContext, caravan::readyEvent(), *myFieldSolver);
+                = (*currentInterpolationAndAdditionToEMF)(asyncContext, pushEvents.communicated, *myFieldSolver);
             // The following field-solver stage still has a synchronous signature.
             asyncContext.wait(currentAdded);
             myFieldSolver->update_afterCurrent(currentStep);
@@ -548,9 +551,28 @@ namespace picongpu
         void resetAll(uint32_t currentStep) override
         {
             resetFields(currentStep);
-            meta::ForEach<VectorAllSpecies, particles::CallReset<boost::mpl::_1>> resetParticles;
-            resetParticles(currentStep);
+            resetParticles(asyncContext, currentStep);
             /// @todo need to add atomicPhysics super cell fields?, Brian Marre, 2022
+        }
+
+        /** Reset all species' particle storage and wait for completion.
+         *
+         * The reset must finish before any new step reuses the particle storage.
+         */
+        template<typename... TSpecies>
+        void resetParticlesImpl(
+            caravan::ControlContext& context,
+            uint32_t const currentStep,
+            pmacc::mp_list<TSpecies...>)
+        {
+            std::array<caravan::Event, sizeof...(TSpecies)> events{
+                particles::CallReset<TSpecies>{}(context, currentStep)...};
+            context.wait(caravan::whenAll(std::span<caravan::Event const>{events}));
+        }
+
+        void resetParticles(caravan::ControlContext& context, uint32_t const currentStep)
+        {
+            resetParticlesImpl(context, currentStep, VectorAllSpecies{});
         }
 
         void slide(uint32_t currentStep)
@@ -561,7 +583,7 @@ namespace picongpu
             {
                 log<picLog::SIMULATION_STATE>("slide in step %1%") % currentStep;
                 resetAll(currentStep);
-                simulation::stage::ParticleInit{}(currentStep);
+                asyncContext.wait(simulation::stage::ParticleInit{}(asyncContext, currentStep));
                 (*atomicPhysics).fixAtomicStateInit(*cellDescription);
             }
         }

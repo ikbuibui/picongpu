@@ -47,6 +47,8 @@
 #include <sstream>
 #include <string>
 
+#include <caravan/core.hpp>
+
 namespace picongpu
 {
     using namespace pmacc;
@@ -109,8 +111,15 @@ namespace picongpu
 
         void createParticleBuffer();
 
-        //! Push all particles
-        void update(uint32_t const currentStep);
+        /** Push all particles and return completion of the push.
+         *
+         * Reads the species' frames and the E/B fields, and writes the species' frames. The returned event
+         * covers the move-and-mark kernel and the following supercell shift.
+         *
+         * @param context simulation-owned operation scope
+         * @param currentStep current time iteration
+         */
+        [[nodiscard]] caravan::Event update(caravan::ControlContext& context, uint32_t const currentStep);
 
         /** Update the supercell storage for particles in the area according to particle attributes
          *
@@ -119,12 +128,27 @@ namespace picongpu
          * @param mapperFactory factory instance
          * @param onlyProcessMustShiftSupercells whether to process only supercells with mustShift set to true
          * (optimization to be used with particle pusher) or process all supercells
+         *
+         * @return lazy sender shifting the selected supercells
          */
         template<typename T_MapperFactory>
-        inline void shiftBetweenSupercells(T_MapperFactory const& mapperFactory, bool onlyProcessMustShiftSupercells);
+        [[nodiscard]] inline auto shiftBetweenSupercells(
+            T_MapperFactory const& mapperFactory,
+            bool onlyProcessMustShiftSupercells);
 
-        //! Apply all boundary conditions
-        void applyBoundary(uint32_t const currentStep);
+        /** Apply all boundary conditions after the particle push.
+         *
+         * The returned event completes after all active boundaries have been applied and any required
+         * supercell shift has finished. The species must outlive the returned event.
+         *
+         * @param context simulation-owned operation scope
+         * @param previous completion of the push
+         * @param currentStep current time iteration
+         */
+        [[nodiscard]] caravan::Event applyBoundary(
+            caravan::ControlContext& context,
+            caravan::Event previous,
+            uint32_t const currentStep);
 
         template<
             typename T_SrcName,
@@ -138,16 +162,6 @@ namespace picongpu
             T_SrcFilterFunctor& srcFilterFunctor);
 
         SimulationDataId getUniqueId() override;
-
-        /* sync device data to host
-         *
-         * ATTENTION: - in the current implementation only supercell meta data are copied!
-         *            - the shared (between all species) mallocMC buffer must be copied once
-         *              by the user
-         */
-        void synchronize() override;
-
-        void syncToDevice() override;
 
         /** Get boundary descriptions for the species.
          *
@@ -199,8 +213,15 @@ namespace picongpu
             return propList;
         }
 
+        /**
+         * Lazily describe the move-and-mark kernel and the following supercell shift for one pusher.
+         *
+         * @tparam T_Pusher non-composite pusher type
+         * @param currentStep current time iteration
+         * @return lazy sender combining the push kernel and the supercell shift
+         */
         template<typename T_Pusher>
-        void push(uint32_t const currentStep);
+        [[nodiscard]] auto push(uint32_t const currentStep);
 
     private:
         SimulationDataId m_datasetID;
