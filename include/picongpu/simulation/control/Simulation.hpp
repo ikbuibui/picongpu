@@ -391,12 +391,19 @@ namespace picongpu
             dc.consume(std::move(rngFactory));
 
 #if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
-            auto alpakaQueue = pmacc::eventSystem::getComputeDeviceQueue(ITask::TASK_DEVICE)->getAlpakaQueue();
             auto alpakaDevice = manager::Device<ComputeDevice>::get().current();
+            /* Setup-only native queue for the synchronous mallocMC heap lifecycle
+             * (construction, resize, and statistics). The mallocMC allocator owns
+             * its own pool storage and does not retain this queue; the queue is used
+             * only to enqueue those host-driven heap operations and is destroyed at
+             * the end of this function. It is deliberately separate from the
+             * fixed-size simulation queue pool.
+             */
+            ComputeDeviceQueue setupQueue(alpakaDevice);
             /* Create an empty allocator. This one is resized after all exchanges
              * for particles are created */
-            deviceHeap = std::make_shared<DeviceHeap>(alpakaDevice, alpakaQueue, 0u);
-            alpaka::wait(alpakaQueue);
+            deviceHeap = std::make_shared<DeviceHeap>(alpakaDevice, setupQueue, 0u);
+            alpaka::wait(setupQueue);
 #endif
 
             static_assert(
@@ -436,17 +443,16 @@ namespace picongpu
                     "Device RAM is NOT shared between GPU and host, use '--apu' to signal shared device memory.");
 
             // initializing the heap for particles
-            deviceHeap->destructiveResize(alpakaDevice, alpakaQueue, heapSize);
-            alpaka::wait(alpakaQueue);
+            deviceHeap->destructiveResize(alpakaDevice, setupQueue, heapSize);
+            alpaka::wait(setupQueue);
 
             auto mallocMCBuffer = std::make_unique<MallocMCBuffer<DeviceHeap>>(*deviceHeap);
             dc.consume(std::move(mallocMCBuffer));
 
-#endif
-
             meta::ForEach<VectorAllSpecies, particles::LogMemoryStatisticsForSpecies<boost::mpl::_1>>
                 logMemoryStatisticsForSpecies;
-            logMemoryStatisticsForSpecies(deviceHeap);
+            logMemoryStatisticsForSpecies(deviceHeap, setupQueue);
+#endif
 
             if(picLog::log_level & picLog::MEMORY::lvl)
             {

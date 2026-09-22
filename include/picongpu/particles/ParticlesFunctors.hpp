@@ -103,17 +103,26 @@ namespace picongpu
             using SpeciesType = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, T_SpeciesType>;
             using FrameType = typename SpeciesType::FrameType;
 
-            template<typename T_DeviceHeap>
-            HINLINE void operator()(std::shared_ptr<T_DeviceHeap> const& deviceHeap) const
+            /** Log the remaining allocation slots of the mallocMC heap.
+             *
+             * @tparam T_DeviceHeap mallocMC allocator type
+             * @tparam T_Queue native alpaka queue used for the synchronous statistics query
+             * @param deviceHeap heap to query
+             * @param queue explicitly owned queue; the caller must keep it alive for the call
+             */
+            template<typename T_DeviceHeap, typename T_Queue>
+            HINLINE void operator()(std::shared_ptr<T_DeviceHeap> const& deviceHeap, T_Queue& queue) const
             {
 #if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
-                auto alpakaStream = pmacc::eventSystem::getComputeDeviceQueue(ITask::TASK_DEVICE)->getAlpakaQueue();
                 log<picLog::MEMORY>("mallocMC: free slots for species %3%: %1% a %2%")
                     % deviceHeap->getAvailableSlots(
                         manager::Device<ComputeDevice>::get().current(),
-                        alpakaStream,
+                        queue,
                         sizeof(FrameType))
                     % sizeof(FrameType) % FrameType::getName();
+#else
+                static_cast<void>(deviceHeap);
+                static_cast<void>(queue);
 #endif
             }
         };
