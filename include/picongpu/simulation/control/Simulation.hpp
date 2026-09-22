@@ -485,8 +485,8 @@ namespace picongpu
 
             // generate valid GUARDS (overwrite)
             std::array communications{
-                fieldE->getGridBuffer().spawnCommunication(asyncContext),
-                fieldB->getGridBuffer().spawnCommunication(asyncContext)};
+                fieldE->spawnCommunication(asyncContext),
+                fieldB->spawnCommunication(asyncContext)};
             asyncContext.wait(caravan::whenAll(communications));
 
             log<picLog::SIMULATION_STATE>("Starting simulation from timestep 0");
@@ -507,25 +507,28 @@ namespace picongpu
             /* The momentum backup must complete before the pusher updates momentum. */
             asyncContext.wait(
                 asyncContext.spawn(caravan::alpaka::withDevice(device, MomentumBackup{}(currentStep))));
-            CurrentReset{}(currentStep);
+            auto currentReset = CurrentReset{}(asyncContext, caravan::readyEvent(), currentStep);
             Collision{deviceHeap}(*cellDescription, currentStep);
             ParticleIonization{*cellDescription}(currentStep);
             (*atomicPhysics)(*cellDescription, currentStep);
             (*synchrotronRadiation)(currentStep);
             auto pushEvents = ParticlePush{}(asyncContext, currentStep);
             fieldBackground->disable(currentStep);
-            myFieldSolver->update_beforeCurrent(currentStep);
-            /* Temporary bridge until the synchronous current stages are composed into the step graph
-             * (WP5): the particle exchange must complete before current deposition reads the frames.
+            /* The field pre-update must not overwrite E/B before the push has read them; it can
+             * overlap the particle exchange.
              */
-            asyncContext.wait(pushEvents.communicated);
+            auto fieldsReady = myFieldSolver->update_beforeCurrent(asyncContext, pushEvents.pushed, currentStep);
+            /* Temporary bridge until the synchronous current stages are composed into the step graph
+             * (WP5): the exchange, field pre-update, and J reset must finish before deposition.
+             */
+            asyncContext.wait(
+                caravan::whenAll(std::array{std::move(fieldsReady), pushEvents.communicated, std::move(currentReset)}));
             (*currentBackground)(currentStep);
             CurrentDeposition{}(currentStep);
             auto currentAdded
-                = (*currentInterpolationAndAdditionToEMF)(asyncContext, pushEvents.communicated, *myFieldSolver);
-            // The following field-solver stage still has a synchronous signature.
+                = (*currentInterpolationAndAdditionToEMF)(asyncContext, caravan::readyEvent(), *myFieldSolver);
             asyncContext.wait(currentAdded);
-            myFieldSolver->update_afterCurrent(currentStep);
+            asyncContext.wait(myFieldSolver->update_afterCurrent(asyncContext, currentAdded, currentStep));
         }
 
         void dumpOneStep(uint32_t currentStep) override

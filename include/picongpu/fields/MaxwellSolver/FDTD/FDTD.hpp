@@ -34,6 +34,8 @@
 #include <cstdint>
 #include <utility>
 
+#include <caravan/core.hpp>
+
 namespace picongpu
 {
     namespace fields
@@ -67,9 +69,12 @@ namespace picongpu
                  *
                  * @param currentStep index of the current time iteration
                  */
-                void update_beforeCurrent(uint32_t const currentStep)
+                caravan::Event update_beforeCurrent(
+                    caravan::ControlContext& context,
+                    caravan::Event previous,
+                    uint32_t const currentStep)
                 {
-                    this->updateBeforeCurrent(static_cast<float_X>(currentStep));
+                    return this->updateBeforeCurrent(context, std::move(previous), static_cast<float_X>(currentStep));
                 }
 
                 /** Add contribution of FieldJ in the given area according to Ampere's law
@@ -96,9 +101,12 @@ namespace picongpu
                  *
                  * @param currentStep index of the current time iteration
                  */
-                void update_afterCurrent(uint32_t const currentStep)
+                caravan::Event update_afterCurrent(
+                    caravan::ControlContext& context,
+                    caravan::Event previous,
+                    uint32_t const currentStep)
                 {
-                    this->updateAfterCurrent(static_cast<float_X>(currentStep));
+                    return this->updateAfterCurrent(context, std::move(previous), static_cast<float_X>(currentStep));
                 }
 
                 //! Get string properties
@@ -118,7 +126,7 @@ namespace picongpu
                  * Synchronizes simulation data, meaning accessing (host side) data
                  * will return up-to-date values.
                  */
-                void synchronize() override {};
+                void synchronize() {};
 
                 /**
                  * Return the globally unique identifier for this simulation data.

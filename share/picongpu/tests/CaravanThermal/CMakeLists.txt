@@ -50,4 +50,27 @@ if(BUILD_TESTING)
                 WORKING_DIRECTORY "${work_dir}"
         )
     endforeach()
+
+    # Real periodic multi-rank halo exchange: 2 ranks along x at a valid decomposition.
+    set(work_dir "${CMAKE_BINARY_DIR}/smoke-two-steps-two-ranks")
+    file(MAKE_DIRECTORY "${work_dir}")
+    add_test(
+        NAME thermal-caravan-smoke-two-steps-two-ranks
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" ${MPIEXEC_PREFLAGS} ${MPIEXEC_NUMPROC_FLAG} 2
+            "${PICONGPU_THERMAL_EXECUTABLE}"
+            -d 2 1 1
+            -g 64 32 32
+            -s 2
+            --periodic 1 1 1
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        thermal-caravan-smoke-two-steps-two-ranks
+        PROPERTIES
+            LABELS "caravan;thermal;smoke;multi-rank"
+            TIMEOUT 300
+            PROCESSORS 2
+            WORKING_DIRECTORY "${work_dir}"
+    )
 endif()

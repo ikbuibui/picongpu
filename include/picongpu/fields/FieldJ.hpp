@@ -128,11 +128,19 @@ namespace picongpu
         //! Get text name
         static std::string getName();
 
-        /** Assign the given value to elements
+        /** Start a device fill of all current values after preceding writers.
          *
-         * @param value value to assign all elements to
+         * The returned event completes the fill; J writers must depend on it. The
+         * field, its buffer, and the device context must outlive completion.
+         *
+         * @param context simulation-owned operation scope
+         * @param value value to assign all device elements to
+         * @param previous completion of prior conflicting access
          */
-        void assign(ValueType value);
+        [[nodiscard]] caravan::Event assign(
+            caravan::ControlContext& context,
+            ValueType value,
+            caravan::Event previous = {});
 
     private:
         //! Host-device buffer for current density values

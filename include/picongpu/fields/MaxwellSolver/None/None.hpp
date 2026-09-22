@@ -51,8 +51,12 @@ namespace picongpu
                 {
                 }
 
-                void update_beforeCurrent(uint32_t)
+                caravan::Event update_beforeCurrent(
+                    caravan::ControlContext&,
+                    caravan::Event previous,
+                    uint32_t)
                 {
+                    return previous;
                 }
 
                 template<uint32_t T_area, typename T_CurrentInterpolation>
@@ -61,8 +65,12 @@ namespace picongpu
                     return caravan::whenAll();
                 }
 
-                void update_afterCurrent(uint32_t)
+                caravan::Event update_afterCurrent(
+                    caravan::ControlContext&,
+                    caravan::Event previous,
+                    uint32_t)
                 {
+                    return previous;
                 }
 
                 static pmacc::traits::StringProperty getStringProperties()
@@ -80,7 +88,7 @@ namespace picongpu
                  * Synchronizes simulation data, meaning accessing (host side) data
                  * will return up-to-date values.
                  */
-                void synchronize() override {};
+                void synchronize() {};
 
                 /**
                  * Return the globally unique identifier for this simulation data.

@@ -196,13 +196,14 @@ namespace picongpu
         return "J";
     }
 
-    void FieldJ::assign(ValueType value)
+    caravan::Event FieldJ::assign(caravan::ControlContext& context, ValueType value, caravan::Event previous)
     {
-        // Migration blocker (deferred with CurrentReset): this must become a
-        // context-owned lazy fill whose completion feeds the J-writer dependencies
-        // in Simulation::runOneStep(). `setValue` is the removed synchronous API;
-        // do not replace it with a hidden wait or a discarded event here.
-        buffer.getDeviceBuffer().setValue(value);
+        auto& device = Environment<>::get().DeviceContext();
+        return context.spawn(
+            caravan::alpaka::withDevice(
+                device,
+                caravan::asSender(std::move(previous))
+                    | caravan::sequence(buffer.getDeviceBuffer().setValueAsync(value))));
     }
 
 } // namespace picongpu
