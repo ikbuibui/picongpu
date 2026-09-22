@@ -133,7 +133,7 @@ namespace pmacc
              *
              */
             template<class Functor, typename Type, class ReduceMethod>
-            HINLINE auto reduce(Functor, Type* dest, Type const* src, size_t const n, ReduceMethod const)
+            [[nodiscard]] HINLINE auto reduce(Functor, Type* dest, Type const* src, size_t const n, ReduceMethod const)
             {
                 if(!isMPICommInitialized)
                     participate(true);
@@ -177,7 +177,7 @@ namespace pmacc
 
             /** Lazily describe an all-reduce on caller-owned host storage. */
             template<class Functor, typename Type>
-            HINLINE auto reduce(Functor func, Type* dest, Type const* src, size_t const n)
+            [[nodiscard]] HINLINE auto reduce(Functor func, Type* dest, Type const* src, size_t const n)
             {
                 return reduce(func, dest, src, n, ::pmacc::mpi::reduceMethods::AllReduce{});
             }

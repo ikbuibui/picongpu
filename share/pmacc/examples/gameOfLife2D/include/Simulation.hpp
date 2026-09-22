@@ -207,7 +207,7 @@ namespace gol
         void oneStep(uint32_t currentStep, std::unique_ptr<Buffer>& read, std::unique_ptr<Buffer>& write)
         {
             auto communication = read->spawnCommunication(asyncContext);
-            auto core = evo.runAsync<CORE>(
+            auto core = evo.run<CORE>(
                 read->getDeviceBuffer().getOwnedDataBox(),
                 write->getDeviceBuffer().getOwnedDataBox());
 
@@ -215,7 +215,7 @@ namespace gol
                         | caravan::letValue(
                             [&]
                             {
-                                return evo.runAsync<BORDER>(
+                                return evo.run<BORDER>(
                                     read->getDeviceBuffer().getOwnedDataBox(),
                                     write->getDeviceBuffer().getOwnedDataBox());
                             });

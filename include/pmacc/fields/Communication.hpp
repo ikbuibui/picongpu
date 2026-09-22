@@ -17,7 +17,7 @@ namespace pmacc::fields
 {
     /** Describe one lazy field receive/insert branch. */
     template<typename T_Field>
-    auto receiveExchange(T_Field& field, uint32_t exchange)
+    [[nodiscard]] auto receiveExchange(T_Field& field, uint32_t exchange)
     {
         using SuperCellSize = typename T_Field::MappingDesc::SuperCellSize;
         auto& buffer = field.getGridBuffer();
@@ -27,7 +27,7 @@ namespace pmacc::fields
 
     /** Describe one lazy field pack/send branch. */
     template<typename T_Field>
-    auto sendExchange(T_Field& field, uint32_t exchange)
+    [[nodiscard]] auto sendExchange(T_Field& field, uint32_t exchange)
     {
         using SuperCellSize = typename T_Field::MappingDesc::SuperCellSize;
         auto& buffer = field.getGridBuffer();
@@ -40,7 +40,10 @@ namespace pmacc::fields
      * The returned event includes previous, even when this rank has no active exchanges.
      */
     template<typename T_Field>
-    caravan::Event spawnCommunication(caravan::ControlContext& context, T_Field& field, caravan::Event previous = {})
+    [[nodiscard]] caravan::Event spawnCommunication(
+        caravan::ControlContext& context,
+        T_Field& field,
+        caravan::Event previous = {})
     {
         auto& buffer = field.getGridBuffer();
         auto& device = Environment<>::get().DeviceContext();

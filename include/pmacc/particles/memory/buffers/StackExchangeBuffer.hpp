@@ -97,7 +97,8 @@ namespace pmacc
                 stackIndexer.getDeviceBuffer().getDataBox());
         }
 
-        auto resetAsync()
+        /** Reset host-side exchange metadata now; return a sender publishing the zero sizes. */
+        [[nodiscard]] auto reset()
         {
             stack.getDeviceBuffer().setSizeHostSide(0u);
             stackIndexer.getDeviceBuffer().setSizeHostSide(0u);
@@ -110,7 +111,8 @@ namespace pmacc
             return std::move(stackSize) | caravan::sequence(std::move(indexSize));
         }
 
-        auto publishDeviceSizes()
+        /** Return a sender copying the device-side exchange sizes to the host. */
+        [[nodiscard]] auto publishDeviceSizes()
         {
             auto stackSize = pmacc::size(
                 stack.getDeviceBuffer().sizeHostSideBuffer(),

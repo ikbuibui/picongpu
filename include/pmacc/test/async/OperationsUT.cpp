@@ -69,7 +69,7 @@ namespace
 
     [[maybe_unused]] auto compileParticleStackSizes(pmacc::StackExchangeBuffer<int, int, DIM1>& stack)
     {
-        return stack.resetAsync() | caravan::sequence(stack.publishDeviceSizes());
+        return stack.reset() | caravan::sequence(stack.publishDeviceSizes());
     }
 } // namespace
 
@@ -159,7 +159,7 @@ TEST_CASE("DeviceBuffer value fill is a lazy sender", "[async][memory]")
     auto const extent = pmacc::MemSpace<DIM1>{3u};
 
     pmacc::HostDeviceBuffer<int, DIM1> small(extent);
-    auto smallFill = small.getDeviceBuffer().setValueAsync(42);
+    auto smallFill = small.getDeviceBuffer().setValue(42);
     static_assert(caravan::Sender<decltype(smallFill)>);
     caravan::syncWait(caravan::alpaka::withDevice(device, std::move(smallFill)));
     caravan::syncWait(caravan::alpaka::withDevice(device, small.deviceToHost()));
@@ -170,7 +170,7 @@ TEST_CASE("DeviceBuffer value fill is a lazy sender", "[async][memory]")
     LargeValue value{};
     value.values[0] = 17;
     value.values[39] = 23;
-    caravan::syncWait(caravan::alpaka::withDevice(device, large.getDeviceBuffer().setValueAsync(value)));
+    caravan::syncWait(caravan::alpaka::withDevice(device, large.getDeviceBuffer().setValue(value)));
     caravan::syncWait(caravan::alpaka::withDevice(device, large.deviceToHost()));
     for(size_t i = 0u; i < 3u; ++i)
     {

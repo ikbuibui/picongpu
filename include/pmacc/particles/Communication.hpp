@@ -30,7 +30,7 @@ namespace pmacc::particles
             template<typename T_Receiver>
             class Operation
             {
-                using InsertSender = decltype(std::declval<T_Particles&>().insertParticlesAsync(
+                using InsertSender = decltype(std::declval<T_Particles&>().insertParticles(
                     std::declval<uint32_t>(),
                     std::declval<size_t>()));
 
@@ -54,7 +54,7 @@ namespace pmacc::particles
                         return;
                     }
                     m_insert.emplace(
-                        m_sender.particles.insertParticlesAsync(m_sender.exchange, m_sender.count),
+                        m_sender.particles.insertParticles(m_sender.exchange, m_sender.count),
                         m_receiver);
                     m_insert->start();
                 }
@@ -78,14 +78,14 @@ namespace pmacc::particles
     } // namespace detail
 
     template<typename T_Particles>
-    auto sendChunks(T_Particles& particles, uint32_t exchange)
+    [[nodiscard]] auto sendChunks(T_Particles& particles, uint32_t exchange)
     {
         return caravan::repeatUntil(
             [&particles, exchange, retries = size_t{0u}, lastSize = size_t{0u}]() mutable
             {
                 auto const maxSize
                     = particles.getParticlesBuffer().getSendExchangeStack(exchange).getMaxParticlesCount();
-                return particles.copyGuardToExchangeAsync(exchange)
+                return particles.copyGuardToExchange(exchange)
                        | caravan::letValue(
                            [&particles, exchange, maxSize, &lastSize]
                            {
@@ -117,7 +117,7 @@ namespace pmacc::particles
     }
 
     template<typename T_Particles>
-    auto receiveChunks(T_Particles& particles, uint32_t exchange)
+    [[nodiscard]] auto receiveChunks(T_Particles& particles, uint32_t exchange)
     {
         return caravan::repeatUntil(
             [&particles, exchange]
@@ -141,7 +141,7 @@ namespace pmacc::particles
 
     /** Eager runtime-sized adapter for all particle exchange directions. */
     template<typename T_Particles>
-    caravan::Event spawnCommunication(
+    [[nodiscard]] caravan::Event spawnCommunication(
         caravan::ControlContext& context,
         T_Particles& particles,
         caravan::Event previous = {})
@@ -174,7 +174,7 @@ namespace pmacc::particles
                     caravan::alpaka::withDevice(
                         device,
                         caravan::asSender(previous)
-                            | caravan::sequence(HandleNotExchanged{}.handleOutgoingAsync(particles, exchange)))));
+                            | caravan::sequence(HandleNotExchanged{}.handleOutgoing(particles, exchange)))));
 
             if(buffer.hasReceiveExchange(exchange))
             {
@@ -192,14 +192,14 @@ namespace pmacc::particles
                     caravan::alpaka::withDevice(
                         device,
                         caravan::asSender(previous)
-                            | caravan::sequence(HandleNotExchanged{}.handleIncomingAsync(particles, exchange)))));
+                            | caravan::sequence(HandleNotExchanged{}.handleIncoming(particles, exchange)))));
         }
 
         auto received = caravan::whenAll(receives);
         auto filled = context.spawn(
             caravan::alpaka::withDevice(
                 device,
-                caravan::asSender(std::move(received)) | caravan::sequence(particles.fillBorderGapsAsync())));
+                caravan::asSender(std::move(received)) | caravan::sequence(particles.fillBorderGaps())));
         sends.push_back(std::move(filled));
         return caravan::whenAll(sends);
     }

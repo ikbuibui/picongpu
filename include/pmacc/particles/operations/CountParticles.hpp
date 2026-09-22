@@ -128,7 +128,11 @@ namespace pmacc
          * @return lazy sender yielding the number of particles in the defined area
          */
         template<uint32_t AREA, class PBuffer, class Filter, class CellDesc, typename T_ParticleFilter>
-        static auto countAsync(PBuffer& buffer, CellDesc cellDescription, Filter filter, T_ParticleFilter& parFilter)
+        [[nodiscard]] static auto count(
+            PBuffer& buffer,
+            CellDesc cellDescription,
+            Filter filter,
+            T_ParticleFilter& parFilter)
         {
             auto counter = std::make_shared<GridBuffer<uint64_cu, DIM1>>(DataSpace<DIM1>(1));
             auto const mapper = makeAreaMapper<AREA>(cellDescription);
@@ -157,9 +161,13 @@ namespace pmacc
          * @return lazy sender yielding the number of particles in the defined area
          */
         template<class PBuffer, class Filter, class CellDesc, typename T_ParticleFilter>
-        static auto countAsync(PBuffer& buffer, CellDesc cellDescription, Filter filter, T_ParticleFilter& parFilter)
+        [[nodiscard]] static auto count(
+            PBuffer& buffer,
+            CellDesc cellDescription,
+            Filter filter,
+            T_ParticleFilter& parFilter)
         {
-            return pmacc::CountParticles::countAsync<CORE + BORDER + GUARD>(
+            return pmacc::CountParticles::count<CORE + BORDER + GUARD>(
                 buffer,
                 cellDescription,
                 filter,
@@ -179,7 +187,7 @@ namespace pmacc
          * @return lazy sender yielding the number of particles in the defined area
          */
         template<uint32_t AREA, class PBuffer, class CellDesc, class Space, typename T_ParticleFilter>
-        static auto countAsync(
+        [[nodiscard]] static auto count(
             PBuffer& buffer,
             CellDesc cellDescription,
             Space const& origin,
@@ -190,7 +198,7 @@ namespace pmacc
             using MyParticleFilter = typename FilterFactory<usedFilters>::FilterType;
             MyParticleFilter filter;
             filter.setWindowPosition(origin, size);
-            return pmacc::CountParticles::countAsync<AREA>(buffer, cellDescription, filter, parFilter);
+            return pmacc::CountParticles::count<AREA>(buffer, cellDescription, filter, parFilter);
         }
 
         /** Get particle count
@@ -204,14 +212,14 @@ namespace pmacc
          * @return lazy sender yielding the number of particles in the defined area
          */
         template<class PBuffer, class CellDesc, class Space, typename T_ParticleFilter>
-        static auto countAsync(
+        [[nodiscard]] static auto count(
             PBuffer& buffer,
             CellDesc cellDescription,
             Space const& origin,
             Space const& size,
             T_ParticleFilter& parFilter)
         {
-            return pmacc::CountParticles::countAsync<CORE + BORDER + GUARD>(
+            return pmacc::CountParticles::count<CORE + BORDER + GUARD>(
                 buffer,
                 cellDescription,
                 origin,

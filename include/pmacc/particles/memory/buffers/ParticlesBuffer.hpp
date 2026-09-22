@@ -154,8 +154,12 @@ namespace pmacc
             superCells = std::make_unique<GridBuffer<SuperCellType, DIM>>(superCellsCount);
         }
 
-        /** Lazily initialize host and device supercell storage. */
-        auto resetAsync()
+        /** Lazily initialize host and device supercell storage, returning a sender.
+         *
+         * This only zeroes storage; it does not traverse or delete live particle frames.
+         * Use ParticlesBase::reset() to delete live particles.
+         */
+        [[nodiscard]] auto reset()
         {
             auto host = superCells->getHostBuffer().getOwnedAlpakaView();
             auto device = superCells->getDeviceBuffer().getOwnedAlpakaView();
@@ -282,12 +286,12 @@ namespace pmacc
             exchangeMemoryIndexer->setReceiveCompletion(exchange, std::move(completion));
         }
 
-        auto sendParticles(uint32_t exchange)
+        [[nodiscard]] auto sendParticles(uint32_t exchange)
         {
             return caravan::whenAll(framesExchanges->send(exchange), exchangeMemoryIndexer->send(exchange));
         }
 
-        auto receiveParticles(uint32_t exchange)
+        [[nodiscard]] auto receiveParticles(uint32_t exchange)
         {
             return caravan::whenAll(framesExchanges->receive(exchange), exchangeMemoryIndexer->receive(exchange))
                    | caravan::then([](auto&&...) {});

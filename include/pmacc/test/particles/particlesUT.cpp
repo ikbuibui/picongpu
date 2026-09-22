@@ -27,6 +27,7 @@
 #include <pmacc/HandleGuardRegion.hpp>
 #include <pmacc/fields/Communication.hpp>
 #include <pmacc/particles/Communication.hpp>
+#include <pmacc/particles/policies/DeleteParticles.hpp>
 #include <pmacc/particles/policies/DoNothing.hpp>
 
 #include <vector>
@@ -166,20 +167,20 @@ namespace
             return buffer;
         }
 
-        auto copyGuardToExchangeAsync(uint32_t)
+        auto copyGuardToExchange(uint32_t)
         {
             buffer.sendSize = buffer.sendChunks.at(buffer.sendChunk++);
             return caravan::asSender(caravan::readyEvent());
         }
 
-        auto insertParticlesAsync(uint32_t, size_t count)
+        auto insertParticles(uint32_t, size_t count)
         {
             inserted += count;
             insertedChunks.push_back(count);
             return caravan::asSender(caravan::readyEvent());
         }
 
-        auto fillBorderGapsAsync()
+        auto fillBorderGaps()
         {
             return caravan::alpaka::submit([this](auto&) { gapsFilled = true; });
         }
@@ -188,6 +189,17 @@ namespace
         size_t inserted = 0u;
         std::vector<size_t> insertedChunks;
         bool gapsFilled = false;
+    };
+
+    /** Mock particles recording guard deletions initiated by a policy. */
+    struct PolicyMockParticles
+    {
+        int deletions = 0;
+
+        auto deleteGuardParticles(int32_t)
+        {
+            return caravan::alpaka::submit([this](auto&) { ++deletions; });
+        }
     };
 } // namespace
 
@@ -319,4 +331,28 @@ TEST_CASE("Particle exchange storage is reused only after the previous exchange"
     context.wait(second);
     CHECK(particles.buffer.sendChunk == 4u);
     CHECK(particles.inserted == 4u);
+}
+
+TEST_CASE("Guard region policies return lazy senders", "[particles][policies]")
+{
+    using pmacc::particles::policies::DeleteParticles;
+    using pmacc::particles::policies::DoNothing;
+
+    auto& device = pmacc::Environment<>::get().DeviceContext();
+    PolicyMockParticles particles;
+
+    auto doNothingOutgoing = DoNothing{}.handleOutgoing(particles, 1);
+    auto doNothingIncoming = DoNothing{}.handleIncoming(particles, 1);
+    static_assert(caravan::Sender<decltype(doNothingOutgoing)>);
+    static_assert(caravan::Sender<decltype(doNothingIncoming)>);
+    CHECK(particles.deletions == 0);
+
+    auto deletion = DeleteParticles{}.handleOutgoing(particles, 1);
+    static_assert(caravan::Sender<decltype(deletion)>);
+    static_assert(caravan::Sender<decltype(DeleteParticles{}.handleIncoming(particles, 1))>);
+    // Deletion is deferred: constructing the sender must not perform it.
+    CHECK(particles.deletions == 0);
+
+    caravan::syncWait(caravan::alpaka::withDevice(device, std::move(deletion)));
+    CHECK(particles.deletions == 1);
 }

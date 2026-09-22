@@ -74,7 +74,7 @@ namespace picongpu::fields::detail
                 auto& deviceBuffer = buffer.getDeviceBuffer();
                 deviceBuffer.setSizeHostSide(deviceBuffer.capacityND().productOfComponents());
                 auto& device = pmacc::Environment<>::get().DeviceContext();
-                return caravan::alpaka::withDevice(device, deviceBuffer.setValueAsync(zero));
+                return caravan::alpaka::withDevice(device, deviceBuffer.setValue(zero));
             }));
     }
 } // namespace picongpu::fields::detail

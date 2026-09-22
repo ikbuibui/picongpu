@@ -398,7 +398,7 @@ namespace picongpu
         T_MapperFactory const& mapperFactory,
         bool const onlyProcessMustShiftSupercells)
     {
-        return ParticlesBaseType::shiftParticlesAsync(mapperFactory, onlyProcessMustShiftSupercells);
+        return ParticlesBaseType::shiftParticles(mapperFactory, onlyProcessMustShiftSupercells);
     }
 
     template<typename T_Name, typename T_Flags, typename T_Attributes>

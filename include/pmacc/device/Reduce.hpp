@@ -70,7 +70,7 @@ namespace pmacc
              * must not overlap because they share its scratch buffer.
              */
             template<class Functor, typename Src>
-            HINLINE auto reduce(Functor func, Src src, uint32_t n)
+            [[nodiscard]] HINLINE auto reduce(Functor func, Src src, uint32_t n)
             {
                 /* - the result of a functor can be a reference or a const value
                  * - it is not allowed to create const or reference memory

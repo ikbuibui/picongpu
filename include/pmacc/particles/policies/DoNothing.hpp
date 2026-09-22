@@ -34,24 +34,16 @@ namespace pmacc
             //! Policy for HandleGuardParticles that does nothing
             struct DoNothing
             {
+                /** Empty sender for the outgoing direction. */
                 template<typename T_Particles>
-                void handleOutgoing(T_Particles& par, int32_t direction) const
-                {
-                }
-
-                template<typename T_Particles>
-                void handleIncoming(T_Particles& par, int32_t direction) const
-                {
-                }
-
-                template<typename T_Particles>
-                auto handleOutgoingAsync(T_Particles&, int32_t) const
+                [[nodiscard]] auto handleOutgoing(T_Particles&, int32_t) const
                 {
                     return caravan::alpaka::submit([](auto&) {});
                 }
 
+                /** Empty sender for the incoming direction. */
                 template<typename T_Particles>
-                auto handleIncomingAsync(T_Particles&, int32_t) const
+                [[nodiscard]] auto handleIncoming(T_Particles&, int32_t) const
                 {
                     return caravan::alpaka::submit([](auto&) {});
                 }

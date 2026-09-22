@@ -16,7 +16,7 @@ namespace pmacc
 {
     /** Lazily copy a PMacc buffer's current size between host/device size storage. */
     template<typename T_Queue, typename T_Destination, typename T_Source>
-    auto size(T_Queue& queue, T_Destination destination, T_Source source)
+    [[nodiscard]] auto size(T_Queue& queue, T_Destination destination, T_Source source)
     {
         using Source = std::remove_cvref_t<decltype(caravan::unwrap(source))>;
         return caravan::alpaka::copy(
@@ -28,7 +28,7 @@ namespace pmacc
 
     /** Queue-free lazy size copy; withDevice supplies the managed queue context. */
     template<typename T_Destination, typename T_Source>
-    auto size(T_Destination destination, T_Source source)
+    [[nodiscard]] auto size(T_Destination destination, T_Source source)
     {
         using Source = std::remove_cvref_t<decltype(caravan::unwrap(source))>;
         return caravan::alpaka::copy(

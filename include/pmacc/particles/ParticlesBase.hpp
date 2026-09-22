@@ -93,42 +93,45 @@ namespace pmacc
 
         /** Lazily shift particles in an area defined by a mapper factory. */
         template<uint32_t T_area>
-        auto shiftParticlesAsync(bool onlyProcessMustShiftSupercells)
+        [[nodiscard]] auto shiftParticles(bool onlyProcessMustShiftSupercells)
         {
-            return shiftParticlesAsync(StrideAreaMapperFactory<T_area, 3>{}, onlyProcessMustShiftSupercells);
+            return shiftParticles(StrideAreaMapperFactory<T_area, 3>{}, onlyProcessMustShiftSupercells);
         }
 
         template<typename T_MapperFactory>
-        auto shiftParticlesAsync(T_MapperFactory const& mapperFactory, bool onlyProcessMustShiftSupercells)
+        [[nodiscard]] auto shiftParticles(T_MapperFactory const& mapperFactory, bool onlyProcessMustShiftSupercells)
         {
-            return shiftParticlesImplAsync(
+            return shiftParticlesImpl(
                 StrideMapperFactory<T_MapperFactory, 3>{mapperFactory},
                 onlyProcessMustShiftSupercells);
         }
 
     public:
+        /** Lazily fill gaps in the area defined by a mapper factory, returning a sender. */
         template<typename T_MapperFactory>
-        auto fillGapsAsync(T_MapperFactory const& mapperFactory)
+        [[nodiscard]] auto fillGaps(T_MapperFactory const& mapperFactory)
         {
             auto const mapper = mapperFactory(this->cellDescription);
             return PMACC_LOCKSTEP_KERNEL(KernelFillGaps{})
                 .config(mapper.getGridDim(), *particlesBuffer)(particlesBuffer->getDeviceParticleBox(), mapper);
         }
 
-        auto fillAllGapsAsync()
+        /** Lazily fill all gaps (core, border and guard), returning a sender. */
+        [[nodiscard]] auto fillAllGaps()
         {
-            return fillGapsAsync(AreaMapperFactory<CORE + BORDER + GUARD>{});
+            return fillGaps(AreaMapperFactory<CORE + BORDER + GUARD>{});
         }
 
-        auto fillBorderGapsAsync()
+        /** Lazily fill border gaps, returning a sender. */
+        [[nodiscard]] auto fillBorderGaps()
         {
-            return fillGapsAsync(AreaMapperFactory<BORDER>{});
+            return fillGaps(AreaMapperFactory<BORDER>{});
         }
 
-        auto deleteGuardParticlesAsync(uint32_t exchangeType);
+        [[nodiscard]] auto deleteGuardParticles(uint32_t exchangeType);
 
         template<uint32_t T_area>
-        auto deleteParticlesInAreaAsync();
+        [[nodiscard]] auto deleteParticlesInArea();
 
         /** copy guard particles to intermediate exchange buffer
          *
@@ -139,9 +142,9 @@ namespace pmacc
          * Call fillAllGaps afterwards if you need a valid number of particles
          * and a contiguously filled last frame.
          */
-        auto copyGuardToExchangeAsync(uint32_t exchangeType);
+        [[nodiscard]] auto copyGuardToExchange(uint32_t exchangeType);
 
-        auto insertParticlesAsync(uint32_t exchangeType, size_t numParticles);
+        [[nodiscard]] auto insertParticles(uint32_t exchangeType, size_t numParticles);
 
         ParticlesBoxType getDeviceParticlesBox()
         {
@@ -161,10 +164,14 @@ namespace pmacc
             return *particlesBuffer;
         }
 
-        auto resetAsync()
+        /** Lazily delete all live particles and reset supercell metadata, returning a sender.
+         *
+         * Unlike ParticlesBuffer::reset(), this traverses and deletes live particles.
+         */
+        [[nodiscard]] auto reset()
         {
-            return deleteParticlesInAreaAsync<CORE + BORDER + GUARD>()
-                   | caravan::sequence(particlesBuffer->resetAsync());
+            return deleteParticlesInArea<CORE + BORDER + GUARD>()
+                   | caravan::sequence(particlesBuffer->reset());
         }
 
     private:
@@ -182,7 +189,7 @@ namespace pmacc
          * (optimization to be used with particle pusher) or process all supercells
          */
         template<typename T_StrideMapperFactory>
-        auto shiftParticlesImplAsync(
+        [[nodiscard]] auto shiftParticlesImpl(
             T_StrideMapperFactory const& strideMapperFactory,
             bool onlyProcessMustShiftSupercells)
         {

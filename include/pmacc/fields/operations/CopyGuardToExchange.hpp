@@ -140,8 +140,10 @@ namespace pmacc
                  * @param exchangeType the exchange direction which needs to be copied
                  */
                 template<typename T_SrcBuffer, typename T_SuperCellSize>
-                auto sender(T_SrcBuffer& srcBuffer, T_SuperCellSize const& superCellSize, uint32_t const exchangeType)
-                    const
+                [[nodiscard]] auto sender(
+                    T_SrcBuffer& srcBuffer,
+                    T_SuperCellSize const& superCellSize,
+                    uint32_t const exchangeType) const
                 {
                     boost::ignore_unused(superCellSize);
 

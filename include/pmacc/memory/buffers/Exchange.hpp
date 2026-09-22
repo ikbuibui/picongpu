@@ -259,7 +259,7 @@ namespace pmacc
         };
 
         /** Describe one lazy send. The exchange and borrowed buffers must outlive it. */
-        auto send()
+        [[nodiscard]] auto send()
         {
             auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
             auto source = getDeviceBuffer().getOwnedAlpakaView();
@@ -304,7 +304,7 @@ namespace pmacc
         }
 
         /** Describe one lazy receive followed by size publication and device copies. */
-        auto receive()
+        [[nodiscard]] auto receive()
         {
             auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
             auto destination = getDeviceBuffer().getOwnedAlpakaView();

@@ -474,13 +474,13 @@ namespace pmacc
         }
 
         /** Describe one lazy send for an active exchange direction. */
-        auto send(uint32_t exchange)
+        [[nodiscard]] auto send(uint32_t exchange)
         {
             return sendExchanges[exchange]->send();
         }
 
         /** Describe one lazy receive for an active exchange direction. */
-        auto receive(uint32_t exchange)
+        [[nodiscard]] auto receive(uint32_t exchange)
         {
             return receiveExchanges[exchange]->receive();
         }
@@ -489,7 +489,7 @@ namespace pmacc
          *
          * The returned event includes previous, even when this rank has no active exchanges.
          */
-        caravan::Event spawnCommunication(caravan::ControlContext& context, caravan::Event previous = {})
+        [[nodiscard]] caravan::Event spawnCommunication(caravan::ControlContext& context, caravan::Event previous = {})
         {
             std::vector<caravan::Event> branches;
             branches.reserve(maxExchange * 2u + 1u);

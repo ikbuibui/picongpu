@@ -147,8 +147,8 @@ namespace pmacc
             return caravan::retain(getDataBox(), getOwnedAlpakaView());
         }
 
-        /** Lazily fill every current element with a value. */
-        auto setValueAsync(T_Type const& value)
+        /** Lazily fill every current element with a value, returning a sender. */
+        [[nodiscard]] auto setValue(T_Type const& value)
         {
             auto const areaSize = MemSpace<T_dim>(this->sizeND(this->size()));
             auto gridSize = areaSize;

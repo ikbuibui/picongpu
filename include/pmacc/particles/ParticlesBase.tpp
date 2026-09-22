@@ -34,7 +34,7 @@
 namespace pmacc
 {
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
-    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::deleteGuardParticlesAsync(
+    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::deleteGuardParticles(
         uint32_t exchangeType)
     {
         ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
@@ -44,7 +44,7 @@ namespace pmacc
 
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
     template<uint32_t T_area>
-    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::deleteParticlesInAreaAsync()
+    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::deleteParticlesInArea()
     {
         auto const mapper = makeAreaMapper<T_area>(this->cellDescription);
         return PMACC_LOCKSTEP_KERNEL(KernelDeleteParticles{})
@@ -52,12 +52,12 @@ namespace pmacc
     }
 
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
-    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::copyGuardToExchangeAsync(
+    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::copyGuardToExchange(
         uint32_t exchangeType)
     {
         ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
         auto stack = particlesBuffer->getSendExchangeStack(exchangeType);
-        auto reset = stack.resetAsync();
+        auto reset = stack.reset();
         auto copy = PMACC_LOCKSTEP_KERNEL(KernelCopyGuardToExchange{})
                         .config(mapper.getGridDim(), *particlesBuffer)(
                             particlesBuffer->getDeviceParticleBox(),
@@ -67,7 +67,7 @@ namespace pmacc
     }
 
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
-    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::insertParticlesAsync(
+    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::insertParticles(
         uint32_t exchangeType,
         size_t numParticles)
     {

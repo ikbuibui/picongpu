@@ -148,7 +148,7 @@ namespace pmacc
                  * @param exchangeType the exchange direction which needs to be copied
                  */
                 template<typename T_DestBuffer, typename T_SuperCellSize>
-                auto sender(
+                [[nodiscard]] auto sender(
                     T_DestBuffer& destBuffer,
                     T_SuperCellSize const& superCellSize,
                     uint32_t const exchangeType) const

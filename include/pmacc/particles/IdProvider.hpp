@@ -73,7 +73,7 @@ namespace pmacc
         };
 
         /** Return a lazy copy of the current device state to the host. */
-        auto synchronize()
+        [[nodiscard]] auto synchronize()
         {
             return idBuffer.deviceToHost();
         }
@@ -95,7 +95,7 @@ namespace pmacc
         }
 
         /** Lazily allocate and fetch one id. */
-        auto getNewIdHost()
+        [[nodiscard]] auto getNewIdHost()
         {
             auto newIdBuffer = std::make_shared<HostDeviceBuffer<uint64_t, 1>>(DataSpace<1>{1});
             auto& deviceBuffer = newIdBuffer->getDeviceBuffer();
@@ -118,7 +118,7 @@ namespace pmacc
         }
 
         /** Return a lazy copy of the host state to the device. */
-        auto initialize()
+        [[nodiscard]] auto initialize()
         {
             return idBuffer.hostToDevice();
         }

@@ -203,7 +203,7 @@ namespace picongpu
             caravan::alpaka::withDevice(
                 device,
                 caravan::asSender(std::move(previous))
-                    | caravan::sequence(buffer.getDeviceBuffer().setValueAsync(value))));
+                    | caravan::sequence(buffer.getDeviceBuffer().setValue(value))));
     }
 
 } // namespace picongpu

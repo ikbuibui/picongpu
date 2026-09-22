@@ -36,25 +36,16 @@ namespace pmacc
              */
             struct DeleteParticles
             {
-                template<class T_Particles>
-                void handleOutgoing(T_Particles& par, int32_t direction) const
-                {
-                    par.deleteGuardParticles(direction);
-                }
-
-                template<class T_Particles>
-                void handleIncoming(T_Particles& par, int32_t direction) const
-                {
-                }
-
+                /** Lazily delete particles in the guard of the given direction, returning a sender. */
                 template<typename T_Particles>
-                auto handleOutgoingAsync(T_Particles& par, int32_t direction) const
+                [[nodiscard]] auto handleOutgoing(T_Particles& par, int32_t direction) const
                 {
-                    return par.deleteGuardParticlesAsync(direction);
+                    return par.deleteGuardParticles(direction);
                 }
 
+                /** Empty sender for the incoming direction. */
                 template<typename T_Particles>
-                auto handleIncomingAsync(T_Particles&, int32_t) const
+                [[nodiscard]] auto handleIncoming(T_Particles&, int32_t) const
                 {
                     return caravan::alpaka::submit([](auto&) {});
                 }

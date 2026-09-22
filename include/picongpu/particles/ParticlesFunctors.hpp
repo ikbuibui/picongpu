@@ -89,7 +89,7 @@ namespace picongpu
             {
                 DataConnector& dc = Environment<>::get().DataConnector();
                 auto species = dc.get<SpeciesType>(FrameType::getName());
-                return species->getParticlesBuffer().resetAsync();
+                return species->getParticlesBuffer().reset();
             }
         };
 
@@ -141,7 +141,7 @@ namespace picongpu
                 return context.spawn(caravan::alpaka::withDevice(
                     device,
                     caravan::asSender(std::move(previous))
-                        | caravan::sequence(species->resetAsync())));
+                        | caravan::sequence(species->reset())));
             }
         };
     } // namespace particles

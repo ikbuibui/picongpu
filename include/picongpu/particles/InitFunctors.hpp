@@ -136,7 +136,7 @@ namespace picongpu
                                     idProvider->getDeviceGenerator(),
                                     mapper);
 
-                return std::move(fill) | caravan::sequence(speciesPtr->fillAllGapsAsync());
+                return std::move(fill) | caravan::sequence(speciesPtr->fillAllGaps());
             }
         };
 
@@ -250,7 +250,7 @@ namespace picongpu
             {
                 DataConnector& dc = Environment<>::get().DataConnector();
                 auto speciesPtr = dc.get<SpeciesType>(FrameType::getName());
-                return speciesPtr->fillAllGapsAsync();
+                return speciesPtr->fillAllGaps();
             }
         };
 

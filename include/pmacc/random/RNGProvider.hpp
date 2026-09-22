@@ -75,7 +75,7 @@ namespace pmacc
              *
              * @param seed base seed to be used
              */
-            auto init(uint32_t seed);
+            [[nodiscard]] auto init(uint32_t seed);
 
             /**
              * Factory method
@@ -101,9 +101,9 @@ namespace pmacc
             static std::string getName();
             SimulationDataId getUniqueId() override;
 
-            auto synchronize();
+            [[nodiscard]] auto synchronize();
 
-            auto syncToDevice();
+            [[nodiscard]] auto syncToDevice();
 
             /**
              * Return a reference to the buffer containing the states

@@ -93,7 +93,7 @@ namespace picongpu
                 using Manipulator = manipulators::unary::FreeTotalCellOffset<AbsorbParticleIfOutsideAnyBoundary>;
                 auto manipulated = particles::manipulate<Manipulator, T_Species>(currentStep);
                 // Fill gaps to finalize deletion
-                return std::move(manipulated) | caravan::sequence(species.fillAllGapsAsync());
+                return std::move(manipulated) | caravan::sequence(species.fillAllGaps());
             }
 
         } // namespace boundary

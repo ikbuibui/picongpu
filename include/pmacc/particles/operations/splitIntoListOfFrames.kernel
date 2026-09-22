@@ -282,7 +282,7 @@ namespace pmacc
                 typename T_Space,
                 typename T_Identifier,
                 typename T_CellDescription>
-            HINLINE auto splitIntoListOfFramesAsync(
+            [[nodiscard]] HINLINE auto splitIntoListOfFrames(
                 T_DestSpecies& destSpecies,
                 T_SrcFrame srcFrame,
                 uint32_t numParticles,
@@ -310,7 +310,7 @@ namespace pmacc
                                      cellOffsetToTotalDomain,
                                      domainCellIdxIdentifier,
                                      cellDesc);
-                auto fill = destSpecies.fillAllGapsAsync();
+                auto fill = destSpecies.fillAllGaps();
                 auto copy = counterBuffer->deviceToHost();
                 return std::move(initialize) | caravan::alpaka::sequence(std::move(split))
                        | caravan::alpaka::sequence(std::move(fill)) | caravan::alpaka::sequence(std::move(copy))

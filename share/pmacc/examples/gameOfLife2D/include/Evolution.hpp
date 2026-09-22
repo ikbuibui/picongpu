@@ -185,7 +185,7 @@ namespace gol
         }
 
         template<typename T_Write>
-        auto initEvolution(T_Write write, float const fraction)
+        [[nodiscard]] auto initEvolution(T_Write write, float const fraction)
         {
             AreaMapping<CORE + BORDER, T_MappingDesc> mapper(*mapping);
 
@@ -199,7 +199,7 @@ namespace gol
         }
 
         template<uint32_t Area, typename T_Read, typename T_Write>
-        auto runAsync(T_Read read, T_Write write)
+        [[nodiscard]] auto run(T_Read read, T_Write write)
         {
             AreaMapping<Area, T_MappingDesc> mapper(*mapping);
             return PMACC_LOCKSTEP_KERNEL(kernel::Evolution{})

@@ -102,7 +102,7 @@ namespace pmacc
             return this->coordinates;
         }
 
-        auto send(uint32_t ex, char const* sendData, size_t sendBytes, uint32_t tag)
+        [[nodiscard]] auto send(uint32_t ex, char const* sendData, size_t sendBytes, uint32_t tag)
         {
             return caravan::mpi::send(
                 *mpiContext,
@@ -112,7 +112,7 @@ namespace pmacc
                 communicatorId);
         }
 
-        auto receive(uint32_t ex, char* receiveData, size_t receiveBytes, uint32_t tag)
+        [[nodiscard]] auto receive(uint32_t ex, char* receiveData, size_t receiveBytes, uint32_t tag)
         {
             return caravan::mpi::receive(
                 *mpiContext,

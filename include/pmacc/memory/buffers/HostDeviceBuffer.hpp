@@ -90,10 +90,10 @@ namespace pmacc
         HINLINE DBuffer& getDeviceBuffer() const;
 
         /** Return a lazy copy from the internal host buffer to the device buffer. */
-        HINLINE auto hostToDevice();
+        [[nodiscard]] HINLINE auto hostToDevice();
 
         /** Return a lazy copy from the internal device buffer to the host buffer. */
-        HINLINE auto deviceToHost();
+        [[nodiscard]] HINLINE auto deviceToHost();
 
     private:
         std::unique_ptr<HBuffer> hostBuffer;

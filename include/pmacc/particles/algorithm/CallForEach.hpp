@@ -55,7 +55,7 @@ namespace pmacc
                  * @param currentStep current simulation time step
                  * @return lazy sender applying the functor
                  */
-                HINLINE auto operator()(uint32_t const currentStep)
+                [[nodiscard]] HINLINE auto operator()(uint32_t const currentStep)
                 {
                     using Species = typename T_SpeciesOperator::type;
                     using FrameType = typename Species::FrameType;
@@ -65,7 +65,7 @@ namespace pmacc
                     DataConnector& dc = Environment<>::get().DataConnector();
                     auto idProvider = dc.get<IdProvider>("globalId");
                     auto species = dc.get<Species>(FrameType::getName());
-                    return forEachAsync<T_area>(*species, UnaryFunctor(currentStep, idProvider->getDeviceGenerator()));
+                    return forEach<T_area>(*species, UnaryFunctor(currentStep, idProvider->getDeviceGenerator()));
                 }
 
                 /** Operate on the area defined by mapper
@@ -79,7 +79,9 @@ namespace pmacc
                  * @return lazy sender applying the functor
                  */
                 template<typename T_AreaMapperFactory>
-                HINLINE auto operator()(uint32_t const currentStep, T_AreaMapperFactory const& areaMapperFactory)
+                [[nodiscard]] HINLINE auto operator()(
+                    uint32_t const currentStep,
+                    T_AreaMapperFactory const& areaMapperFactory)
                 {
                     using Species = typename T_SpeciesOperator::type;
                     using FrameType = typename Species::FrameType;
@@ -89,7 +91,7 @@ namespace pmacc
                     DataConnector& dc = Environment<>::get().DataConnector();
                     auto idProvider = dc.get<IdProvider>("globalId");
                     auto species = dc.get<Species>(FrameType::getName());
-                    return forEachAsync(
+                    return forEach(
                         *species,
                         UnaryFunctor(currentStep, idProvider->getDeviceGenerator()),
                         areaMapperFactory);
