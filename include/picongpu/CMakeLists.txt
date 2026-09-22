@@ -565,6 +565,16 @@ option(
     OFF
 )
 
+option(
+    PICONGPU_THERMAL_PROBE
+    "Build the test-only Thermal correctness probe (requires PICONGPU_MINIMAL_CARAVAN_THERMAL)"
+    OFF
+)
+
+if(PICONGPU_THERMAL_PROBE AND NOT PICONGPU_MINIMAL_CARAVAN_THERMAL)
+    message(FATAL_ERROR "PICONGPU_THERMAL_PROBE requires PICONGPU_MINIMAL_CARAVAN_THERMAL=ON")
+endif()
+
 if(PICONGPU_MINIMAL_CARAVAN_THERMAL)
     set(MINIMAL_ACCSRCFILES ${ACCSRCFILES})
     set(MINIMAL_SRCFILES ${SRCFILES})
@@ -581,6 +591,9 @@ if(PICONGPU_MINIMAL_CARAVAN_THERMAL)
         PRIVATE pmacc::pmacc
     )
     target_compile_definitions(picongpu-minimal-thermal PRIVATE PICONGPU_MINIMAL_CARAVAN_THERMAL=1)
+    if(PICONGPU_THERMAL_PROBE)
+        target_compile_definitions(picongpu-minimal-thermal PRIVATE PICONGPU_THERMAL_PROBE=1)
+    endif()
 endif()
 
 #PIC_dependency(FFTW3 "FFT library for shadowgraphy plugin" AUTO)

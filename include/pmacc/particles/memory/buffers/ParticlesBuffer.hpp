@@ -146,8 +146,9 @@ namespace pmacc
             , m_deviceHeap(deviceHeap)
             , exchangeMemoryIndexerTag(traits::getUniqueId<uint32_t>())
         {
-            exchangeMemoryIndexer = std::make_unique<GridBuffer<BorderFrameIndex, DIM1>>(DataSpace<DIM1>(0));
-            framesExchanges = std::make_unique<GridBuffer<FrameType, DIM1, FrameTypeBorder>>(DataSpace<DIM1>(0));
+            exchangeMemoryIndexer
+                = std::make_unique<GridBuffer<BorderFrameIndex, DIM1, BorderFrameIndex, DIM>>(DataSpace<DIM1>(0));
+            framesExchanges = std::make_unique<GridBuffer<FrameType, DIM1, FrameTypeBorder, DIM>>(DataSpace<DIM1>(0));
 
             DataSpace<DIM> superCellsCount = gridSize / superCellSize;
 
@@ -238,16 +239,16 @@ namespace pmacc
             return framesExchanges->hasReceiveExchange(ex);
         }
 
-        StackExchangeBuffer<FrameTypeBorder, BorderFrameIndex, DIM - 1> getSendExchangeStack(uint32_t ex)
+        StackExchangeBuffer<FrameTypeBorder, BorderFrameIndex, DIM - 1, DIM> getSendExchangeStack(uint32_t ex)
         {
-            return StackExchangeBuffer<FrameTypeBorder, BorderFrameIndex, DIM - 1>(
+            return StackExchangeBuffer<FrameTypeBorder, BorderFrameIndex, DIM - 1, DIM>(
                 framesExchanges->getSendExchange(ex),
                 exchangeMemoryIndexer->getSendExchange(ex));
         }
 
-        StackExchangeBuffer<FrameTypeBorder, BorderFrameIndex, DIM - 1> getReceiveExchangeStack(uint32_t ex)
+        StackExchangeBuffer<FrameTypeBorder, BorderFrameIndex, DIM - 1, DIM> getReceiveExchangeStack(uint32_t ex)
         {
-            return StackExchangeBuffer<FrameTypeBorder, BorderFrameIndex, DIM - 1>(
+            return StackExchangeBuffer<FrameTypeBorder, BorderFrameIndex, DIM - 1, DIM>(
                 framesExchanges->getReceiveExchange(ex),
                 exchangeMemoryIndexer->getReceiveExchange(ex));
         }
@@ -330,11 +331,11 @@ namespace pmacc
         }
 
     private:
-        std::unique_ptr<GridBuffer<BorderFrameIndex, DIM1>> exchangeMemoryIndexer;
+        std::unique_ptr<GridBuffer<BorderFrameIndex, DIM1, BorderFrameIndex, DIM>> exchangeMemoryIndexer;
 
         std::unique_ptr<GridBuffer<SuperCellType, DIM>> superCells;
         /*GridBuffer for hold borderFrames, we need a own buffer to create first exchanges without core memory*/
-        std::unique_ptr<GridBuffer<FrameType, DIM1, FrameTypeBorder>> framesExchanges;
+        std::unique_ptr<GridBuffer<FrameType, DIM1, FrameTypeBorder, DIM>> framesExchanges;
 
         DataSpace<DIM> superCellSize;
         DataSpace<DIM> gridSize;

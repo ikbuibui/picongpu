@@ -38,7 +38,7 @@ namespace pmacc
      *
      * @tparam FRAME frame datatype
      */
-    template<class FRAME, class FRAMEINDEX, unsigned DIM>
+    template<class FRAME, class FRAMEINDEX, unsigned DIM, unsigned T_CommDim = DIM1>
     class StackExchangeBuffer
     {
     public:
@@ -48,8 +48,11 @@ namespace pmacc
          * If the stack's internal GridBuffer has no sizeOnDevice, no device querys are allowed.
          *
          * @param stack Exchange
+         * @param stackIndexer Exchange for the index data
          */
-        StackExchangeBuffer(Exchange<FRAME, DIM1>& stack, Exchange<FRAMEINDEX, DIM1>& stackIndexer)
+        StackExchangeBuffer(
+            Exchange<FRAME, DIM1, T_CommDim>& stack,
+            Exchange<FRAMEINDEX, DIM1, T_CommDim>& stackIndexer)
             : stack(stack)
             , stackIndexer(stackIndexer)
         {
@@ -164,12 +167,12 @@ namespace pmacc
         }
 
     private:
-        Exchange<FRAME, DIM1>& getExchangeBuffer()
+        Exchange<FRAME, DIM1, T_CommDim>& getExchangeBuffer()
         {
             return stack;
         }
 
-        Exchange<FRAME, DIM1>& stack;
-        Exchange<FRAMEINDEX, DIM1>& stackIndexer;
+        Exchange<FRAME, DIM1, T_CommDim>& stack;
+        Exchange<FRAMEINDEX, DIM1, T_CommDim>& stackIndexer;
     };
 } // namespace pmacc

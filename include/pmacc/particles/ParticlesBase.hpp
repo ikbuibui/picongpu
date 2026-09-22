@@ -144,7 +144,7 @@ namespace pmacc
          */
         [[nodiscard]] auto copyGuardToExchange(uint32_t exchangeType);
 
-        [[nodiscard]] auto insertParticles(uint32_t exchangeType, size_t numParticles);
+        [[nodiscard]] auto insertParticles(uint32_t exchangeType, size_t numIndexEntries);
 
         ParticlesBoxType getDeviceParticlesBox()
         {

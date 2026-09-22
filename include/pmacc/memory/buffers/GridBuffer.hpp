@@ -26,6 +26,7 @@
 #include "pmacc/memory/buffers/Exchange.hpp"
 #include "pmacc/memory/buffers/HostDeviceBuffer.hpp"
 #include "pmacc/memory/dataTypes/Mask.hpp"
+#include "pmacc/traits/NumberOfExchanges.hpp"
 
 #include <algorithm>
 #include <array>
@@ -80,8 +81,11 @@ namespace pmacc
      * @tparam TYPE datatype for internal Host- and DeviceBuffer
      * @tparam DIM dimension of the buffers
      * @tparam BORDERTYPE optional type for border data in the buffers. TYPE is used by default.
+     * @tparam T_CommDim dimension of the communicator used for exchanges. Defaults to DIM.
+     *         One-dimensional exchange buffers inside a higher-dimensional simulation must
+     *         pass the simulation dimension so they use the initialized topology.
      */
-    template<class TYPE, unsigned DIM, class BORDERTYPE = TYPE>
+    template<class TYPE, unsigned DIM, class BORDERTYPE = TYPE, unsigned T_CommDim = DIM>
     class GridBuffer : public HostDeviceBuffer<TYPE, DIM>
     {
         using Parent = HostDeviceBuffer<TYPE, DIM>;
@@ -197,7 +201,7 @@ namespace pmacc
             Mask send = receive.getMirroredMask();
 
 
-            for(uint32_t ex = 1; ex < -12 * (int) DIM + 6 * (int) DIM * (int) DIM + 9; ++ex)
+            for(uint32_t ex = 1; ex < traits::NumberOfExchanges<T_CommDim>::value; ++ex)
             {
                 if(send.isSet(ex))
                 {
@@ -222,7 +226,7 @@ namespace pmacc
                     }
 
                     maxExchange = std::max(maxExchange, ex + 1u);
-                    sendExchanges[ex] = std::make_unique<Exchange<BORDERTYPE, DIM>>(
+                    sendExchanges[ex] = std::make_unique<Exchange<BORDERTYPE, DIM, T_CommDim>>(
                         this->getDeviceBuffer(),
                         gridLayout,
                         guardingCells,
@@ -232,7 +236,7 @@ namespace pmacc
                         sizeOnDeviceSend);
                     ExchangeType recvex = Mask::getMirroredExchangeType(ex);
                     maxExchange = std::max(maxExchange, recvex + 1u);
-                    receiveExchanges[recvex] = std::make_unique<Exchange<BORDERTYPE, DIM>>(
+                    receiveExchanges[recvex] = std::make_unique<Exchange<BORDERTYPE, DIM, T_CommDim>>(
                         this->getDeviceBuffer(),
                         gridLayout,
                         guardingCells,
@@ -307,7 +311,7 @@ namespace pmacc
                 receiveMask = receiveMask + receive;
                 sendMask = this->receiveMask.getMirroredMask();
                 Mask send = receive.getMirroredMask();
-                for(uint32_t ex = 1; ex < 27; ++ex)
+                for(uint32_t ex = 1; ex < traits::NumberOfExchanges<T_CommDim>::value; ++ex)
                 {
                     if(send.isSet(ex))
                     {
@@ -333,7 +337,7 @@ namespace pmacc
 
                         // GridLayout<DIM> memoryLayout(size);
                         maxExchange = std::max(maxExchange, ex + 1u);
-                        sendExchanges[ex] = std::make_unique<Exchange<BORDERTYPE, DIM>>(
+                        sendExchanges[ex] = std::make_unique<Exchange<BORDERTYPE, DIM, T_CommDim>>(
                             /*memoryLayout*/ dataSpace,
                             ex,
                             uniqCommunicationTag,
@@ -341,7 +345,7 @@ namespace pmacc
 
                         ExchangeType recvex = Mask::getMirroredExchangeType(ex);
                         maxExchange = std::max(maxExchange, recvex + 1u);
-                        receiveExchanges[recvex] = std::make_unique<Exchange<BORDERTYPE, DIM>>(
+                        receiveExchanges[recvex] = std::make_unique<Exchange<BORDERTYPE, DIM, T_CommDim>>(
                             /*memoryLayout*/ dataSpace,
                             recvex,
                             uniqCommunicationTag,
@@ -406,7 +410,7 @@ namespace pmacc
          * @param ex the direction to query
          * @return the Exchange for sending data
          */
-        Exchange<BORDERTYPE, DIM>& getSendExchange(uint32_t ex) const
+        Exchange<BORDERTYPE, DIM, T_CommDim>& getSendExchange(uint32_t ex) const
         {
             return *sendExchanges[ex];
         }
@@ -420,7 +424,7 @@ namespace pmacc
          * @param ex the direction to query
          * @return the Exchange for receiving data
          */
-        Exchange<BORDERTYPE, DIM>& getReceiveExchange(uint32_t ex) const
+        Exchange<BORDERTYPE, DIM, T_CommDim>& getReceiveExchange(uint32_t ex) const
         {
             return *receiveExchanges[ex];
         }
@@ -432,7 +436,7 @@ namespace pmacc
          */
         Mask getSendMask() const
         {
-            return (Environment<DIM>::get().GridController().getCommunicationMask() & sendMask);
+            return (Environment<T_CommDim>::get().GridController().getCommunicationMask() & sendMask);
         }
 
         /**
@@ -442,7 +446,7 @@ namespace pmacc
          */
         Mask getReceiveMask() const
         {
-            return (Environment<DIM>::get().GridController().getCommunicationMask() & receiveMask);
+            return (Environment<T_CommDim>::get().GridController().getCommunicationMask() & receiveMask);
         }
 
         /**
@@ -541,11 +545,12 @@ namespace pmacc
         Mask sendMask;
         Mask receiveMask;
 
-        std::unique_ptr<Exchange<BORDERTYPE, DIM>> sendExchanges[27];
-        std::unique_ptr<Exchange<BORDERTYPE, DIM>> receiveExchanges[27];
-        caravan::Event receiveCompletions[27];
-        caravan::Event sendCompletions[27];
-
+        //! Number of exchange slots for the active communicator dimension.
+        static constexpr uint32_t numExchangeSlots = traits::NumberOfExchanges<T_CommDim>::value;
+        std::unique_ptr<Exchange<BORDERTYPE, DIM, T_CommDim>> sendExchanges[numExchangeSlots];
+        std::unique_ptr<Exchange<BORDERTYPE, DIM, T_CommDim>> receiveExchanges[numExchangeSlots];
+        caravan::Event receiveCompletions[numExchangeSlots];
+        caravan::Event sendCompletions[numExchangeSlots];
         uint32_t maxExchange; // use max exchanges and run over the array is faster as use set from stl
     };
 

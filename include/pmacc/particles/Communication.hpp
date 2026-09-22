@@ -48,13 +48,13 @@ namespace pmacc::particles
 
                 void start() & noexcept
                 {
-                    if(m_sender.count == 0u)
+                    if(m_sender.numIndexEntries == 0u)
                     {
                         m_receiver.set_value();
                         return;
                     }
                     m_insert.emplace(
-                        m_sender.particles.insertParticles(m_sender.exchange, m_sender.count),
+                        m_sender.particles.insertParticles(m_sender.exchange, m_sender.numIndexEntries),
                         m_receiver);
                     m_insert->start();
                 }
@@ -73,7 +73,8 @@ namespace pmacc::particles
 
             T_Particles& particles;
             uint32_t exchange;
-            size_t count;
+            //! number of per-supercell exchange-index entries, not the particle payload count
+            size_t numIndexEntries;
         };
     } // namespace detail
 
@@ -128,13 +129,20 @@ namespace pmacc::particles
                        | caravan::letValue(
                            [&particles, exchange, maxSize]
                            {
-                               auto const lastSize = particles.getParticlesBuffer()
-                                                         .getReceiveExchangeStack(exchange)
-                                                         .getHostParticlesCurrentSize();
-                               PMACC_ASSERT(lastSize <= maxSize);
-                               return detail::InsertNonEmptySender<T_Particles>{particles, exchange, lastSize}
-                                      | caravan::then([lastSize, maxSize]
-                                                      { return lastSize == 0u || lastSize < maxSize; });
+                               auto stack
+                                   = particles.getParticlesBuffer().getReceiveExchangeStack(exchange);
+                               /* The insertion kernel is launched with one block per
+                                * exchange-index entry (one per source supercell), so it needs
+                                * the stack-indexer size, not the received particle payload
+                                * size. The payload size still decides whether another chunk
+                                * must be received.
+                                */
+                               auto const payloadCount = stack.getHostParticlesCurrentSize();
+                               auto const indexCount = stack.getHostCurrentSize();
+                               PMACC_ASSERT(payloadCount <= maxSize);
+                               return detail::InsertNonEmptySender<T_Particles>{particles, exchange, indexCount}
+                                      | caravan::then([payloadCount, maxSize]
+                                                      { return payloadCount == 0u || payloadCount < maxSize; });
                            });
             });
     }

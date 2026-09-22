@@ -50,8 +50,11 @@ namespace pmacc
      *
      * @tparam TYPE the datatype for internal buffers
      * @tparam DIM the dimension of the internal buffers
+     * @tparam T_CommDim dimension of the communicator used for the exchange. Defaults to
+     *         DIM; one-dimensional exchange buffers embedded in a higher-dimensional
+     *         simulation must pass the simulation dimension here.
      */
-    template<class TYPE, unsigned DIM>
+    template<class TYPE, unsigned DIM, unsigned T_CommDim = DIM>
     class Exchange
     {
     public:
@@ -261,7 +264,7 @@ namespace pmacc
         /** Describe one lazy send. The exchange and borrowed buffers must outlive it. */
         [[nodiscard]] auto send()
         {
-            auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
+            auto& communicator = Environment<T_CommDim>::get().GridController().getCommunicator();
             auto source = getDeviceBuffer().getOwnedAlpakaView();
             std::optional<decltype(source)> deviceStaging;
             if(hasDeviceDoubleBuffer())
@@ -306,7 +309,7 @@ namespace pmacc
         /** Describe one lazy receive followed by size publication and device copies. */
         [[nodiscard]] auto receive()
         {
-            auto& communicator = Environment<DIM>::get().GridController().getCommunicator();
+            auto& communicator = Environment<T_CommDim>::get().GridController().getCommunicator();
             auto destination = getDeviceBuffer().getOwnedAlpakaView();
             std::optional<decltype(destination)> deviceStaging;
             if(hasDeviceDoubleBuffer())

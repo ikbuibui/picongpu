@@ -69,11 +69,11 @@ namespace pmacc
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
     auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::insertParticles(
         uint32_t exchangeType,
-        size_t numParticles)
+        size_t numIndexEntries)
     {
         ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
         return PMACC_LOCKSTEP_KERNEL(KernelInsertParticles{})
-            .config(numParticles, *particlesBuffer)(
+            .config(numIndexEntries, *particlesBuffer)(
                 particlesBuffer->getDeviceParticleBox(),
                 particlesBuffer->getReceiveExchangeStack(exchangeType).getDeviceExchangePopDataBox(),
                 mapper);

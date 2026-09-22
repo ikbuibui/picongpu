@@ -23,6 +23,9 @@
 #pragma once
 
 #include "picongpu/defines.hpp"
+#if defined(PICONGPU_THERMAL_PROBE)
+#    include "picongpu/thermalProbe/ThermalProbe.hpp"
+#endif
 #include "picongpu/fields/FieldB.hpp"
 #include "picongpu/fields/FieldE.hpp"
 #include "picongpu/fields/FieldJ.hpp"
@@ -511,6 +514,11 @@ namespace picongpu
                 fieldB->spawnCommunication(asyncContext)};
             asyncContext.wait(caravan::whenAll(communications));
 
+#if defined(PICONGPU_THERMAL_PROBE)
+            /* Initialized state: E/B are defined, J is not written until the first step. */
+            thermalProbe::runProbe(asyncContext, cellDescription.get(), step, "init", false, caravan::readyEvent());
+#endif
+
             log<picLog::SIMULATION_STATE>("Starting simulation from timestep 0");
             return step;
         }
@@ -563,6 +571,16 @@ namespace picongpu
             /* Deliberate end-of-step boundary until asynchronous cross-step orchestration is proven. */
             asyncContext.wait(stepComplete);
             lastStepComplete = stepComplete;
+#if defined(PICONGPU_THERMAL_PROBE)
+            /* Completed state after advancing from `currentStep` to `currentStep + 1`. */
+            thermalProbe::runProbe(
+                asyncContext,
+                cellDescription.get(),
+                currentStep + 1u,
+                "step",
+                true,
+                lastStepComplete);
+#endif
         }
 
         void dumpOneStep(uint32_t currentStep) override
