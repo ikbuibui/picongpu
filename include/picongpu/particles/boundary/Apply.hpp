@@ -67,9 +67,10 @@ namespace picongpu
 
             /** Apply boundary conditions to the given species
              *
-             * In this slice only periodic boundaries are supported; unsupported kinds reject at
-             * runtime (and in minimal mode at compile time). The returned event is the given
-             * predecessor, so the boundary stage does not introduce an ordering hazard.
+             * In minimal mode only periodic boundaries are accepted (validated in
+             * `ParticleBoundaries`), for which this is a no-op; unsupported kinds reject.
+             * The returned event is the given predecessor, so the boundary stage does not
+             * introduce an ordering hazard. This is not a migrated general boundary operation.
              *
              * @param context simulation-owned operation scope
              * @param previous completion of the particle push

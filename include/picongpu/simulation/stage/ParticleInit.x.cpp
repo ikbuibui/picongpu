@@ -66,41 +66,6 @@ namespace picongpu::simulation::stage
             }
         };
 
-        /** Initialize a species' supercell/frame storage.
-         *
-         * PMacc allocation does not zero storage; density creation writes into the supercell
-         * list heads, so this reset must complete before the initialization pipeline.
-         */
-        template<typename T_SpeciesType>
-        struct ResetSpeciesStorage
-        {
-            using SpeciesType = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, T_SpeciesType>;
-            using FrameType = typename SpeciesType::FrameType;
-
-            HINLINE auto operator()() const
-            {
-                DataConnector& dc = Environment<>::get().DataConnector();
-                auto species = dc.get<SpeciesType>(FrameType::getName());
-                return species->resetAsync();
-            }
-        };
-
-        /** Initialize supercell storage for every species in order. */
-        template<typename... TSpecies>
-        HINLINE caravan::Event resetSpeciesStorage(
-            caravan::ControlContext& context,
-            pmacc::mp_list<TSpecies...>)
-        {
-            auto& device = Environment<>::get().DeviceContext();
-            caravan::Event previous;
-            (
-                (previous = context.spawn(caravan::alpaka::withDevice(
-                     device,
-                     caravan::asSender(previous) | caravan::sequence(ResetSpeciesStorage<TSpecies>{}())))),
-                ...);
-            return previous;
-        }
-
         /** Sequentially run every initialization functor, each depending on its predecessor.
          *
          * Functors are started eagerly through the context; the returned event is the completion of
@@ -127,9 +92,8 @@ namespace picongpu::simulation::stage
 
     caravan::Event ParticleInit::operator()(caravan::ControlContext& context, uint32_t const step) const
     {
-        /* Zero supercell/frame storage before anything writes into it. */
-        auto previous = particles::resetSpeciesStorage(context, VectorAllSpecies{});
-        previous = particles::runInitPipeline(context, std::move(previous), step, picongpu::particles::InitPipeline{});
+        auto previous
+            = particles::runInitPipeline(context, caravan::readyEvent(), step, picongpu::particles::InitPipeline{});
         /* Remove all particles that are outside the respective boundaries
          * (this can happen if density functor didn't account for it).
          * For the rest of the simulation we can be sure the only external particles just crossed the

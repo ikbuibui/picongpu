@@ -35,6 +35,30 @@
 
 namespace
 {
+    /** Release one pending test gate before its owning ControlContext unwinds. */
+    struct ReleaseGate
+    {
+        caravan::EventSource& source;
+
+        ~ReleaseGate()
+        {
+            source.setReady();
+        }
+    };
+
+    /** Release two pending test gates before their owning ControlContext unwinds. */
+    struct ReleaseGates2
+    {
+        caravan::EventSource& first;
+        caravan::EventSource& second;
+
+        ~ReleaseGates2()
+        {
+            first.setReady();
+            second.setReady();
+        }
+    };
+
     struct MockStack
     {
         size_t getMaxParticlesCount() const
@@ -232,6 +256,7 @@ TEST_CASE("Particle communication waits for its predecessor", "[particles][async
     caravan::ControlContext context;
     MockParticles particles;
     caravan::EventSource push;
+    ReleaseGate release{push};
     auto communication = pmacc::particles::spawnCommunication(context, particles, push.event());
 
     // Nothing may start while the push predecessor is pending.
@@ -254,6 +279,7 @@ TEST_CASE("Independent species communication can advance separately", "[particle
     MockParticles second;
     caravan::EventSource firstPush;
     caravan::EventSource secondPush;
+    ReleaseGates2 release{firstPush, secondPush};
     auto firstCommunication = pmacc::particles::spawnCommunication(context, first, firstPush.event());
     auto secondCommunication = pmacc::particles::spawnCommunication(context, second, secondPush.event());
 
@@ -277,6 +303,7 @@ TEST_CASE("Particle exchange storage is reused only after the previous exchange"
     particles.buffer.receiveChunks = {2u, 0u, 2u, 0u};
     caravan::EventSource firstPush;
     caravan::EventSource secondPush;
+    ReleaseGates2 release{firstPush, secondPush};
     auto first = pmacc::particles::spawnCommunication(context, particles, firstPush.event());
     /* Start the reuse with an already-ready predecessor: it must still wait for the first
      * exchange's buffer-reuse tail before touching the shared exchange storage.

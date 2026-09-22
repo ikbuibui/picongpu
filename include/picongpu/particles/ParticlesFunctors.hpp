@@ -73,6 +73,26 @@ namespace picongpu
             }
         };
 
+        /** Initialize the supercell/frame storage of a freshly created species.
+         *
+         * PMacc allocation does not zero storage. Use the buffer-level reset that only clears
+         * metadata: the species-level reset would first run a deletion kernel over frame pointers
+         * that are not initialized yet.
+         */
+        template<typename T_SpeciesType>
+        struct ResetSpeciesStorage
+        {
+            using SpeciesType = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, T_SpeciesType>;
+            using FrameType = typename SpeciesType::FrameType;
+
+            HINLINE auto operator()() const
+            {
+                DataConnector& dc = Environment<>::get().DataConnector();
+                auto species = dc.get<SpeciesType>(FrameType::getName());
+                return species->getParticlesBuffer().resetAsync();
+            }
+        };
+
         /** write memory statistics to the terminal
          *
          * @tparam T_SpeciesType type or name as PMACC_CSTRING of the species

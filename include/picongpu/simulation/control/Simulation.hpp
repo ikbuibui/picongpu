@@ -396,6 +396,11 @@ namespace picongpu
             meta::ForEach<VectorAllSpecies, particles::CreateSpecies<boost::mpl::_1>> createSpeciesMemory;
             createSpeciesMemory(deviceHeap, cellDescription.get());
 
+            /* PMacc allocation does not zero storage: initialize supercell/frame metadata
+             * before any consumer (RNG/particle initialization and steps).
+             */
+            initSpeciesStorage(asyncContext);
+
             size_t freeGpuMem = freeDeviceMemory();
             if(freeGpuMem < reservedGpuMemorySize)
             {
@@ -537,8 +542,9 @@ namespace picongpu
                 asyncContext,
                 caravan::whenAll(std::array{std::move(currentReady), std::move(fieldsReady)}),
                 *myFieldSolver);
-            asyncContext.wait(currentAdded);
-            asyncContext.wait(myFieldSolver->update_afterCurrent(asyncContext, currentAdded, currentStep));
+            auto stepComplete = myFieldSolver->update_afterCurrent(asyncContext, currentAdded, currentStep);
+            /* Deliberate end-of-step boundary until asynchronous cross-step orchestration is proven. */
+            asyncContext.wait(stepComplete);
         }
 
         void dumpOneStep(uint32_t currentStep) override
@@ -566,6 +572,26 @@ namespace picongpu
             resetFields(currentStep);
             resetParticles(asyncContext, currentStep);
             /// @todo need to add atomicPhysics super cell fields?, Brian Marre, 2022
+        }
+
+        /** Zero the supercell/frame storage of every freshly allocated species. */
+        template<typename... TSpecies>
+        void initSpeciesStorageImpl(caravan::ControlContext& context, pmacc::mp_list<TSpecies...>)
+        {
+            auto& device = Environment<>::get().DeviceContext();
+            caravan::Event previous;
+            (
+                (previous = context.spawn(caravan::alpaka::withDevice(
+                     device,
+                     caravan::asSender(previous)
+                         | caravan::sequence(particles::ResetSpeciesStorage<TSpecies>{}())))),
+                ...);
+            context.wait(previous);
+        }
+
+        void initSpeciesStorage(caravan::ControlContext& context)
+        {
+            initSpeciesStorageImpl(context, VectorAllSpecies{});
         }
 
         /** Reset all species' particle storage and wait for completion.
