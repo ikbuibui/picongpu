@@ -51,10 +51,7 @@ namespace picongpu
                 {
                 }
 
-                caravan::Event update_beforeCurrent(
-                    caravan::ControlContext&,
-                    caravan::Event previous,
-                    uint32_t)
+                caravan::Event update_beforeCurrent(caravan::ControlContext&, caravan::Event previous, uint32_t)
                 {
                     return previous;
                 }
@@ -65,10 +62,7 @@ namespace picongpu
                     return caravan::whenAll();
                 }
 
-                caravan::Event update_afterCurrent(
-                    caravan::ControlContext&,
-                    caravan::Event previous,
-                    uint32_t)
+                caravan::Event update_afterCurrent(caravan::ControlContext&, caravan::Event previous, uint32_t)
                 {
                     return previous;
                 }

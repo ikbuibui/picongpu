@@ -173,8 +173,7 @@ namespace caravan::alpaka::detail
                         // Bounded active polling across an idle gap: catch a post without a condition-variable
                         // wakeup. The lock is not held while spinning so a concurrent post() can proceed.
                         lock.unlock();
-                        auto const deadline
-                            = std::chrono::steady_clock::now() + std::chrono::microseconds{m_lingerUs};
+                        auto const deadline = std::chrono::steady_clock::now() + std::chrono::microseconds{m_lingerUs};
                         while(std::chrono::steady_clock::now() < deadline)
                         {
                             {

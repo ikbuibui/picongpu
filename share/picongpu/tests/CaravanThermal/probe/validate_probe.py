@@ -122,9 +122,7 @@ def parse_dir(path: str) -> Directory:
 
     result = Directory(path=path)
 
-    summary_files = sorted(
-        f for f in os.listdir(path) if f.startswith("thermal_probe_rank") and f.endswith(".csv")
-    )
+    summary_files = sorted(f for f in os.listdir(path) if f.startswith("thermal_probe_rank") and f.endswith(".csv"))
     if not summary_files:
         raise ProbeError(f"no thermal_probe_rank*.csv files in {path}")
 
@@ -275,7 +273,9 @@ def compare_scalars(
         # Current must be nonzero wherever deposition is expected (steps > 0).
         if step > 0:
             if int(a["J_available"]) == 0 or int(b["J_available"]) == 0:
-                failures.append(f"step {step}: evolved J unavailable (caravan={a['J_available']} legacy={b['J_available']})")
+                failures.append(
+                    f"step {step}: evolved J unavailable (caravan={a['J_available']} legacy={b['J_available']})"
+                )
             else:
                 for key in ("J_energy", "J_abs"):
                     if a[key] == 0.0 or b[key] == 0.0:
@@ -503,10 +503,7 @@ def main() -> int:
             print("  " + failure)
         return 1
 
-    print(
-        f"PASS: caravan={args.compare[0]} legacy={args.compare[1]} "
-        f"rel_tol={args.rel_tol:g} abs_tol={args.abs_tol:g}"
-    )
+    print(f"PASS: caravan={args.compare[0]} legacy={args.compare[1]} rel_tol={args.rel_tol:g} abs_tol={args.abs_tol:g}")
     return 0
 
 

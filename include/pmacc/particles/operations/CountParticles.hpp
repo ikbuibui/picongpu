@@ -167,11 +167,7 @@ namespace pmacc
             Filter filter,
             T_ParticleFilter& parFilter)
         {
-            return pmacc::CountParticles::count<CORE + BORDER + GUARD>(
-                buffer,
-                cellDescription,
-                filter,
-                parFilter);
+            return pmacc::CountParticles::count<CORE + BORDER + GUARD>(buffer, cellDescription, filter, parFilter);
         }
 
         /** Get particle count

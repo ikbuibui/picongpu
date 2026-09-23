@@ -212,8 +212,8 @@ int main()
                     })));
         started.get();
         std::atomic<bool> secondRan = false;
-        auto second = scope.spawn(
-            caravan::alpaka::withDevice(pool, caravan::alpaka::enqueue([&] { secondRan = true; })));
+        auto second
+            = scope.spawn(caravan::alpaka::withDevice(pool, caravan::alpaka::enqueue([&] { secondRan = true; })));
         assert(!retained.expired() && !secondRan);
         assert(first.state() == caravan::CompletionState::pending);
         assert(second.state() == caravan::CompletionState::pending);

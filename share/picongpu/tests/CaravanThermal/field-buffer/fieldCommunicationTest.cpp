@@ -6,8 +6,6 @@
  * by FieldTmp. It uses real GridBuffers, the same exchange setup as PMacc's own
  * field-communication test, and aliased scatter/gather storage.
  */
-#include <picongpu/fields/detail/FieldCommunicationOperations.hpp>
-
 #include <pmacc/Environment.hpp>
 #include <pmacc/fields/Communication.hpp>
 #include <pmacc/mappings/kernel/MappingDescription.hpp>
@@ -15,14 +13,14 @@
 #include <pmacc/memory/buffers/GridBuffer.hpp>
 #include <pmacc/traits/GetUniqueTypeId.hpp>
 
-#include <caravan/alpaka.hpp>
-#include <caravan/core.hpp>
-
-#include <catch2/catch_test_macros.hpp>
-#include <catch2/generators/catch_generators.hpp>
-
 #include <cstddef>
 #include <vector>
+
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <picongpu/fields/detail/FieldCommunicationOperations.hpp>
 
 namespace
 {
@@ -38,9 +36,7 @@ namespace
         }
 
         pmacc::GridBuffer<int, TEST_DIM> buffer{
-            pmacc::GridLayout<TEST_DIM>{
-                pmacc::DataSpace<TEST_DIM>::create(2),
-                pmacc::DataSpace<TEST_DIM>::create(1)}};
+            pmacc::GridLayout<TEST_DIM>{pmacc::DataSpace<TEST_DIM>::create(2), pmacc::DataSpace<TEST_DIM>::create(1)}};
     };
 
     using Buffer = pmacc::GridBuffer<int, TEST_DIM>;
@@ -182,10 +178,7 @@ namespace
 
 TEST_CASE("FieldTmp scatter depends independently on producer and both tails", "[picongpu][fields]")
 {
-    PendingGate const pendingGate = GENERATE(
-        PendingGate::Producer,
-        PendingGate::ScatterTail,
-        PendingGate::GatherTail);
+    PendingGate const pendingGate = GENERATE(PendingGate::Producer, PendingGate::ScatterTail, PendingGate::GatherTail);
 
     MockField field;
     addAdditiveExchanges(field);
@@ -231,10 +224,7 @@ TEST_CASE("FieldTmp scatter depends independently on producer and both tails", "
 
 TEST_CASE("FieldTmp gather depends independently on producer and both tails", "[picongpu][fields]")
 {
-    PendingGate const pendingGate = GENERATE(
-        PendingGate::Producer,
-        PendingGate::ScatterTail,
-        PendingGate::GatherTail);
+    PendingGate const pendingGate = GENERATE(PendingGate::Producer, PendingGate::ScatterTail, PendingGate::GatherTail);
 
     MockField field;
     addOverwriteExchanges(field.getGridBuffer());
@@ -287,10 +277,7 @@ TEST_CASE("FieldTmp communication without exchanges preserves each predecessor",
     };
 
     auto const helper = GENERATE(Helper::Scatter, Helper::Gather);
-    auto const pendingGate = GENERATE(
-        PendingGate::Producer,
-        PendingGate::ScatterTail,
-        PendingGate::GatherTail);
+    auto const pendingGate = GENERATE(PendingGate::Producer, PendingGate::ScatterTail, PendingGate::GatherTail);
 
     MockField field; // no exchanges configured
 
@@ -310,19 +297,15 @@ TEST_CASE("FieldTmp communication without exchanges preserves each predecessor",
     if(pendingGate != PendingGate::GatherTail)
         gatherTailSource.setReady();
 
-    auto completion = helper == Helper::Scatter
-                          ? picongpu::fields::detail::scatter(
-                                context,
-                                field,
-                                producer.event(),
-                                scatterTail,
-                                gatherTail)
-                          : picongpu::fields::detail::gather(
-                                context,
-                                field.getGridBuffer(),
-                                producer.event(),
-                                scatterTail,
-                                gatherTail);
+    auto completion
+        = helper == Helper::Scatter
+              ? picongpu::fields::detail::scatter(context, field, producer.event(), scatterTail, gatherTail)
+              : picongpu::fields::detail::gather(
+                    context,
+                    field.getGridBuffer(),
+                    producer.event(),
+                    scatterTail,
+                    gatherTail);
 
     context.runReady();
     CHECK_FALSE(completion.isReady());
@@ -387,8 +370,8 @@ TEST_CASE("FieldTmp aliased scatter/gather produces expected intermediate values
             CHECK(box(cell) == (isGuard(cell) ? guard : interior));
         }
     };
-    auto download = [&]
-    { context.wait(context.spawn(caravan::alpaka::withDevice(device, scatterBuffer.deviceToHost()))); };
+    auto download
+        = [&] { context.wait(context.spawn(caravan::alpaka::withDevice(device, scatterBuffer.deviceToHost()))); };
 
     // Scatter adds one contribution per guard direction into the interior.
     context.wait(picongpu::fields::detail::scatter(context, scatterField, {}, scatterTail, gatherTail));

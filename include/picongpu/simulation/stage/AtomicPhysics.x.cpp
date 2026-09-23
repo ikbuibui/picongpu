@@ -24,8 +24,9 @@
 // exclusively outside minimal mode.
 #include "picongpu/particles/atomicPhysics/ParticleType.hpp"
 
-#include <boost/mp11/list.hpp>
 #include <pmacc/meta/ForEach.hpp>
+
+#include <boost/mp11/list.hpp>
 
 #include <cstdint>
 #include <string>
@@ -797,12 +798,10 @@ namespace picongpu::simulation::stage
         // configured atomic-physics species must be rejected explicitly instead of
         // being silently dropped. These detection traits are header-only and do not
         // require the excluded implementation.
-        using OnlyIPDIonSpecies = particles::atomicPhysics::traits::FilterByParticleType_t<
-            VectorAllSpecies,
-            picongpu::particles::atomicPhysics::Tags::OnlyIPDIon>;
-        using OnlyIPDElectronSpecies = particles::atomicPhysics::traits::FilterByParticleType_t<
-            VectorAllSpecies,
-            picongpu::particles::atomicPhysics::Tags::OnlyIPDElectron>;
+        using OnlyIPDIonSpecies = particles::atomicPhysics::traits::
+            FilterByParticleType_t<VectorAllSpecies, picongpu::particles::atomicPhysics::Tags::OnlyIPDIon>;
+        using OnlyIPDElectronSpecies = particles::atomicPhysics::traits::
+            FilterByParticleType_t<VectorAllSpecies, picongpu::particles::atomicPhysics::Tags::OnlyIPDElectron>;
         //! Catch-all for any species carrying the atomicPhysicsParticle flag, including
         //! tag types added in the future that the explicit checks above do not name.
         using AllAtomicPhysicsSpecies =

@@ -6,10 +6,10 @@
 
 #include <pmacc/fields/Communication.hpp>
 
-#include <caravan/core.hpp>
-
 #include <array>
 #include <utility>
+
+#include <caravan/core.hpp>
 
 namespace picongpu::fields::detail
 {

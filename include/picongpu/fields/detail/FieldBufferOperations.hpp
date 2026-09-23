@@ -6,10 +6,10 @@
 
 #include <pmacc/Environment.hpp>
 
+#include <utility>
+
 #include <caravan/alpaka.hpp>
 #include <caravan/core.hpp>
-
-#include <utility>
 
 namespace picongpu::fields::detail
 {
@@ -68,13 +68,14 @@ namespace picongpu::fields::detail
     {
         return context.spawn(
             context.onControl(caravan::asSender(std::move(previous)))
-            | caravan::letValue([&buffer, zero]
-            {
-                buffer.getHostBuffer().reset(true);
-                auto& deviceBuffer = buffer.getDeviceBuffer();
-                deviceBuffer.setSizeHostSide(deviceBuffer.capacityND().productOfComponents());
-                auto& device = pmacc::Environment<>::get().DeviceContext();
-                return caravan::alpaka::withDevice(device, deviceBuffer.setValue(zero));
-            }));
+            | caravan::letValue(
+                [&buffer, zero]
+                {
+                    buffer.getHostBuffer().reset(true);
+                    auto& deviceBuffer = buffer.getDeviceBuffer();
+                    deviceBuffer.setSizeHostSide(deviceBuffer.capacityND().productOfComponents());
+                    auto& device = pmacc::Environment<>::get().DeviceContext();
+                    return caravan::alpaka::withDevice(device, deviceBuffer.setValue(zero));
+                }));
     }
 } // namespace picongpu::fields::detail

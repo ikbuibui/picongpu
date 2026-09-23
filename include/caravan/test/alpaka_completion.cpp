@@ -311,7 +311,13 @@ int main(int argc, char** argv)
                 queue,
                 [&](Queue& nativeQueue)
                 {
-                    alpaka::enqueue(nativeQueue, [&, gate] { entered.set_value(); gate.wait(); });
+                    alpaka::enqueue(
+                        nativeQueue,
+                        [&, gate]
+                        {
+                            entered.set_value();
+                            gate.wait();
+                        });
                 }));
         started.get();
         earlier.wait();

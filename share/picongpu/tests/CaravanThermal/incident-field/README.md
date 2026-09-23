@@ -9,20 +9,20 @@ untouched by this slice.
 
 ## Contents
 
-- `include-fromopenpmd/include/picongpu/param/incidentField.param` — negative
+- `include-fromopenpmd/include/picongpu/param/incidentField.param` - negative
   fixture equivalent to the default parameter file but with
   `XMin = profiles::FromOpenPMDPulse<>`.
-- `include-fromopenpmd-list/include/picongpu/param/incidentField.param` — negative
+- `include-fromopenpmd-list/include/picongpu/param/incidentField.param` - negative
   fixture with `XMin = pmacc::MakeSeq_t<profiles::None, profiles::FromOpenPMDPulse<>>`,
   exercising selection inside a profile list.
-- `check_incident_field_isolation.py` — driver.
+- `check_incident_field_isolation.py` - driver.
 
 ## Usage
 
 The build directory must already be configured with
 `-DPICONGPU_MINIMAL_CARAVAN_THERMAL=ON` and
 `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`. A successful application build is not
-required — the checks are preprocessing and syntax only.
+required - the checks are preprocessing and syntax only.
 
 ```bash
 ./check_incident_field_isolation.py <build> [<log-dir>]

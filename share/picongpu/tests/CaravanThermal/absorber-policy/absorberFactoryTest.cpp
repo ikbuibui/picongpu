@@ -54,9 +54,7 @@ int main()
     check(setKindThrows(factory, AbsorberKind::Exponential), "minimal factory must reject Exponential");
     check(factory.getKind() == AbsorberKind::None, "rejected Exponential must not change installed kind");
 
-    check(
-        setKindThrows(factory, static_cast<AbsorberKind>(999)),
-        "minimal factory must reject an invalid enum value");
+    check(setKindThrows(factory, static_cast<AbsorberKind>(999)), "minimal factory must reject an invalid enum value");
     check(factory.getKind() == AbsorberKind::None, "rejected invalid value must not change installed kind");
 #else
     factory.setKind(AbsorberKind::Exponential);

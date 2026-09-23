@@ -92,16 +92,13 @@ namespace picongpu
                 auto& device = pmacc::Environment<>::get().DeviceContext();
                 do
                 {
-                    previous = context.spawn(caravan::alpaka::withDevice(
-                        device,
-                        caravan::asSender(std::move(previous))
-                            | caravan::sequence(
-                                PMACC_LOCKSTEP_KERNEL(depositionKernel)
-                                    .template config<numElemtPerBlock>(mapper.getGridDim())(
-                                        jBox,
-                                        parBox,
-                                        frameSolver,
-                                        mapper))));
+                    previous = context.spawn(
+                        caravan::alpaka::withDevice(
+                            device,
+                            caravan::asSender(std::move(previous))
+                                | caravan::sequence(PMACC_LOCKSTEP_KERNEL(depositionKernel)
+                                                        .template config<numElemtPerBlock>(
+                                                            mapper.getGridDim())(jBox, parBox, frameSolver, mapper))));
                 } while(mapper.next());
                 return previous;
             }
@@ -134,16 +131,13 @@ namespace picongpu
 
                 constexpr auto numElemtPerBlock = T_ParticleBox::frameSize * T_Strategy::workerMultiplier;
                 auto& device = pmacc::Environment<>::get().DeviceContext();
-                return context.spawn(caravan::alpaka::withDevice(
-                    device,
-                    caravan::asSender(std::move(previous))
-                        | caravan::sequence(
-                            PMACC_LOCKSTEP_KERNEL(depositionKernel)
-                                .template config<numElemtPerBlock>(mapper.getGridDim())(
-                                    jBox,
-                                    parBox,
-                                    frameSolver,
-                                    mapper))));
+                return context.spawn(
+                    caravan::alpaka::withDevice(
+                        device,
+                        caravan::asSender(std::move(previous))
+                            | caravan::sequence(PMACC_LOCKSTEP_KERNEL(depositionKernel)
+                                                    .template config<numElemtPerBlock>(
+                                                        mapper.getGridDim())(jBox, parBox, frameSolver, mapper))));
             }
         };
 

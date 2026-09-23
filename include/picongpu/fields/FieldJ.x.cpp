@@ -20,10 +20,10 @@
 
 
 #include "picongpu/fields/FieldJ.hpp"
-#include "picongpu/fields/detail/FieldBufferOperations.hpp"
 
 #include "picongpu/defines.hpp"
 #include "picongpu/fields/currentInterpolation/CurrentInterpolation.hpp"
+#include "picongpu/fields/detail/FieldBufferOperations.hpp"
 #include "picongpu/particles/filter/filter.hpp"
 #include "picongpu/particles/param.hpp"
 #include "picongpu/particles/traits/GetCurrentSolver.hpp"
@@ -202,8 +202,7 @@ namespace picongpu
         return context.spawn(
             caravan::alpaka::withDevice(
                 device,
-                caravan::asSender(std::move(previous))
-                    | caravan::sequence(buffer.getDeviceBuffer().setValue(value))));
+                caravan::asSender(std::move(previous)) | caravan::sequence(buffer.getDeviceBuffer().setValue(value))));
     }
 
 } // namespace picongpu

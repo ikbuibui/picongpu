@@ -19,12 +19,12 @@
  */
 
 #include "picongpu/fields/FieldTmp.hpp"
-#include "picongpu/fields/detail/FieldBufferOperations.hpp"
-#include "picongpu/fields/detail/FieldCommunicationOperations.hpp"
 
 #include "picongpu/defines.hpp"
 #include "picongpu/fields/FieldTmp.kernel"
 #include "picongpu/fields/MaxwellSolver/Solvers.hpp"
+#include "picongpu/fields/detail/FieldBufferOperations.hpp"
+#include "picongpu/fields/detail/FieldCommunicationOperations.hpp"
 #include "picongpu/particles/filter/filter.hpp"
 #include "picongpu/particles/traits/GetInterpolation.hpp"
 #include "picongpu/plugins/output/param.hpp"
@@ -40,8 +40,8 @@
 #include <pmacc/particles/traits/FilterByFlag.hpp>
 #include <pmacc/traits/GetUniqueTypeId.hpp>
 
-#include <memory>
 #include <array>
+#include <memory>
 #include <string>
 
 namespace picongpu
@@ -221,11 +221,7 @@ namespace picongpu
         // do not become part of the communication tails: a later scatter or gather
         // must be given this returned event as its producer.
         std::array dependencies{std::move(previous), m_scatterEv, m_gatherEv};
-        return fields::detail::reset(
-            context,
-            *fieldTmp,
-            ValueType::create(0.0_X),
-            caravan::whenAll(dependencies));
+        return fields::detail::reset(context, *fieldTmp, ValueType::create(0.0_X), caravan::whenAll(dependencies));
     }
 
     caravan::Event FieldTmp::syncToDevice(caravan::ControlContext& context, caravan::Event previous)

@@ -50,13 +50,11 @@ _PROFILE_HEADERS = (
     "struct ProbeParam {};\n"
 )
 NEGATIVE_PROBE = (
-    _PROFILE_HEADERS
-    + "// Force instantiation/completeness of the profile wrapper.\n"
-    "static_assert(sizeof(picongpu::densityProfiles::FromOpenPMDImpl<ProbeParam>) > 0, \"\");\n"
+    _PROFILE_HEADERS + "// Force instantiation/completeness of the profile wrapper.\n"
+    'static_assert(sizeof(picongpu::densityProfiles::FromOpenPMDImpl<ProbeParam>) > 0, "");\n'
 )
 UNUSED_ALIAS_PROBE = (
-    _PROFILE_HEADERS
-    + "// Name the specialization without instantiating it.\n"
+    _PROFILE_HEADERS + "// Name the specialization without instantiating it.\n"
     "using UnusedAlias = picongpu::densityProfiles::FromOpenPMDImpl<ProbeParam>;\n"
 )
 OPENPMD_PROBE = '#include "picongpu/particles/densityProfiles/FromOpenPMDImpl.hpp"\n'
@@ -121,9 +119,7 @@ def opens_openpmd(args: list[str], build_dir: str, log_path: str) -> bool:
         handle.write(completed.stderr)
     if completed.returncode != 0:
         raise SystemExit(f"preprocessing failed (rc={completed.returncode}); see {log_path}")
-    return any(
-        re.match(r"^\.+ .*openPMD/openPMD\.hpp", line) for line in completed.stderr.splitlines()
-    )
+    return any(re.match(r"^\.+ .*openPMD/openPMD\.hpp", line) for line in completed.stderr.splitlines())
 
 
 def preprocessed_contains_cli(args: list[str], build_dir: str, log_path: str) -> tuple[int, bool]:
@@ -200,12 +196,8 @@ def main() -> int:
     ordinary_cli_rc, ordinary_cli_present = preprocessed_contains_cli(
         replace_source(ordinary, probes["cli"][0]), build_dir, os.path.join(log_dir, "cli-ordinary.log")
     )
-    print(
-        f"[positive] CLI literal in minimal preprocessing: rc={minimal_cli_rc} present={minimal_cli_present}"
-    )
-    print(
-        f"[positive] CLI literal in ordinary preprocessing: rc={ordinary_cli_rc} present={ordinary_cli_present}"
-    )
+    print(f"[positive] CLI literal in minimal preprocessing: rc={minimal_cli_rc} present={minimal_cli_present}")
+    print(f"[positive] CLI literal in ordinary preprocessing: rc={ordinary_cli_rc} present={ordinary_cli_present}")
     if minimal_cli_rc != 0 or ordinary_cli_rc != 0:
         failures.append("CLI-guard preprocessing did not succeed")
     if minimal_cli_present:

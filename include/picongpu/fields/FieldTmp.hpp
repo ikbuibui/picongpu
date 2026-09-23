@@ -30,12 +30,12 @@
 #include <pmacc/memory/boxes/PitchedBox.hpp>
 #include <pmacc/memory/buffers/GridBuffer.hpp>
 
-#include <caravan/core.hpp>
-
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
+
+#include <caravan/core.hpp>
 
 namespace picongpu
 {
@@ -93,7 +93,9 @@ namespace picongpu
          * scatter and gather buffers alias device storage. The returned event
          * retains PMacc's own per-direction tails.
          */
-        [[nodiscard]] caravan::Event spawnCommunication(caravan::ControlContext& context, caravan::Event previous = {});
+        [[nodiscard]] caravan::Event spawnCommunication(
+            caravan::ControlContext& context,
+            caravan::Event previous = {});
 
         /** Restore full extent and clear device storage after all communication.
          *

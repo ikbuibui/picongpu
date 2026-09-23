@@ -129,8 +129,7 @@ namespace pmacc::particles
                        | caravan::letValue(
                            [&particles, exchange, maxSize]
                            {
-                               auto stack
-                                   = particles.getParticlesBuffer().getReceiveExchangeStack(exchange);
+                               auto stack = particles.getParticlesBuffer().getReceiveExchangeStack(exchange);
                                /* The insertion kernel is launched with one block per
                                 * exchange-index entry (one per source supercell), so it needs
                                 * the stack-indexer size, not the received particle payload

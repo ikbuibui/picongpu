@@ -6,19 +6,17 @@
  * It exercises the production helper directly with a real three-component
  * GridBuffer instead of reconstructing the solver/species-dependent field.
  */
-#include <picongpu/fields/detail/FieldBufferOperations.hpp>
-
 #include <pmacc/Environment.hpp>
 #include <pmacc/dimensions/DataSpace.hpp>
 #include <pmacc/math/Vector.hpp>
 #include <pmacc/memory/buffers/GridBuffer.hpp>
 
+#include <cstddef>
+
 #include <caravan/alpaka.hpp>
 #include <caravan/core.hpp>
-
 #include <catch2/catch_test_macros.hpp>
-
-#include <cstddef>
+#include <picongpu/fields/detail/FieldBufferOperations.hpp>
 
 namespace
 {

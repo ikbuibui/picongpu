@@ -42,8 +42,8 @@
  * trees produce directly comparable records.
  */
 
-#include "picongpu/defines.hpp"
 #include "picongpu/algorithms/KinEnergy.hpp"
+#include "picongpu/defines.hpp"
 #include "picongpu/fields/FieldB.hpp"
 #include "picongpu/fields/FieldE.hpp"
 #include "picongpu/fields/FieldJ.hpp"
@@ -117,11 +117,7 @@ namespace picongpu::thermalProbe
     struct KernelThermalParticleProbe
     {
         template<typename T_ParBox, typename T_Mapping, typename T_Worker>
-        DINLINE void operator()(
-            T_Worker const& worker,
-            T_ParBox pb,
-            float_64* gRed,
-            T_Mapping const mapper) const
+        DINLINE void operator()(T_Worker const& worker, T_ParBox pb, float_64* gRed, T_Mapping const mapper) const
         {
             PMACC_SMEM(worker, shCount, uint64_cu);
             PMACC_SMEM(worker, shWeight, float_X);
@@ -156,8 +152,7 @@ namespace picongpu::thermalProbe
                 });
             worker.sync();
 
-            DataSpace<simDim> const superCellIdx(
-                mapper.getSuperCellIndex(DataSpace<simDim>(worker.blockDomIdxND())));
+            DataSpace<simDim> const superCellIdx(mapper.getSuperCellIndex(DataSpace<simDim>(worker.blockDomIdxND())));
 
             auto forEachParticle = pmacc::particles::algorithm::acc::makeForEach(worker, pb, superCellIdx);
             if(!forEachParticle.hasParticles())
@@ -381,8 +376,8 @@ namespace picongpu::thermalProbe
 
     inline void writeVec3(std::ostream& stream, float3_X const& value)
     {
-        stream << std::setprecision(std::numeric_limits<float_X>::max_digits10) << value.x() << ',' << value.y()
-               << ',' << value.z();
+        stream << std::setprecision(std::numeric_limits<float_X>::max_digits10) << value.x() << ',' << value.y() << ','
+               << value.z();
     }
 
     /** Collect owned E/B/J statistics and, when enabled, write the owned cells.
@@ -403,8 +398,7 @@ namespace picongpu::thermalProbe
         auto const layout = fieldE->getGridLayout();
         DataSpace<simDim> const size = layout.sizeWithoutGuardND();
         DataSpace<simDim> const guard = layout.guardSizeND();
-        DataSpace<simDim> const localOffset
-            = pmacc::Environment<simDim>::get().SubGrid().getLocalDomain().offset;
+        DataSpace<simDim> const localOffset = pmacc::Environment<simDim>::get().SubGrid().getLocalDomain().offset;
 
         auto const boxE = fieldE->getHostDataBox();
         auto const boxB = fieldB->getHostDataBox();
@@ -415,8 +409,9 @@ namespace picongpu::thermalProbe
         if(config().snapshots)
         {
             snapshot.open(
-                config().directory / ("thermal_snapshot_rank" + std::to_string(currentRank()) + "_step"
-                                      + std::to_string(step) + ".csv"),
+                config().directory
+                    / ("thermal_snapshot_rank" + std::to_string(currentRank()) + "_step" + std::to_string(step)
+                       + ".csv"),
                 std::ios::out | std::ios::trunc);
             if(!snapshot)
                 throw std::runtime_error("thermal probe: cannot open snapshot file in " + config().directory.string());
@@ -481,8 +476,8 @@ namespace picongpu::thermalProbe
 
         out << std::setprecision(std::numeric_limits<double>::max_digits10) << step << ',' << stage << ',' << species
             << ',' << particle.count << ',' << particle.weightSum << ',' << particle.momX << ',' << particle.momY
-            << ',' << particle.momZ << ',' << particle.ekin << ',' << particle.etot << ',' << particle.nonfinite
-            << ',' << statsE.energy << ',' << statsE.absSum << ',' << statsE.min << ',' << statsE.max << ','
+            << ',' << particle.momZ << ',' << particle.ekin << ',' << particle.etot << ',' << particle.nonfinite << ','
+            << statsE.energy << ',' << statsE.absSum << ',' << statsE.min << ',' << statsE.max << ','
             << statsE.nonfinite << ',' << statsB.energy << ',' << statsB.absSum << ',' << statsB.min << ','
             << statsB.max << ',' << statsB.nonfinite << ',' << (statsJ.available ? 1 : 0) << ',' << statsJ.energy
             << ',' << statsJ.absSum << ',' << statsJ.min << ',' << statsJ.max << ',' << statsJ.nonfinite << '\n';
@@ -529,10 +524,9 @@ namespace picongpu::thermalProbe
 
         auto const mapper = makeAreaMapper<CORE + BORDER>(*cellDescription);
         PMACC_LOCKSTEP_KERNEL(KernelThermalParticleProbe{})
-            .config(mapper.getGridDim(), *species)(
-                species->getDeviceParticlesBox(),
-                buffer->getDeviceBuffer().data(),
-                mapper);
+            .config(
+                mapper.getGridDim(),
+                *species)(species->getDeviceParticlesBox(), buffer->getDeviceBuffer().data(), mapper);
         buffer->deviceToHost();
 
         reductions.push_back({FrameType::getName(), std::move(buffer)});
@@ -619,10 +613,11 @@ namespace picongpu::thermalProbe
                                    mapper);
         auto copy = buffer->deviceToHost();
         auto& device = pmacc::Environment<>::get().DeviceContext();
-        events.push_back(context.spawn(caravan::alpaka::withDevice(
-            device,
-            caravan::asSender(std::move(previous)) | caravan::sequence(std::move(initialize))
-                | caravan::sequence(std::move(probeKernel)) | caravan::sequence(std::move(copy)))));
+        events.push_back(context.spawn(
+            caravan::alpaka::withDevice(
+                device,
+                caravan::asSender(std::move(previous)) | caravan::sequence(std::move(initialize))
+                    | caravan::sequence(std::move(probeKernel)) | caravan::sequence(std::move(copy)))));
         reductions.push_back({FrameType::getName(), std::move(buffer)});
     }
 
@@ -657,13 +652,7 @@ namespace picongpu::thermalProbe
 
         std::vector<SpeciesReduction> reductions;
         std::vector<caravan::Event> events;
-        startSpeciesReductionsImpl(
-            context,
-            cellDescription,
-            reductions,
-            events,
-            previous,
-            VectorAllSpecies{});
+        startSpeciesReductionsImpl(context, cellDescription, reductions, events, previous, VectorAllSpecies{});
 
         pmacc::DataConnector& dc = pmacc::Environment<>::get().DataConnector();
         auto fieldE = dc.get<FieldE>(FieldE::getName());

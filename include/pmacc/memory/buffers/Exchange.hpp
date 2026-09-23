@@ -441,17 +441,17 @@ namespace pmacc
          * The caller retains the allocations until the submitted queue work completes.
          */
         template<typename T_Queue, typename T_Destination, typename T_Source>
-        static void copyStaging(
-            T_Queue& queue,
-            T_Destination& destination,
-            T_Source const& source,
-            size_t elements)
+        static void copyStaging(T_Queue& queue, T_Destination& destination, T_Source const& source, size_t elements)
         {
             using DestinationView
                 = ::alpaka::ViewPlainPtr<::alpaka::Dev<T_Destination>, TYPE, AlpakaDim<DIM1>, MemIdxType>;
-            using SourceView = ::alpaka::ViewPlainPtr<::alpaka::Dev<T_Source>, TYPE const, AlpakaDim<DIM1>, MemIdxType>;
+            using SourceView
+                = ::alpaka::ViewPlainPtr<::alpaka::Dev<T_Source>, TYPE const, AlpakaDim<DIM1>, MemIdxType>;
             auto const extent = MemSpace<DIM1>(elements).toAlpakaMemVec();
-            DestinationView destinationView(::alpaka::getPtrNative(destination), ::alpaka::getDev(destination), extent);
+            DestinationView destinationView(
+                ::alpaka::getPtrNative(destination),
+                ::alpaka::getDev(destination),
+                extent);
             SourceView sourceView(::alpaka::getPtrNative(source), ::alpaka::getDev(source), extent);
             ::alpaka::memcpy(queue, destinationView, sourceView, extent);
         }

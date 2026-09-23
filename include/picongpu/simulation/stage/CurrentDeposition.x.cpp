@@ -127,14 +127,13 @@ namespace picongpu
                     pmacc::DataConnector& dc,
                     pmacc::mp_list<TSpecies...>)
                 {
-                    (
-                        (previous = CurrentDeposition<TSpecies, pmacc::mp_int<type::CORE + type::BORDER>>{}(
-                             context,
-                             std::move(previous),
-                             currentStep,
-                             fieldJ,
-                             dc)),
-                        ...);
+                    ((previous = CurrentDeposition<TSpecies, pmacc::mp_int<type::CORE + type::BORDER>>{}(
+                          context,
+                          std::move(previous),
+                          currentStep,
+                          fieldJ,
+                          dc)),
+                     ...);
                     return previous;
                 }
             } // namespace detail
@@ -149,13 +148,7 @@ namespace picongpu
                 auto& fieldJ = *dc.get<FieldJ>(FieldJ::getName());
                 using SpeciesWithCurrentSolver =
                     typename pmacc::particles::traits::FilterByFlag<VectorAllSpecies, current<>>::type;
-                return detail::depositAll(
-                    context,
-                    std::move(previous),
-                    step,
-                    fieldJ,
-                    dc,
-                    SpeciesWithCurrentSolver{});
+                return detail::depositAll(context, std::move(previous), step, fieldJ, dc, SpeciesWithCurrentSolver{});
             }
         } // namespace stage
     } // namespace simulation

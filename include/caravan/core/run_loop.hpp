@@ -65,8 +65,7 @@ namespace caravan
                         // Bounded active wait: catch a task posted by another thread without a
                         // condition-variable wakeup. The lock is not held while spinning.
                         lock.unlock();
-                        auto const deadline
-                            = std::chrono::steady_clock::now() + std::chrono::microseconds{lingerUs};
+                        auto const deadline = std::chrono::steady_clock::now() + std::chrono::microseconds{lingerUs};
                         while(std::chrono::steady_clock::now() < deadline)
                         {
                             {

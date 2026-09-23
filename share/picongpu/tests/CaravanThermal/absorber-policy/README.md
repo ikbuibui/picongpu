@@ -6,15 +6,15 @@ implementation is excluded from its translation units.
 
 ## Contents
 
-- `absorberPolicyTest.cpp` — helper test for the policy in
+- `absorberPolicyTest.cpp` - helper test for the policy in
   `include/picongpu/fields/absorber/AbsorberPolicy.hpp`. Built as
   `absorber-policy-{minimal,ordinary}-test`; no PMacc/alpaka/MPI link is needed.
-- `absorberFactoryTest.cpp` — integration test for the production
+- `absorberFactoryTest.cpp` - integration test for the production
   `AbsorberFactory::setKind()`/`getKind()`. Built as
   `absorber-factory-{minimal,ordinary}-test` and linked against PMacc (alpaka
   defines), mirroring the field-buffer test setup.
-- `CMakeLists.txt` — builds all four test executables.
-- `check_pml_isolation.py` — preprocessing check against a configured minimal
+- `CMakeLists.txt` - builds all four test executables.
+- `check_pml_isolation.py` - preprocessing check against a configured minimal
   build.
 
 ## Usage

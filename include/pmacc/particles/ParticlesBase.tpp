@@ -34,8 +34,7 @@
 namespace pmacc
 {
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
-    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::deleteGuardParticles(
-        uint32_t exchangeType)
+    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::deleteGuardParticles(uint32_t exchangeType)
     {
         ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
         return PMACC_LOCKSTEP_KERNEL(KernelDeleteParticles{})
@@ -52,8 +51,7 @@ namespace pmacc
     }
 
     template<typename T_ParticleDescription, class MappingDesc, typename T_DeviceHeap>
-    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::copyGuardToExchange(
-        uint32_t exchangeType)
+    auto ParticlesBase<T_ParticleDescription, MappingDesc, T_DeviceHeap>::copyGuardToExchange(uint32_t exchangeType)
     {
         ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
         auto stack = particlesBuffer->getSendExchangeStack(exchangeType);

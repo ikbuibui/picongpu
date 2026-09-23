@@ -59,10 +59,7 @@ namespace picongpu
             using ZMin = profiles::None;
             using ZMax = profiles::None;
 
-            constexpr int32_t POSITION[3][2] = {
-                {16, -16},
-                {16, -16},
-                {16, -16}};
+            constexpr int32_t POSITION[3][2] = {{16, -16}, {16, -16}, {16, -16}};
 
         } // namespace incidentField
     } // namespace fields

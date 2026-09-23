@@ -170,8 +170,7 @@ namespace pmacc
          */
         [[nodiscard]] auto reset()
         {
-            return deleteParticlesInArea<CORE + BORDER + GUARD>()
-                   | caravan::sequence(particlesBuffer->reset());
+            return deleteParticlesInArea<CORE + BORDER + GUARD>() | caravan::sequence(particlesBuffer->reset());
         }
 
     private:

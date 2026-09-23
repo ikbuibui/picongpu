@@ -329,46 +329,46 @@ namespace caravan
                         std::terminate();
 
                     detail::NativeAccess::submit(
-                            *m_context,
-                            detail::NativeSubmission{
-                                [this](NativeMpiContext& context)
+                        *m_context,
+                        detail::NativeSubmission{
+                            [this](NativeMpiContext& context)
+                            {
+                                if constexpr(std::is_invocable_v<T_Start&, T_State&, NativeMpiContext&>)
+                                    return detail::invokeNative(m_start, m_state, context);
+                                else
+                                    return detail::invokeNative(m_start, context);
+                            },
+                            [this](NativeMpiContext& context, std::span<MPI_Status const> statuses)
+                            {
+                                auto complete = [&]() -> decltype(auto)
                                 {
-                                    if constexpr(std::is_invocable_v<T_Start&, T_State&, NativeMpiContext&>)
-                                        return detail::invokeNative(m_start, m_state, context);
+                                    if constexpr(std::is_invocable_v<
+                                                     T_Complete&,
+                                                     T_State&,
+                                                     NativeMpiContext&,
+                                                     std::span<MPI_Status const>>)
+                                        return detail::invokeNative(m_complete, m_state, context, statuses);
+                                    else if constexpr(std::is_invocable_v<
+                                                          T_Complete&,
+                                                          T_State&,
+                                                          std::span<MPI_Status const>>)
+                                        return detail::invokeNative(m_complete, m_state, statuses);
+                                    else if constexpr(std::is_invocable_v<
+                                                          T_Complete&,
+                                                          NativeMpiContext&,
+                                                          std::span<MPI_Status const>>)
+                                        return detail::invokeNative(m_complete, context, statuses);
                                     else
-                                        return detail::invokeNative(m_start, context);
-                                },
-                                [this](NativeMpiContext& context, std::span<MPI_Status const> statuses)
+                                        return detail::invokeNative(m_complete, statuses);
+                                };
+                                if constexpr(std::is_void_v<T>)
                                 {
-                                    auto complete = [&]() -> decltype(auto)
-                                    {
-                                        if constexpr(std::is_invocable_v<
-                                                         T_Complete&,
-                                                         T_State&,
-                                                         NativeMpiContext&,
-                                                         std::span<MPI_Status const>>)
-                                            return detail::invokeNative(m_complete, m_state, context, statuses);
-                                        else if constexpr(std::is_invocable_v<
-                                                              T_Complete&,
-                                                              T_State&,
-                                                              std::span<MPI_Status const>>)
-                                            return detail::invokeNative(m_complete, m_state, statuses);
-                                        else if constexpr(std::is_invocable_v<
-                                                              T_Complete&,
-                                                              NativeMpiContext&,
-                                                              std::span<MPI_Status const>>)
-                                            return detail::invokeNative(m_complete, context, statuses);
-                                        else
-                                            return detail::invokeNative(m_complete, statuses);
-                                    };
-                                    if constexpr(std::is_void_v<T>)
-                                    {
-                                        complete();
-                                        m_receiver.set_value();
-                                    }
-                                    else
-                                        m_receiver.set_value(complete());
-                                }});
+                                    complete();
+                                    m_receiver.set_value();
+                                }
+                                else
+                                    m_receiver.set_value(complete());
+                            }});
                 }
 
             private:
@@ -483,9 +483,8 @@ namespace caravan
                         std::terminate();
 
                     detail::NativeAccess::invoke(
-                            *m_context,
-                            detail::NativeInvocation{
-                                [this](NativeMpiContext& context) { complete(context); }});
+                        *m_context,
+                        detail::NativeInvocation{[this](NativeMpiContext& context) { complete(context); }});
                 }
 
             private:

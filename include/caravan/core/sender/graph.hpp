@@ -73,9 +73,8 @@ namespace caravan
             if constexpr(requires {
                              typename GraphNode<T::identity::name, typename T::sender_type, typename T::predecessors>;
                          })
-                return std::is_same_v<
-                    T,
-                    GraphNode<T::identity::name, typename T::sender_type, typename T::predecessors>>;
+                return std::
+                    is_same_v<T, GraphNode<T::identity::name, typename T::sender_type, typename T::predecessors>>;
             else
                 return false;
         }

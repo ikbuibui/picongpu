@@ -11,16 +11,14 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-get_filename_component(
-    PICONGPU_REPO_ROOT
-    "${CMAKE_CURRENT_LIST_DIR}/../../../../.."
-    ABSOLUTE
-)
+get_filename_component(PICONGPU_REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
 
 # Default to the CPU serial backend when the caller did not select one.
-if(NOT DEFINED alpaka_ACC_CPU_B_SEQ_T_SEQ_ENABLE
-   AND NOT DEFINED alpaka_ACC_GPU_CUDA_ENABLE
-   AND NOT DEFINED alpaka_ACC_GPU_HIP_ENABLE)
+if(
+    NOT DEFINED alpaka_ACC_CPU_B_SEQ_T_SEQ_ENABLE
+    AND NOT DEFINED alpaka_ACC_GPU_CUDA_ENABLE
+    AND NOT DEFINED alpaka_ACC_GPU_HIP_ENABLE
+)
     set(alpaka_ACC_CPU_B_SEQ_T_SEQ_ENABLE ON CACHE BOOL "" FORCE)
     set(alpaka_ACC_GPU_CUDA_ENABLE OFF CACHE BOOL "" FORCE)
     set(alpaka_ACC_GPU_HIP_ENABLE OFF CACHE BOOL "" FORCE)
@@ -29,12 +27,7 @@ endif()
 list(APPEND CMAKE_PREFIX_PATH "$ENV{MPI_ROOT}")
 list(APPEND CMAKE_PREFIX_PATH "$ENV{BOOST_ROOT}")
 
-find_package(
-    PMacc
-    REQUIRED CONFIG
-    PATHS "${PICONGPU_REPO_ROOT}/include/pmacc"
-    NO_DEFAULT_PATH
-)
+find_package(PMacc REQUIRED CONFIG PATHS "${PICONGPU_REPO_ROOT}/include/pmacc" NO_DEFAULT_PATH)
 find_package(MPI REQUIRED COMPONENTS CXX)
 
 enable_testing()

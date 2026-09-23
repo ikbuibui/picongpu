@@ -616,12 +616,11 @@ namespace picongpu
         {
             auto& device = Environment<>::get().DeviceContext();
             caravan::Event previous;
-            (
-                (previous = context.spawn(caravan::alpaka::withDevice(
-                     device,
-                     caravan::asSender(previous)
-                         | caravan::sequence(particles::ResetSpeciesStorage<TSpecies>{}())))),
-                ...);
+            ((previous = context.spawn(
+                  caravan::alpaka::withDevice(
+                      device,
+                      caravan::asSender(previous) | caravan::sequence(particles::ResetSpeciesStorage<TSpecies>{}())))),
+             ...);
             context.wait(previous);
         }
 

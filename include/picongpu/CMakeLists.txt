@@ -559,11 +559,7 @@ alpaka_add_executable(picongpu
 target_link_libraries(picongpu PUBLIC ${LIBS} ${HOST_LIBS} picongpu-hostonly)
 target_link_libraries(picongpu PRIVATE pmacc::pmacc)
 
-option(
-    PICONGPU_MINIMAL_CARAVAN_THERMAL
-    "Build the plugin-free Thermal Caravan migration target"
-    OFF
-)
+option(PICONGPU_MINIMAL_CARAVAN_THERMAL "Build the plugin-free Thermal Caravan migration target" OFF)
 
 option(
     PICONGPU_THERMAL_PROBE

@@ -160,9 +160,7 @@ def main() -> int:
         output = completed.stdout + completed.stderr
         with open(log_path, "w", encoding="utf-8") as handle:
             handle.write(output)
-        same_line = any(
-            STATIC_ASSERT_RE.search(line) and expected in line for line in output.splitlines()
-        )
+        same_line = any(STATIC_ASSERT_RE.search(line) and expected in line for line in output.splitlines())
         print(
             f"[negative] {define}: exit={completed.returncode} "
             f"static-assert-diagnostic={'yes' if same_line else 'NO'} log={log_path}"
@@ -170,9 +168,7 @@ def main() -> int:
         if completed.returncode == 0:
             failures.append(f"{define}: unsupported configuration compiled successfully")
         if not same_line:
-            failures.append(
-                f"{define}: no 'error: static assertion failed:' containing {expected!r} (see {log_path})"
-            )
+            failures.append(f"{define}: no 'error: static assertion failed:' containing {expected!r} (see {log_path})")
 
     if failures:
         print("\nFAILED:")

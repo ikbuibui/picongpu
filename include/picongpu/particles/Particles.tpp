@@ -299,10 +299,11 @@ namespace picongpu
             else
             {
                 auto& device = Environment<>::get().DeviceContext();
-                return context.spawn(caravan::alpaka::withDevice(
-                    device,
-                    caravan::asSender(std::move(predecessor))
-                        | caravan::sequence(particles.template push<T_Pusher>(currentStep))));
+                return context.spawn(
+                    caravan::alpaka::withDevice(
+                        device,
+                        caravan::asSender(std::move(predecessor))
+                            | caravan::sequence(particles.template push<T_Pusher>(currentStep))));
             }
         }
     };

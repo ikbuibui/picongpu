@@ -67,7 +67,7 @@ pending-predecessor non-mutation, capacity-restoring zero reset with a chained
 download, and nonzero upload/download round-trip. The communication cases cover
 scatter and gather each depending independently on producer, scatter tail, and
 gather tail (also with no exchanges configured); and an alternating
-scatter→gather→scatter sequence on aliased device storage that is ordered by the
+scatter->gather->scatter sequence on aliased device storage that is ordered by the
 stored tails alone and compared against serialized execution, with a separate
 value oracle for the intermediate `17`/`17`/`136` results. A failed-predecessor
 case is not included because this revision only distinguishes pending from ready
@@ -108,15 +108,15 @@ sanitized compile commands (`-c`/`-o`/`-M*` stripped; only `-E -H` or
 with `CMAKE_EXPORT_COMPILE_COMMANDS=ON`; a successful application build is not
 needed:
 
-- `atomic-negative/check_atomic_isolation.py` — atomic-physics/IPD isolation and
+- `atomic-negative/check_atomic_isolation.py` - atomic-physics/IPD isolation and
   four-tag rejection.
-- `runtime-density/check_runtime_density_isolation.py` — runtime-density
+- `runtime-density/check_runtime_density_isolation.py` - runtime-density
   openPMD exclusion, instantiation rejection, and unused-alias tolerance.
-- `incident-field/check_incident_field_isolation.py` — incident-field
+- `incident-field/check_incident_field_isolation.py` - incident-field
   `FromOpenPMDPulse` openPMD exclusion and selection rejection.
-- `ionization/check_ionization_isolation.py` — ThomasFermi by-collision
+- `ionization/check_ionization_isolation.py` - ThomasFermi by-collision
   ionization exclusion and single/list ionizer rejection.
-- `absorber-policy/` — standalone policy test (minimal + ordinary) and
+- `absorber-policy/` - standalone policy test (minimal + ordinary) and
   `check_pml_isolation.py` for PML exclusion/retention.
 
 Each directory has its own README with usage and the exact checks.

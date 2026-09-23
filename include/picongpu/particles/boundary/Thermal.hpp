@@ -210,8 +210,7 @@ namespace picongpu
                     static_cast<void>(species);
                     static_cast<void>(exchangeType);
                     static_cast<void>(currentStep);
-                    throw std::runtime_error(
-                        "PICONGPU_MINIMAL_CARAVAN_THERMAL requires periodic particle boundaries");
+                    throw std::runtime_error("PICONGPU_MINIMAL_CARAVAN_THERMAL requires periodic particle boundaries");
 #else
                     // Positive offset is required for thermal boundaries until #3850 is resolved
                     if(getOffsetCells(species, exchangeType) <= 0)

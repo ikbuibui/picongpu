@@ -181,10 +181,8 @@ namespace picongpu
                         // First and second halves of B update are explained inside updateBeforeCurrent()
                         auto bCore = updateBFirstHalf<CORE>(context, previous, currentStep);
                         std::array borderDependencies{std::move(eExchange), std::move(bCore)};
-                        auto bBorder = updateBFirstHalf<BORDER>(
-                            context,
-                            caravan::whenAll(borderDependencies),
-                            currentStep);
+                        auto bBorder
+                            = updateBFirstHalf<BORDER>(context, caravan::whenAll(borderDependencies), currentStep);
 
                         if(absorber.getKind() == absorber::Absorber::Kind::Exponential)
                         {
@@ -264,9 +262,10 @@ namespace picongpu
                         auto& device = Environment<>::get().DeviceContext();
                         auto launch = [&](auto&& kernel)
                         {
-                            return context.spawn(caravan::alpaka::withDevice(
-                                device,
-                                caravan::asSender(std::move(previous)) | caravan::sequence(std::move(kernel))));
+                            return context.spawn(
+                                caravan::alpaka::withDevice(
+                                    device,
+                                    caravan::asSender(std::move(previous)) | caravan::sequence(std::move(kernel))));
                         };
 
                         // The ugly transition from run-time to compile-time polymorphism is contained here
@@ -317,9 +316,10 @@ namespace picongpu
                         auto& device = Environment<>::get().DeviceContext();
                         auto launch = [&](auto&& kernel)
                         {
-                            return context.spawn(caravan::alpaka::withDevice(
-                                device,
-                                caravan::asSender(std::move(previous)) | caravan::sequence(std::move(kernel))));
+                            return context.spawn(
+                                caravan::alpaka::withDevice(
+                                    device,
+                                    caravan::asSender(std::move(previous)) | caravan::sequence(std::move(kernel))));
                         };
 
                         // The ugly transition from run-time to compile-time polymorphism is contained here

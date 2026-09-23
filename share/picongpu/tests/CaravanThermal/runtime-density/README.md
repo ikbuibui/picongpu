@@ -6,7 +6,7 @@ openPMD profiles are intentionally left in place by this slice.
 
 ## Contents
 
-- `check_runtime_density_isolation.py` — driver. It generates four small probe
+- `check_runtime_density_isolation.py` - driver. It generates four small probe
   translation units (in the log directory) and runs them with the sanitized
   compile command of the minimal/ordinary `AtomicPhysics.x.cpp` entry from
   `compile_commands.json`.
@@ -16,7 +16,7 @@ openPMD profiles are intentionally left in place by this slice.
 The build directory must already be configured with
 `-DPICONGPU_MINIMAL_CARAVAN_THERMAL=ON` and
 `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`. A successful application build is not
-required — the checks are preprocessing and syntax only.
+required - the checks are preprocessing and syntax only.
 
 ```bash
 ./check_runtime_density_isolation.py <build> [<log-dir>]

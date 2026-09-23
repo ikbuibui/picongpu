@@ -38,14 +38,17 @@ namespace picongpu
     {
         using Tag = picongpu::particles::atomicPhysics::Tags::Ion;
     };
+
     struct NegElectronTag
     {
         using Tag = picongpu::particles::atomicPhysics::Tags::Electron;
     };
+
     struct NegOnlyIPDIonTag
     {
         using Tag = picongpu::particles::atomicPhysics::Tags::OnlyIPDIon;
     };
+
     struct NegOnlyIPDElectronTag
     {
         using Tag = picongpu::particles::atomicPhysics::Tags::OnlyIPDElectron;

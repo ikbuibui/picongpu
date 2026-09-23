@@ -258,8 +258,7 @@ namespace picongpu
                     static_cast<void>(species);
                     static_cast<void>(exchangeType);
                     static_cast<void>(currentStep);
-                    throw std::runtime_error(
-                        "PICONGPU_MINIMAL_CARAVAN_THERMAL requires periodic particle boundaries");
+                    throw std::runtime_error("PICONGPU_MINIMAL_CARAVAN_THERMAL requires periodic particle boundaries");
 #else
                     detail::removeOuterParticles(species, exchangeType, currentStep);
                     detail::dampWeightsInPml(species, exchangeType, currentStep);

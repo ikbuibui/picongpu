@@ -181,9 +181,7 @@ def main() -> int:
     if thermal.returncode != 0:
         failures.append("Thermal incident-field configuration failed the EnabledProfiles rejection policy")
 
-    thermal_no_openpmd_args = override_define(
-        replace_source(minimal, probes["thermal"][0]), "ENABLE_OPENPMD", "0"
-    )
+    thermal_no_openpmd_args = override_define(replace_source(minimal, probes["thermal"][0]), "ENABLE_OPENPMD", "0")
     thermal_no_openpmd = run(thermal_no_openpmd_args + ["-fsyntax-only"], build_dir)
     with open(os.path.join(log_dir, "thermal-config-no-openpmd.log"), "w", encoding="utf-8") as handle:
         handle.write(thermal_no_openpmd.stdout + thermal_no_openpmd.stderr)

@@ -133,8 +133,7 @@ namespace picongpu
                 T_AreaMapperFactory const& areaMapperFactory,
                 pmacc::mp_list<TSpecies...>)
             {
-                return sequenceAll(
-                    Manipulate<T_Manipulator, TSpecies, T_Filter>{}(currentStep, areaMapperFactory)...);
+                return sequenceAll(Manipulate<T_Manipulator, TSpecies, T_Filter>{}(currentStep, areaMapperFactory)...);
             }
         } // namespace detail
 
@@ -149,10 +148,7 @@ namespace picongpu
         auto manipulate(uint32_t const currentStep, T_AreaMapperFactory const& areaMapperFactory)
         {
             using SpeciesSeq = pmacc::ToSeq<T_Species>;
-            return detail::manipulateSeqMapper<T_Manipulator, T_Filter>(
-                currentStep,
-                areaMapperFactory,
-                SpeciesSeq{});
+            return detail::manipulateSeqMapper<T_Manipulator, T_Filter>(currentStep, areaMapperFactory, SpeciesSeq{});
         }
 
         /** @} */

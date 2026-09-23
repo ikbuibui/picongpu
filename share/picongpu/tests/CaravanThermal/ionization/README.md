@@ -9,26 +9,26 @@ implementation includes are equally excluded and any species selecting them is
 rejected.
 
 The rejection is based on the `ionizers<>` flag itself: any species carrying
-that flag — **including one with an explicitly empty ionizer list** — fails to
+that flag - **including one with an explicitly empty ionizer list** - fails to
 compile. The policy does not inspect the resolved ionizer-list contents.
 
 ## Contents
 
-- `include-thomasfermi/include/picongpu/param/speciesDefinition.param` — negative
+- `include-thomasfermi/include/picongpu/param/speciesDefinition.param` - negative
   fixture with `ionizers<MakeSeq_t<ThomasFermi<NegDest>>>` on the electron
   species. The synthetic `NegDest` and the unrelated second ionizer in the list
   fixture exercise **flag-based rejection**, not a valid ThomasFermi physics
   configuration or its execution.
-- `include-thomasfermi-list/include/picongpu/param/speciesDefinition.param` —
+- `include-thomasfermi-list/include/picongpu/param/speciesDefinition.param` -
   negative fixture with ThomasFermi nested in a multi-element ionizer list.
-- `check_ionization_isolation.py` — driver.
+- `check_ionization_isolation.py` - driver.
 
 ## Usage
 
 The build directory must already be configured with
 `-DPICONGPU_MINIMAL_CARAVAN_THERMAL=ON` and
 `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`. A successful application build is not
-required — the checks are preprocessing and syntax only.
+required - the checks are preprocessing and syntax only.
 
 ```bash
 ./check_ionization_isolation.py <build> [<log-dir>]

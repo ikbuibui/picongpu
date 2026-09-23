@@ -19,10 +19,10 @@
  */
 
 #include "picongpu/fields/EMFieldBase.hpp"
-#include "picongpu/fields/detail/FieldBufferOperations.hpp"
 
 #include "picongpu/defines.hpp"
 #include "picongpu/fields/MaxwellSolver/Solvers.hpp"
+#include "picongpu/fields/detail/FieldBufferOperations.hpp"
 #include "picongpu/particles/filter/filter.hpp"
 #include "picongpu/particles/traits/GetInterpolation.hpp"
 #include "picongpu/particles/traits/GetMarginPusher.hpp"

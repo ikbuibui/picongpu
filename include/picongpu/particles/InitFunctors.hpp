@@ -37,8 +37,9 @@
 
 #include <boost/mpl/apply.hpp>
 
-#include <caravan/core.hpp>
 #include <utility>
+
+#include <caravan/core.hpp>
 
 namespace picongpu
 {

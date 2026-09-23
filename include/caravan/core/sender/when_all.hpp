@@ -123,11 +123,10 @@ namespace caravan
         private:
             void finish() noexcept
             {
-                auto values = std::apply(
-                    [](auto&... value) { return std::tuple_cat(std::move(*value)...); }, m_values);
+                auto values
+                    = std::apply([](auto&... value) { return std::tuple_cat(std::move(*value)...); }, m_values);
                 std::apply(
-                    [this](auto&&... value)
-                    { this->m_receiver.set_value(std::forward<decltype(value)>(value)...); },
+                    [this](auto&&... value) { this->m_receiver.set_value(std::forward<decltype(value)>(value)...); },
                     std::move(values));
             }
 

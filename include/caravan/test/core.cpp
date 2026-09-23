@@ -734,10 +734,9 @@ namespace
         caravan::EventSource thenReady;
         auto doubled
             = AsyncValueSender<int>{thenReady.event(), 21} | caravan::then([](int value) { return value * 2; });
-        static_assert(
-            std::is_same_v<
-                caravan::CompletionSignaturesOf<decltype(doubled)>,
-                caravan::CompletionSignatures<caravan::ValueSignature<int>>>);
+        static_assert(std::is_same_v<
+                      caravan::CompletionSignaturesOf<decltype(doubled)>,
+                      caravan::CompletionSignatures<caravan::ValueSignature<int>>>);
         caravan::AsyncScope thenScope;
         auto doubledResult = thenScope.spawnFuture<int>(std::move(doubled));
         thenReady.setReady();
@@ -1145,9 +1144,8 @@ namespace
         // Explicit receiver environments work without an outer startsOn.
         caravan::EventSource restore;
         bool value = false;
-        auto operation
-            = caravan::on(caravan::InlineScheduler{}, caravan::asSender(caravan::readyEvent()))
-                  .connect(SchedulerReceiver<EventScheduler>{{&value}, EventScheduler{restore.event()}});
+        auto operation = caravan::on(caravan::InlineScheduler{}, caravan::asSender(caravan::readyEvent()))
+                             .connect(SchedulerReceiver<EventScheduler>{{&value}, EventScheduler{restore.event()}});
         operation.start();
         assert(!value);
         restore.setReady();
@@ -1310,39 +1308,43 @@ namespace
             assert(waitedChild == child);
             assert(WIFEXITED(status) && WEXITSTATUS(status) == 42);
         };
-        expectFatal([]
-                    {
-                        // Keep scope destruction from masking a nonfatal connection failure.
-                        auto* scope = new caravan::AsyncScope;
-                        scope->spawn(ThrowingConnectSender{});
-                    });
-        expectFatal([]
-                    {
-                        auto* scope = new caravan::AsyncScope;
-                        scope->spawnFuture<int>(ThrowingConnectSender{} | caravan::then([] { return 42; }));
-                    });
+        expectFatal(
+            []
+            {
+                // Keep scope destruction from masking a nonfatal connection failure.
+                auto* scope = new caravan::AsyncScope;
+                scope->spawn(ThrowingConnectSender{});
+            });
+        expectFatal(
+            []
+            {
+                auto* scope = new caravan::AsyncScope;
+                scope->spawnFuture<int>(ThrowingConnectSender{} | caravan::then([] { return 42; }));
+            });
         for(bool ready : {false, true})
         {
-            expectFatal([ready]
-                        {
-                            caravan::EventSource source;
-                            if(ready)
-                                source.setReady();
-                            source.event().continueWith(
-                                caravan::InlineScheduler{},
-                                [](caravan::Event) { throw std::runtime_error("callback failure"); });
-                            source.setReady();
-                        });
-            expectFatal([ready]
-                        {
-                            caravan::RunLoop loop;
-                            loop.finish();
-                            caravan::EventSource source;
-                            if(ready)
-                                source.setReady();
-                            source.event().continueWith(loop.scheduler(), [](caravan::Event) {});
-                            source.setReady();
-                        });
+            expectFatal(
+                [ready]
+                {
+                    caravan::EventSource source;
+                    if(ready)
+                        source.setReady();
+                    source.event().continueWith(
+                        caravan::InlineScheduler{},
+                        [](caravan::Event) { throw std::runtime_error("callback failure"); });
+                    source.setReady();
+                });
+            expectFatal(
+                [ready]
+                {
+                    caravan::RunLoop loop;
+                    loop.finish();
+                    caravan::EventSource source;
+                    if(ready)
+                        source.setReady();
+                    source.event().continueWith(loop.scheduler(), [](caravan::Event) {});
+                    source.setReady();
+                });
         }
 #endif
     }

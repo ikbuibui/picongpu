@@ -8,16 +8,12 @@ project(PIConGPUCaravanThermalSmoke LANGUAGES CXX)
 include(CTest)
 find_package(MPI REQUIRED COMPONENTS CXX)
 
-set(
-    PICONGPU_THERMAL_EXECUTABLE
-    ""
-    CACHE FILEPATH
-    "Path to the minimal PIConGPU Thermal executable under test"
-)
+set(PICONGPU_THERMAL_EXECUTABLE "" CACHE FILEPATH "Path to the minimal PIConGPU Thermal executable under test")
 
 if(BUILD_TESTING)
     if(NOT PICONGPU_THERMAL_EXECUTABLE)
-        message(FATAL_ERROR
+        message(
+            FATAL_ERROR
             "Set PICONGPU_THERMAL_EXECUTABLE to the minimal Thermal executable. "
             "This driver does not build the executable."
         )
@@ -34,20 +30,12 @@ if(BUILD_TESTING)
         add_test(
             NAME thermal-caravan-${test_name}
             COMMAND
-                "${MPIEXEC_EXECUTABLE}" ${MPIEXEC_PREFLAGS} ${MPIEXEC_NUMPROC_FLAG} 1
-                "${PICONGPU_THERMAL_EXECUTABLE}"
-                -d 1 1 1
-                -g 32 32 32
-                -s ${steps}
-                --periodic 1 1 1
-                ${MPIEXEC_POSTFLAGS}
+                "${MPIEXEC_EXECUTABLE}" ${MPIEXEC_PREFLAGS} ${MPIEXEC_NUMPROC_FLAG} 1 "${PICONGPU_THERMAL_EXECUTABLE}"
+                -d 1 1 1 -g 32 32 32 -s ${steps} --periodic 1 1 1 ${MPIEXEC_POSTFLAGS}
         )
         set_tests_properties(
             thermal-caravan-${test_name}
-            PROPERTIES
-                LABELS "caravan;thermal;smoke;single-rank"
-                TIMEOUT 120
-                WORKING_DIRECTORY "${work_dir}"
+            PROPERTIES LABELS "caravan;thermal;smoke;single-rank" TIMEOUT 120 WORKING_DIRECTORY "${work_dir}"
         )
     endforeach()
 
@@ -57,20 +45,11 @@ if(BUILD_TESTING)
     add_test(
         NAME thermal-caravan-smoke-two-steps-two-ranks
         COMMAND
-            "${MPIEXEC_EXECUTABLE}" ${MPIEXEC_PREFLAGS} ${MPIEXEC_NUMPROC_FLAG} 2
-            "${PICONGPU_THERMAL_EXECUTABLE}"
-            -d 2 1 1
-            -g 64 32 32
-            -s 2
-            --periodic 1 1 1
-            ${MPIEXEC_POSTFLAGS}
+            "${MPIEXEC_EXECUTABLE}" ${MPIEXEC_PREFLAGS} ${MPIEXEC_NUMPROC_FLAG} 2 "${PICONGPU_THERMAL_EXECUTABLE}" -d 2
+            1 1 -g 64 32 32 -s 2 --periodic 1 1 1 ${MPIEXEC_POSTFLAGS}
     )
     set_tests_properties(
         thermal-caravan-smoke-two-steps-two-ranks
-        PROPERTIES
-            LABELS "caravan;thermal;smoke;multi-rank"
-            TIMEOUT 300
-            PROCESSORS 2
-            WORKING_DIRECTORY "${work_dir}"
+        PROPERTIES LABELS "caravan;thermal;smoke;multi-rank" TIMEOUT 300 PROCESSORS 2 WORKING_DIRECTORY "${work_dir}"
     )
 endif()

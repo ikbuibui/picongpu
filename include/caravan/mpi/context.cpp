@@ -175,8 +175,7 @@ namespace caravan
         m_queueReady.notify_one();
     }
 
-    bool MpiContext::NativeGroup::retire(
-        NativeMpiContext& context, std::size_t index, MPI_Status const& status)
+    bool MpiContext::NativeGroup::retire(NativeMpiContext& context, std::size_t index, MPI_Status const& status)
     {
         statuses[index] = status;
         if(--remaining != 0u)
@@ -244,9 +243,7 @@ namespace caravan
             std::terminate();
         std::function<void()> command
             = [this, output = std::move(output), start = std::forward<T_Start>(start)]() mutable
-        {
-            std::invoke(start, output);
-        };
+        { std::invoke(start, output); };
 
         {
             std::lock_guard lock(m_queueMutex);

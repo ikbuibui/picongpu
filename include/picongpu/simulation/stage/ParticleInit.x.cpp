@@ -17,11 +17,11 @@
 #include <pmacc/particles/meta/FindByNameOrType.hpp>
 #include <pmacc/particles/traits/FilterByFlag.hpp>
 
-#include <caravan/alpaka.hpp>
-#include <caravan/core.hpp>
-
 #include <cstdint>
 #include <utility>
+
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 
 namespace picongpu::simulation::stage
 {
@@ -82,9 +82,10 @@ namespace picongpu::simulation::stage
             pmacc::mp_list<TFunctors...>)
         {
             auto& device = Environment<>::get().DeviceContext();
-            ((previous = context.spawn(caravan::alpaka::withDevice(
-                  device,
-                  caravan::asSender(previous) | caravan::sequence(TFunctors{}(currentStep))))),
+            ((previous = context.spawn(
+                  caravan::alpaka::withDevice(
+                      device,
+                      caravan::asSender(previous) | caravan::sequence(TFunctors{}(currentStep))))),
              ...);
             return previous;
         }
@@ -100,10 +101,11 @@ namespace picongpu::simulation::stage
          * border.
          */
         auto& device = Environment<>::get().DeviceContext();
-        return context.spawn(caravan::alpaka::withDevice(
-            device,
-            caravan::asSender(std::move(previous))
-                | caravan::sequence(particles::RemoveOuterParticlesAllSpecies{}(step))));
+        return context.spawn(
+            caravan::alpaka::withDevice(
+                device,
+                caravan::asSender(std::move(previous))
+                    | caravan::sequence(particles::RemoveOuterParticlesAllSpecies{}(step))));
     }
 
 } // namespace picongpu::simulation::stage

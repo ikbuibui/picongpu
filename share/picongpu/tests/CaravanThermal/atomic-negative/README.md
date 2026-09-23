@@ -6,14 +6,14 @@ implementation from the `PICONGPU_MINIMAL_CARAVAN_THERMAL` target.
 
 ## Contents
 
-- `include-neg/picongpu/param/speciesDefinition.param` — a deliberately
+- `include-neg/picongpu/param/speciesDefinition.param` - a deliberately
   unsupported species definition. It attaches an `atomicPhysicsParticle<>`
   flag to a species; the four `<tag>` variants are selected with the
   `NEG_EXPECT_{ION,ELECTRON,ONLYIPDION,ONLYIPDEELECTRON}` preprocessor macros.
   For the `ION` case an additional Electron-tagged species is present so the
   pre-existing `AtomicPhysics.hpp` "at least one electron" assertion does not
   mask the rejection under test.
-- `check_atomic_isolation.py` — the driver.
+- `check_atomic_isolation.py` - the driver.
 
 ## Usage
 

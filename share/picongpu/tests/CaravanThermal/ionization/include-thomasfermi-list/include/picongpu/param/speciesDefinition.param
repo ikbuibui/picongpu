@@ -41,8 +41,7 @@ namespace picongpu
         current<UsedParticleCurrentSolver>,
         massRatio<MassRatioElectrons>,
         chargeRatio<ChargeRatioElectrons>,
-        ionizers<
-            MakeSeq_t<NegOtherIonizer, particles::ionization::ThomasFermi<NegThomasFermiDest>>>>;
+        ionizers<MakeSeq_t<NegOtherIonizer, particles::ionization::ThomasFermi<NegThomasFermiDest>>>>;
 
     using PIC_Electrons = Particles<PMACC_CSTRING("e"), ParticleFlagsElectrons, DefaultParticleAttributes>;
 

@@ -24,25 +24,25 @@
 // ParticleIonization stage. The declaration in ThomasFermi.def is retained.
 #if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
 
-#include "picongpu/defines.hpp"
-#include "picongpu/fields/FieldTmpOperations.hpp"
-#include "picongpu/fields/YeeCell.hpp"
-#include "picongpu/particles/atomicPhysics/SetChargeState.hpp"
-#include "picongpu/particles/ionization/byCollision/ThomasFermi/AlgorithmThomasFermi.hpp"
-#include "picongpu/particles/ionization/byCollision/ThomasFermi/ThomasFermi.def"
-#include "picongpu/traits/GetMargin.hpp"
+#    include "picongpu/defines.hpp"
+#    include "picongpu/fields/FieldTmpOperations.hpp"
+#    include "picongpu/fields/YeeCell.hpp"
+#    include "picongpu/particles/atomicPhysics/SetChargeState.hpp"
+#    include "picongpu/particles/ionization/byCollision/ThomasFermi/AlgorithmThomasFermi.hpp"
+#    include "picongpu/particles/ionization/byCollision/ThomasFermi/ThomasFermi.def"
+#    include "picongpu/traits/GetMargin.hpp"
 
-#include <pmacc/dataManagement/DataConnector.hpp>
-#include <pmacc/lockstep/lockstep.hpp>
-#include <pmacc/math/operation.hpp>
-#include <pmacc/memory/boxes/DataBox.hpp>
-#include <pmacc/memory/boxes/SharedBox.hpp>
-#include <pmacc/meta/conversion/TypeToPointerPair.hpp>
-#include <pmacc/particles/meta/FindByNameOrType.hpp>
-#include <pmacc/random/RNGProvider.hpp>
-#include <pmacc/random/distributions/Uniform.hpp>
-#include <pmacc/random/methods/methods.hpp>
-#include <pmacc/traits/Resolve.hpp>
+#    include <pmacc/dataManagement/DataConnector.hpp>
+#    include <pmacc/lockstep/lockstep.hpp>
+#    include <pmacc/math/operation.hpp>
+#    include <pmacc/memory/boxes/DataBox.hpp>
+#    include <pmacc/memory/boxes/SharedBox.hpp>
+#    include <pmacc/meta/conversion/TypeToPointerPair.hpp>
+#    include <pmacc/particles/meta/FindByNameOrType.hpp>
+#    include <pmacc/random/RNGProvider.hpp>
+#    include <pmacc/random/distributions/Uniform.hpp>
+#    include <pmacc/random/methods/methods.hpp>
+#    include <pmacc/traits/Resolve.hpp>
 
 namespace picongpu
 {

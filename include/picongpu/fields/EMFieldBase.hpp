@@ -30,13 +30,13 @@
 #include <pmacc/memory/boxes/PitchedBox.hpp>
 #include <pmacc/memory/buffers/GridBuffer.hpp>
 
-#include <caravan/core.hpp>
-
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <type_traits>
 #include <vector>
+
+#include <caravan/core.hpp>
 
 namespace picongpu
 {
@@ -100,8 +100,9 @@ namespace picongpu
              * The returned event retains PMacc's per-direction communication tails;
              * the caller must keep this field alive through its completion.
              */
-            [[nodiscard]] caravan::Event
-            spawnCommunication(caravan::ControlContext& context, caravan::Event previous = {});
+            [[nodiscard]] caravan::Event spawnCommunication(
+                caravan::ControlContext& context,
+                caravan::Event previous = {});
 
             /** Start a host-to-device copy after all conflicting producers complete.
              *

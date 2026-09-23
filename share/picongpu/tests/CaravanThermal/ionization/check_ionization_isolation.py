@@ -143,9 +143,7 @@ def main() -> int:
     failures: list[str] = []
 
     minimal_has = trace_has(minimal, build_dir, os.path.join(log_dir, "positive-minimal-h.log"), THOMAS_FERMI_IMPL)
-    ordinary_has = trace_has(
-        ordinary, build_dir, os.path.join(log_dir, "positive-ordinary-h.log"), THOMAS_FERMI_IMPL
-    )
+    ordinary_has = trace_has(ordinary, build_dir, os.path.join(log_dir, "positive-ordinary-h.log"), THOMAS_FERMI_IMPL)
     print(f"[positive] minimal TU includes {THOMAS_FERMI_IMPL}: {minimal_has}")
     print(f"[positive] ordinary TU includes {THOMAS_FERMI_IMPL}: {ordinary_has}")
     if minimal_has:

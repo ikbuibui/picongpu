@@ -33,9 +33,10 @@
 #endif
 #include "picongpu/particles/traits/GetIonizerList.hpp"
 
-#include <boost/mp11/list.hpp>
 #include <pmacc/meta/ForEach.hpp>
 #include <pmacc/particles/traits/FilterByFlag.hpp>
+
+#include <boost/mp11/list.hpp>
 
 #include <cstdint>
 

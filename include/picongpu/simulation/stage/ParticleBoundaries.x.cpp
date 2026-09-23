@@ -169,8 +169,7 @@ namespace picongpu
                                     throw std::runtime_error(
                                         "Periodic boundary kind " + errorString + " must have 0 boundaryOffset");
 #if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
-                                if(T_Species::boundaryDescription()[d].kind
-                                   != particles::boundary::Kind::Periodic)
+                                if(T_Species::boundaryDescription()[d].kind != particles::boundary::Kind::Periodic)
                                     throw std::runtime_error(
                                         "PICONGPU_MINIMAL_CARAVAN_THERMAL requires periodic particle boundaries "
                                         + errorString);

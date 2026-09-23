@@ -27,11 +27,11 @@
 #include <pmacc/Environment.hpp>
 #include <pmacc/particles/meta/FindByNameOrType.hpp>
 
-#include <caravan/alpaka.hpp>
-#include <caravan/core.hpp>
-
 #include <cstdint>
 #include <memory>
+
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 
 namespace picongpu
 {
@@ -147,10 +147,10 @@ namespace picongpu
                 DataConnector& dc = Environment<>::get().DataConnector();
                 auto species = dc.get<SpeciesType>(FrameType::getName());
                 auto& device = Environment<>::get().DeviceContext();
-                return context.spawn(caravan::alpaka::withDevice(
-                    device,
-                    caravan::asSender(std::move(previous))
-                        | caravan::sequence(species->reset())));
+                return context.spawn(
+                    caravan::alpaka::withDevice(
+                        device,
+                        caravan::asSender(std::move(previous)) | caravan::sequence(species->reset())));
             }
         };
     } // namespace particles
