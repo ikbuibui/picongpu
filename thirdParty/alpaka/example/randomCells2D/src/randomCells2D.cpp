@@ -5,10 +5,14 @@
 #include <alpaka/alpaka.hpp>
 #include <alpaka/example/ExecuteForEachAccTag.hpp>
 
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
+
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <tuple>
+#include <utility>
 
 constexpr unsigned NUM_CALCULATIONS = 256;
 constexpr unsigned NUM_X = 127;
@@ -157,9 +161,8 @@ auto example(TAccTag const&) -> int
     auto const devHost = alpaka::getDevByIdx(platformHost, 0);
     auto const platformAcc = alpaka::Platform<Acc>{};
     auto const devAcc = alpaka::getDevByIdx(platformAcc, 0);
-    using QueueProperty = alpaka::Blocking;
-    using QueueAcc = alpaka::Queue<Acc, QueueProperty>;
-    QueueAcc queue{devAcc};
+
+    caravan::alpaka::Context<Acc> context{devAcc};
 
     using BufHost = alpaka::Buf<Host, float, Dim, Idx>;
     using BufAcc = alpaka::Buf<Acc, float, Dim, Idx>;
@@ -205,14 +208,10 @@ auto example(TAccTag const&) -> int
     alpaka::KernelCfg<Acc> const kernelCfg = {extent, Vec(perThreadY, perThreadX)};
 
     // Let alpaka calculate good block and grid sizes given our full problem extent
-    auto const workDivInitRandom
+    auto const workDivInitRandomS
         = alpaka::getValidWorkDiv(kernelCfg, devAcc, initRandomKernel, extent, ptrBufAccRandS, pitchBufAccRandS);
-
-    alpaka::exec<Acc>(queue, workDivInitRandom, initRandomKernel, extent, ptrBufAccRandS, pitchBufAccRandS);
-    alpaka::wait(queue);
-
-    alpaka::exec<Acc>(queue, workDivInitRandom, initRandomKernel, extent, ptrBufAccRandV, pitchBufAccRandV);
-    alpaka::wait(queue);
+    auto const workDivInitRandomV
+        = alpaka::getValidWorkDiv(kernelCfg, devAcc, initRandomKernel, extent, ptrBufAccRandV, pitchBufAccRandV);
 
     auto pitchHostS = alpaka::getPitchesInBytes(bufHostS)[0];
     auto pitchHostV = alpaka::getPitchesInBytes(bufHostV)[0];
@@ -227,13 +226,14 @@ auto example(TAccTag const&) -> int
     }
 
     auto pitchBufAccS = alpaka::getPitchesInBytes(bufAccS)[0];
-    alpaka::memcpy(queue, bufAccS, bufHostS);
+    auto pitchBufAccV = alpaka::getPitchesInBytes(bufAccV)[0];
     RunTimestepKernelSingle runTimestepKernelSingle;
+    RunTimestepKernelVector runTimestepKernelVector;
 
     alpaka::KernelCfg<Acc> const runtimeRandomKernelCfg = {extent, Vec(perThreadY, perThreadX)};
 
-    // Let alpaka calculate good block and grid sizes given our full problem extent
-    auto const workDivRuntimeStep = alpaka::getValidWorkDiv(
+    // Let alpaka calculate good block and grid sizes for each independent pipeline.
+    auto const workDivRuntimeStepS = alpaka::getValidWorkDiv(
         runtimeRandomKernelCfg,
         devAcc,
         runTimestepKernelSingle,
@@ -242,32 +242,47 @@ auto example(TAccTag const&) -> int
         ptrBufAccS,
         pitchBufAccRandS,
         pitchBufAccS);
-
-    alpaka::exec<Acc>(
-        queue,
-        workDivRuntimeStep,
-        runTimestepKernelSingle,
-        extent,
-        ptrBufAccRandS,
-        ptrBufAccS,
-        pitchBufAccRandS,
-        pitchBufAccS);
-    alpaka::memcpy(queue, bufHostS, bufAccS);
-
-    auto pitchBufAccV = alpaka::getPitchesInBytes(bufAccV)[0];
-    alpaka::memcpy(queue, bufAccV, bufHostV);
-    RunTimestepKernelVector runTimestepKernelVector;
-    alpaka::exec<Acc>(
-        queue,
-        workDivRuntimeStep,
+    auto const workDivRuntimeStepV = alpaka::getValidWorkDiv(
+        runtimeRandomKernelCfg,
+        devAcc,
         runTimestepKernelVector,
         extent,
         ptrBufAccRandV,
         ptrBufAccV,
         pitchBufAccRandV,
         pitchBufAccV);
-    alpaka::memcpy(queue, bufHostV, bufAccV);
-    alpaka::wait(queue);
+
+    // Each pipeline preserves its dependencies while whenAll exposes their independence to managed queues.
+    auto scalarPipeline
+        = caravan::alpaka::kernel<Acc>(workDivInitRandomS, initRandomKernel, extent, ptrBufAccRandS, pitchBufAccRandS)
+          | caravan::alpaka::sequence(caravan::alpaka::copy(bufAccS, bufHostS, extent))
+          | caravan::alpaka::sequence(
+              caravan::alpaka::kernel<Acc>(
+                  workDivRuntimeStepS,
+                  runTimestepKernelSingle,
+                  extent,
+                  ptrBufAccRandS,
+                  ptrBufAccS,
+                  pitchBufAccRandS,
+                  pitchBufAccS))
+          | caravan::alpaka::sequence(caravan::alpaka::copy(bufHostS, bufAccS, extent));
+
+    auto vectorPipeline
+        = caravan::alpaka::kernel<Acc>(workDivInitRandomV, initRandomKernel, extent, ptrBufAccRandV, pitchBufAccRandV)
+          | caravan::alpaka::sequence(caravan::alpaka::copy(bufAccV, bufHostV, extent))
+          | caravan::alpaka::sequence(
+              caravan::alpaka::kernel<Acc>(
+                  workDivRuntimeStepV,
+                  runTimestepKernelVector,
+                  extent,
+                  ptrBufAccRandV,
+                  ptrBufAccV,
+                  pitchBufAccRandV,
+                  pitchBufAccV))
+          | caravan::alpaka::sequence(caravan::alpaka::copy(bufHostV, bufAccV, extent));
+
+    caravan::syncWait(
+        caravan::alpaka::withDevice(context, caravan::whenAll(std::move(scalarPipeline), std::move(vectorPipeline))));
 
     float avgS = 0;
     float avgV = 0;
@@ -295,7 +310,7 @@ auto example(TAccTag const&) -> int
               << convergenceFactor << std::endl;
     // 10 is a magic number to allow a reasonable margin statistical errors
     if(std::abs(avgS - expectedValue) < 10 * convergenceFactor
-       || std::abs(avgV - expectedValue) < 10 * convergenceFactor)
+       && std::abs(avgV - expectedValue) < 10 * convergenceFactor)
     {
         std::cout << "Convergence test passed" << std::endl;
         return 0;
