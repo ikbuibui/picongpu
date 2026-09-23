@@ -73,6 +73,8 @@ namespace caravan
 
             void run() noexcept
             {
+                // done = falso;
+                // while (!done)
                 for(;;)
                 {
                     // Completion permits destruction of the child, but never before its start() returns.
