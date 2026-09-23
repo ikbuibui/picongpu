@@ -66,9 +66,7 @@ namespace picongpu
 
             GridController<simDim>& gc = Environment<simDim>::get().GridController();
             /* can be spared for better scaling, but guarantees the user that the restart was successful */
-            eventSystem::mpiBlocking(gc.getCommunicator().getMPIComm());
-            // ensure that the event system finished all tasks
-            eventSystem::getTransactionEvent().waitForFinished();
+            caravan::syncWait(gc.getCommunicator().barrier());
             /** @todo this should not be required but is kept because we do not know anymore why it is here
              * maybe it should catch possible backend (CUDA/HIP) errors.
              */

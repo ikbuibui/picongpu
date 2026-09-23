@@ -20,7 +20,7 @@
 # last updated: 2025-01-06
 
 PIC_BRANCH="dev"
-PROJECT=$proj
+PROJECT=$PROJID
 echo $PROJECT
 
 # get PIConGPU profile
@@ -95,7 +95,7 @@ if [ ! -d "$ADIOS2_ROOT" ]; then
 fi
 
 #   openPMD-api
-if [ ! -d "OPENPMD_ROOT" ]; then
+if [ ! -d "$OPENPMD_ROOT" ]; then
     cd $SOURCE_DIR
     git clone -b 0.17.1 https://github.com/openPMD/openPMD-api.git \
         $SOURCE_DIR/openpmd-api

@@ -22,10 +22,16 @@
 #include "picongpu/particles/traits/GetCurrentSolver.hpp"
 #include "picongpu/traits/GetMargin.hpp"
 
+#include <pmacc/Environment.hpp>
 #include <pmacc/mappings/kernel/AreaMapping.hpp>
 #include <pmacc/mappings/kernel/StrideMapping.hpp>
 #include <pmacc/math/Vector.hpp>
 #include <pmacc/types.hpp>
+
+#include <utility>
+
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 
 namespace picongpu
 {
@@ -54,7 +60,9 @@ namespace picongpu
                 typename T_FrameSolver,
                 typename T_JBox,
                 typename T_ParticleBox>
-            void execute(
+            caravan::Event execute(
+                caravan::ControlContext& context,
+                caravan::Event previous,
                 T_CellDescription const& cellDescription,
                 T_DepositionKernel const& depositionKernel,
                 T_FrameSolver const& frameSolver,
@@ -81,11 +89,18 @@ namespace picongpu
                 auto mapper = makeStrideAreaMapper<T_area, skipSuperCells + 1u>(cellDescription);
 
                 constexpr auto numElemtPerBlock = T_ParticleBox::frameSize * T_Strategy::workerMultiplier;
+                auto& device = pmacc::Environment<>::get().DeviceContext();
                 do
                 {
-                    PMACC_LOCKSTEP_KERNEL(depositionKernel)
-                        .template config<numElemtPerBlock>(mapper.getGridDim())(jBox, parBox, frameSolver, mapper);
+                    previous = context.spawn(
+                        caravan::alpaka::withDevice(
+                            device,
+                            caravan::asSender(std::move(previous))
+                                | caravan::sequence(PMACC_LOCKSTEP_KERNEL(depositionKernel)
+                                                        .template config<numElemtPerBlock>(
+                                                            mapper.getGridDim())(jBox, parBox, frameSolver, mapper))));
                 } while(mapper.next());
+                return previous;
             }
         };
 
@@ -103,7 +118,9 @@ namespace picongpu
                 typename T_FrameSolver,
                 typename T_JBox,
                 typename T_ParticleBox>
-            void execute(
+            caravan::Event execute(
+                caravan::ControlContext& context,
+                caravan::Event previous,
                 T_CellDescription const& cellDescription,
                 T_DepositionKernel const& depositionKernel,
                 T_FrameSolver const& frameSolver,
@@ -113,8 +130,14 @@ namespace picongpu
                 auto const mapper = makeAreaMapper<T_area>(cellDescription);
 
                 constexpr auto numElemtPerBlock = T_ParticleBox::frameSize * T_Strategy::workerMultiplier;
-                PMACC_LOCKSTEP_KERNEL(depositionKernel)
-                    .template config<numElemtPerBlock>(mapper.getGridDim())(jBox, parBox, frameSolver, mapper);
+                auto& device = pmacc::Environment<>::get().DeviceContext();
+                return context.spawn(
+                    caravan::alpaka::withDevice(
+                        device,
+                        caravan::asSender(std::move(previous))
+                            | caravan::sequence(PMACC_LOCKSTEP_KERNEL(depositionKernel)
+                                                    .template config<numElemtPerBlock>(
+                                                        mapper.getGridDim())(jBox, parBox, frameSolver, mapper))));
             }
         };
 

@@ -17,7 +17,10 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-#if (ENABLE_OPENPMD == 1)
+// The runtime-density-from-openPMD implementation is not migrated to Caravan. Minimal
+// mode keeps only a rejecting definition so that merely naming the profile alias in a
+// parameter file stays valid; instantiating it fails with a clear diagnostic.
+#if (ENABLE_OPENPMD == 1) && !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
 
 #    pragma once
 
@@ -318,6 +321,42 @@ namespace picongpu
             };
         };
 
+    } // namespace densityProfiles
+} // namespace picongpu
+
+#elif defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+
+#    pragma once
+
+#    include "picongpu/defines.hpp"
+
+#    include <type_traits>
+
+namespace picongpu
+{
+    namespace densityProfiles
+    {
+        namespace detail
+        {
+            //! Dependent false so the rejection only fires once the profile is instantiated.
+            template<typename T_First, typename T_Second>
+            struct MinimalModeFromOpenPMDUnsupported : std::false_type
+            {
+            };
+        } // namespace detail
+
+        /** Runtime density from openPMD is unsupported in minimal mode.
+         *
+         * Declaring (but not instantiating) the profile alias remains valid; any attempt to
+         * instantiate the profile fails instead of silently producing density values.
+         */
+        template<typename T_ParamClass>
+        struct FromOpenPMDImpl : public T_ParamClass
+        {
+            static_assert(
+                detail::MinimalModeFromOpenPMDUnsupported<T_ParamClass, T_ParamClass>::value,
+                "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support the FromOpenPMD density profile");
+        };
     } // namespace densityProfiles
 } // namespace picongpu
 

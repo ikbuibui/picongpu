@@ -8,12 +8,14 @@
 
 #include <cassert>
 #include <condition_variable>
+#include <exception>
 #include <functional>
 #include <future>
 #include <iostream>
 #include <mutex>
 #include <queue>
 #include <thread>
+#include <utility>
 
 namespace alpaka::core
 {
@@ -52,7 +54,12 @@ namespace alpaka::core
             }
         };
 
-        using TaskPackage = std::pair<std::unique_ptr<Task>, std::promise<void>>;
+        struct TaskPackage
+        {
+            std::unique_ptr<Task> task;
+            std::promise<void> promise;
+            bool consumePendingException = false;
+        };
 
     public:
         ~CallbackThread()
@@ -79,26 +86,16 @@ namespace alpaka::core
         template<typename NullaryFunction>
         auto submit(NullaryFunction&& nf) -> std::future<void>
         {
-            using DecayedFunction = std::decay_t<NullaryFunction>;
-            static_assert(
-                std::is_void_v<std::invoke_result_t<DecayedFunction>>,
-                "Submitted function must not have any arguments and return void.");
+            return submit(std::forward<NullaryFunction>(nf), false);
+        }
 
-            // FunctionHolder stores a copy of the user's task, but may be constructed from an expiring value to avoid
-            // the copy. We do NOT store a reference to the users task, which could dangle if the user isn't careful.
-            auto tp = std::pair(
-                std::unique_ptr<Task>(new FunctionHolder<DecayedFunction>{std::forward<NullaryFunction>(nf)}),
-                std::promise<void>{});
-            auto f = tp.second.get_future();
-            {
-                std::unique_lock<std::mutex> lock{m_mutex};
-                m_tasks.emplace(std::move(tp));
-                if(!m_thread.joinable())
-                    startWorkerThread();
-                m_cond.notify_one();
-            }
-
-            return f;
+        /** Enqueue a barrier whose future reports the first exception from preceding tasks.
+         *
+         * Queue synchronization uses this instead of silently discarding asynchronous CPU execution failures.
+         */
+        auto submitErrorBarrier() -> std::future<void>
+        {
+            return submit([]() noexcept {}, true);
         }
 
         //! @}
@@ -113,11 +110,38 @@ namespace alpaka::core
         }
 
     private:
+        template<typename NullaryFunction>
+        auto submit(NullaryFunction&& nf, bool consumePendingException) -> std::future<void>
+        {
+            using DecayedFunction = std::decay_t<NullaryFunction>;
+            static_assert(
+                std::is_void_v<std::invoke_result_t<DecayedFunction>>,
+                "Submitted function must not have any arguments and return void.");
+
+            // FunctionHolder stores a copy of the user's task, but may be constructed from an expiring value to avoid
+            // the copy. We do NOT store a reference to the users task, which could dangle if the user isn't careful.
+            TaskPackage package{
+                std::unique_ptr<Task>(new FunctionHolder<DecayedFunction>{std::forward<NullaryFunction>(nf)}),
+                std::promise<void>{},
+                consumePendingException};
+            auto future = package.promise.get_future();
+            {
+                std::unique_lock<std::mutex> lock{m_mutex};
+                m_tasks.emplace(std::move(package));
+                if(!m_thread.joinable())
+                    startWorkerThread();
+                m_cond.notify_one();
+            }
+
+            return future;
+        }
+
         std::thread m_thread;
         std::condition_variable m_cond;
         std::mutex m_mutex;
         bool m_stop{false};
         std::queue<TaskPackage> m_tasks;
+        std::exception_ptr m_pendingException;
 
         auto startWorkerThread() -> void
         {
@@ -128,6 +152,7 @@ namespace alpaka::core
                     {
                         std::promise<void> taskPromise;
                         std::exception_ptr eptr;
+                        bool consumePendingException;
                         {
                             // Task is destroyed before promise is updated but after the queue state is up to date.
                             std::unique_ptr<Task> task = nullptr;
@@ -138,17 +163,25 @@ namespace alpaka::core
                                 if(m_stop && m_tasks.empty())
                                     break;
 
-                                task = std::move(m_tasks.front().first);
-                                taskPromise = std::move(m_tasks.front().second);
+                                task = std::move(m_tasks.front().task);
+                                taskPromise = std::move(m_tasks.front().promise);
+                                consumePendingException = m_tasks.front().consumePendingException;
                             }
                             assert(task);
-                            try
+                            if(consumePendingException)
+                                eptr = std::exchange(m_pendingException, nullptr);
+                            else
                             {
-                                task->run();
-                            }
-                            catch(...)
-                            {
-                                eptr = std::current_exception();
+                                try
+                                {
+                                    task->run();
+                                }
+                                catch(...)
+                                {
+                                    eptr = std::current_exception();
+                                    if(!m_pendingException)
+                                        m_pendingException = eptr;
+                                }
                             }
                             {
                                 std::unique_lock<std::mutex> lock{m_mutex};

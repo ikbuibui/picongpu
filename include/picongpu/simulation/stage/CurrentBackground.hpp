@@ -59,6 +59,11 @@ namespace picongpu
                  */
                 void operator()(uint32_t const step) const
                 {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+                    static_assert(
+                        !FieldBackgroundJ::activated,
+                        "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support an activated J current background");
+#endif
                     if(FieldBackgroundJ::activated)
                     {
                         using namespace pmacc;
@@ -84,7 +89,7 @@ namespace picongpu
                  * Synchronizes simulation data, meaning accessing (host side) data
                  * will return up-to-date values.
                  */
-                void synchronize() override {};
+                void synchronize() {};
 
                 /**
                  * Return the globally unique identifier for this simulation data.

@@ -1,22 +1,3 @@
-/* Copyright 2024-2024 Rene Widera
- *
- * This file is part of PIConGPU.
- *
- * PIConGPU is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * PIConGPU is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with PIConGPU.
- * If not, see <http://www.gnu.org/licenses/>.
- */
-
 #include "picongpu/simulation/stage/ParticleInit.hpp"
 
 // clang-format off
@@ -32,10 +13,15 @@
 #include "picongpu/particles/filter/filter.hpp"
 #include "picongpu/particles/startPosition/detail/WeightMacroParticles.hpp"
 
-#include <pmacc/functor/Call.hpp>
-#include <pmacc/meta/ForEach.hpp>
+#include <pmacc/Environment.hpp>
+#include <pmacc/particles/meta/FindByNameOrType.hpp>
+#include <pmacc/particles/traits/FilterByFlag.hpp>
 
 #include <cstdint>
+#include <utility>
+
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 
 namespace picongpu::simulation::stage
 {
@@ -53,42 +39,73 @@ namespace picongpu::simulation::stage
             using SpeciesType = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, T_SpeciesType>;
             using FrameType = typename SpeciesType::FrameType;
 
-            HINLINE void operator()(uint32_t const currentStep) const
+            /** @return lazy sender removing the species' outer particles and filling frame gaps */
+            HINLINE auto operator()(uint32_t const currentStep) const
             {
                 DataConnector& dc = Environment<>::get().DataConnector();
                 auto species = dc.get<SpeciesType>(FrameType::getName());
-                picongpu::particles::boundary::removeOuterParticles(*species, currentStep);
+                return picongpu::particles::boundary::removeOuterParticles(*species, currentStep);
             }
         };
 
         //! Remove all particles of all species with pusher flag that are outside the respective boundaries
         struct RemoveOuterParticlesAllSpecies
         {
-            /** Remove all external particles
-             *
-             * @param currentStep current simulation step
-             */
-            HINLINE void operator()(uint32_t const currentStep) const
+            /** @return lazy sender removing outer particles for every species in order */
+            template<typename... TSpecies>
+            HINLINE auto removeAll(uint32_t const currentStep, pmacc::mp_list<TSpecies...>) const
+            {
+                return ::picongpu::particles::detail::sequenceAll(RemoveOuterParticles<TSpecies>{}(currentStep)...);
+            }
+
+            HINLINE auto operator()(uint32_t const currentStep) const
             {
                 using VectorSpeciesWithPusher =
                     typename pmacc::particles::traits::FilterByFlag<VectorAllSpecies, particlePusher<>>::type;
-                meta::ForEach<VectorSpeciesWithPusher, RemoveOuterParticles<boost::mpl::_1>> removeOuterParticles;
-                removeOuterParticles(currentStep);
+                return removeAll(currentStep, VectorSpeciesWithPusher{});
             }
         };
+
+        /** Sequentially run every initialization functor, each depending on its predecessor.
+         *
+         * Functors are started eagerly through the context; the returned event is the completion of
+         * the last functor and therefore of the whole pipeline. This is the single initialization
+         * boundary, so a caller may wait on it once.
+         *
+         * @return completion of the last initialization functor
+         */
+        template<typename... TFunctors>
+        HINLINE caravan::Event runInitPipeline(
+            caravan::ControlContext& context,
+            caravan::Event previous,
+            uint32_t const currentStep,
+            pmacc::mp_list<TFunctors...>)
+        {
+            auto& device = Environment<>::get().DeviceContext();
+            ((previous = context.spawn(
+                  caravan::alpaka::withDevice(
+                      device,
+                      caravan::asSender(previous) | caravan::sequence(TFunctors{}(currentStep))))),
+             ...);
+            return previous;
+        }
     } // namespace particles
 
-    void ParticleInit::operator()(uint32_t const step) const
+    caravan::Event ParticleInit::operator()(caravan::ControlContext& context, uint32_t const step) const
     {
-        meta::ForEach<picongpu::particles::InitPipeline, pmacc::functor::Call<boost::mpl::_1>> initSpecies;
-        initSpecies(step);
+        auto previous
+            = particles::runInitPipeline(context, caravan::readyEvent(), step, picongpu::particles::InitPipeline{});
         /* Remove all particles that are outside the respective boundaries
          * (this can happen if density functor didn't account for it).
          * For the rest of the simulation we can be sure the only external particles just crossed the
          * border.
          */
-        particles::RemoveOuterParticlesAllSpecies removeOuterParticlesAllSpecies;
-        removeOuterParticlesAllSpecies(step);
+        auto& device = Environment<>::get().DeviceContext();
+        return context.spawn(
+            caravan::alpaka::withDevice(
+                device,
+                caravan::asSender(std::move(previous))
+                    | caravan::sequence(particles::RemoveOuterParticlesAllSpecies{}(step))));
     }
 
 } // namespace picongpu::simulation::stage

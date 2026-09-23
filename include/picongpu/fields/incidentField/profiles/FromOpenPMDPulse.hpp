@@ -17,7 +17,10 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-#if (ENABLE_OPENPMD == 1)
+// The incident-field-from-openPMD pulse is not migrated to Caravan. Minimal mode keeps
+// the lightweight declaration in FromOpenPMDPulse.def but excludes this implementation;
+// selecting it is rejected in EnabledProfiles.hpp.
+#if (ENABLE_OPENPMD == 1) && !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
 
 #    pragma once
 

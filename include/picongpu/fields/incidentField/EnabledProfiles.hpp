@@ -25,6 +25,8 @@
 #include <pmacc/meta/conversion/MakeSeq.hpp>
 #include <pmacc/meta/conversion/Unique.hpp>
 
+#include <boost/mp11/algorithm.hpp>
+
 #include <cstdint>
 #include <type_traits>
 
@@ -40,4 +42,54 @@ namespace picongpu::fields::incidentField
 
     //! Typelist of all unique enabled profiles, can contain duplicates
     using UniqueEnabledProfiles = pmacc::Unique_t<EnabledProfiles>;
+
+// The profile declaration only exists when openPMD is enabled, so the detection
+// trait and its assertion must be guarded by both conditions.
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL) && (ENABLE_OPENPMD == 1)
+    namespace detail
+    {
+        /** Detect the from-openPMD pulse by partial specialization.
+         *
+         * Incident-field dispatch goes through trait specializations, so a class-body
+         * assertion in the profile itself would not necessarily fire on selection.
+         */
+        template<typename T_Profile>
+        struct IsFromOpenPMDPulse : std::false_type
+        {
+        };
+
+        template<typename T_Params>
+        struct IsFromOpenPMDPulse<profiles::FromOpenPMDPulse<T_Params>> : std::true_type
+        {
+        };
+    } // namespace detail
+
+    static_assert(
+        !boost::mp11::mp_any_of<EnabledProfiles, detail::IsFromOpenPMDPulse>::value,
+        "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support the FromOpenPMDPulse incident-field profile");
+#endif
+
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+    namespace detail
+    {
+        /** Detect the disabled incident-field profile. */
+        template<typename T_Profile>
+        struct IsNoneProfile : std::false_type
+        {
+        };
+
+        template<>
+        struct IsNoneProfile<profiles::None> : std::true_type
+        {
+        };
+    } // namespace detail
+
+    /* Non-None incident-field profiles update fields through discarded lazy kernels
+     * (`updateField`), so the slice rejects them explicitly rather than silently
+     * skipping the incident-field contribution.
+     */
+    static_assert(
+        boost::mp11::mp_all_of<EnabledProfiles, detail::IsNoneProfile>::value,
+        "PICONGPU_MINIMAL_CARAVAN_THERMAL supports only the None incident-field profile");
+#endif
 } // namespace picongpu::fields::incidentField

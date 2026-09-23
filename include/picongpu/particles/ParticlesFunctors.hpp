@@ -27,7 +27,11 @@
 #include <pmacc/Environment.hpp>
 #include <pmacc/particles/meta/FindByNameOrType.hpp>
 
+#include <cstdint>
 #include <memory>
+
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 
 namespace picongpu
 {
@@ -69,6 +73,26 @@ namespace picongpu
             }
         };
 
+        /** Initialize the supercell/frame storage of a freshly created species.
+         *
+         * PMacc allocation does not zero storage. Use the buffer-level reset that only clears
+         * metadata: the species-level reset would first run a deletion kernel over frame pointers
+         * that are not initialized yet.
+         */
+        template<typename T_SpeciesType>
+        struct ResetSpeciesStorage
+        {
+            using SpeciesType = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, T_SpeciesType>;
+            using FrameType = typename SpeciesType::FrameType;
+
+            HINLINE auto operator()() const
+            {
+                DataConnector& dc = Environment<>::get().DataConnector();
+                auto species = dc.get<SpeciesType>(FrameType::getName());
+                return species->getParticlesBuffer().reset();
+            }
+        };
+
         /** write memory statistics to the terminal
          *
          * @tparam T_SpeciesType type or name as PMACC_CSTRING of the species
@@ -79,17 +103,26 @@ namespace picongpu
             using SpeciesType = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, T_SpeciesType>;
             using FrameType = typename SpeciesType::FrameType;
 
-            template<typename T_DeviceHeap>
-            HINLINE void operator()(std::shared_ptr<T_DeviceHeap> const& deviceHeap) const
+            /** Log the remaining allocation slots of the mallocMC heap.
+             *
+             * @tparam T_DeviceHeap mallocMC allocator type
+             * @tparam T_Queue native alpaka queue used for the synchronous statistics query
+             * @param deviceHeap heap to query
+             * @param queue explicitly owned queue; the caller must keep it alive for the call
+             */
+            template<typename T_DeviceHeap, typename T_Queue>
+            HINLINE void operator()(std::shared_ptr<T_DeviceHeap> const& deviceHeap, T_Queue& queue) const
             {
 #if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
-                auto alpakaStream = pmacc::eventSystem::getComputeDeviceQueue(ITask::TASK_DEVICE)->getAlpakaQueue();
                 log<picLog::MEMORY>("mallocMC: free slots for species %3%: %1% a %2%")
                     % deviceHeap->getAvailableSlots(
                         manager::Device<ComputeDevice>::get().current(),
-                        alpakaStream,
+                        queue,
                         sizeof(FrameType))
                     % sizeof(FrameType) % FrameType::getName();
+#else
+                static_cast<void>(deviceHeap);
+                static_cast<void>(queue);
 #endif
             }
         };
@@ -104,11 +137,20 @@ namespace picongpu
             using SpeciesType = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, T_SpeciesType>;
             using FrameType = typename SpeciesType::FrameType;
 
-            HINLINE void operator()(uint32_t const currentStep)
+            /** @return completion of the species reset, after @p previous */
+            HINLINE caravan::Event operator()(
+                caravan::ControlContext& context,
+                caravan::Event previous,
+                uint32_t const currentStep)
             {
+                static_cast<void>(currentStep);
                 DataConnector& dc = Environment<>::get().DataConnector();
                 auto species = dc.get<SpeciesType>(FrameType::getName());
-                species->reset(currentStep);
+                auto& device = Environment<>::get().DeviceContext();
+                return context.spawn(
+                    caravan::alpaka::withDevice(
+                        device,
+                        caravan::asSender(std::move(previous)) | caravan::sequence(species->reset())));
             }
         };
     } // namespace particles

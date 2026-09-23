@@ -14,16 +14,19 @@ from itertools import chain, groupby
 from os import PathLike
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import picmistandard
 from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from sympy import Symbol
 
 from picongpu import pypicongpu, templates
 from picongpu.picmi import constants
 from picongpu.picmi.diagnostics.field_dump import NativeFieldDump, _FieldDump
 from picongpu.picmi.diagnostics.particle_dump import ParticleDump
-from picongpu.picmi.grid import Cartesian3DGrid
+from picongpu.picmi.diagnostics.phase_space import PhaseSpace
+from picongpu.picmi.distribution.AnalyticDistribution import AnalyticDistribution
+from picongpu.picmi.grid import Cartesian2DGrid, Cartesian3DGrid, AnyGrid
 from picongpu.picmi.interaction import Interaction, Synchrotron
 from picongpu.picmi.interaction.collision import Collision, CollisionalPhysicsSetup
 from picongpu.picmi.layout import AnyLayout
@@ -47,7 +50,7 @@ from picongpu.pypicongpu.walltime import Walltime
 
 class _DensityImpl(BaseModel):
     layout: AnyLayout
-    grid: Cartesian3DGrid
+    grid: AnyGrid
     species: Species
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -199,6 +202,14 @@ class Simulation(picmistandard.PICMI_Simulation):
     picongpu_base_density: float | None = Field(default=None)
     """value to normalise densities with"""
 
+    picongpu_precision: Literal[32, 64] = Field(default=32)
+    """
+    floating point precision of the simulation core (see ``precision.param``)
+
+    32 (single precision, default) or 64 (double precision). Controls the
+    ``precisionPIConGPU`` namespace in the generated ``precision.param``.
+    """
+
     picongpu_walltime: datetime.timedelta | None = Field(default=None)
     """time after which the cluster scheduler will stop the simulation"""
 
@@ -208,28 +219,35 @@ class Simulation(picmistandard.PICMI_Simulation):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    # Solvers that impose a CFL stability limit and therefore participate in the
+    # delta_t / cfl cross-check below. "other:None" is deliberately excluded: it
+    # disables the vacuum field update (and the J->E coupling), so it has no CFL
+    # limit at all (the C++ CFLChecker returns infinity) and any delta_t is legal.
+    _CFL_GATED_SOLVER_METHODS = ("Yee", "Lehe", "CKC", "other:ArbitraryOrderFDTD")
+
     @model_validator(mode="after")
     def _post_init(self):
-        # additional PICMI stuff checks, @todo move to picmistandard, Brian Marre, 2024
-        ## throw if both cfl & delta_t are set
+        # cross-check cfl against delta_t, deriving whichever is missing; the
+        # "other:None" solver has no CFL limit and is skipped entirely
         if (
             self.solver is not None
-            and self.solver.method in ["Yee", "Lehe"]
-            and isinstance(self.solver.grid, Cartesian3DGrid)
+            and self.solver.method in self._CFL_GATED_SOLVER_METHODS
+            and isinstance(self.solver.grid, (Cartesian3DGrid, Cartesian2DGrid))
         ):
-            self.__yee_compute_cfl_or_delta_t()
+            self._compute_cfl_or_delta_t()
         return self
 
-    def __yee_compute_cfl_or_delta_t(self) -> None:
+    def _compute_cfl_or_delta_t(self) -> None:
         """
         use delta_t or cfl to compute the other
 
         needs grid parameters for computation
-        Only works if method is Yee or Lehe.
+        Only works for solvers that impose a CFL limit (Yee, Lehe, CKC and
+        other:ArbitraryOrderFDTD); "other:None" has no CFL limit and is skipped.
 
-        :throw AssertionError: if grid (of solver) is not 3D cartesian grid
+        :throw AssertionError: if grid (of solver) is not a cartesian grid
         :throw AssertionError: if solver is None
-        :throw AssertionError: if solver is not "Yee"
+        :throw AssertionError: if solver does not impose a CFL limit
         :throw ValueError: if both cfl & delta_t are set, and they don't match
 
         Does not check if delta_t could be computed
@@ -247,25 +265,48 @@ class Simulation(picmistandard.PICMI_Simulation):
           nop (do nothing)
         """
         assert self.solver is not None
-        assert self.solver.method in ["Yee", "Lehe"]
-        assert isinstance(self.solver.grid, Cartesian3DGrid)
+        assert self.solver.method in self._CFL_GATED_SOLVER_METHODS
+        assert isinstance(self.solver.grid, (Cartesian3DGrid, Cartesian2DGrid))
 
-        delta_x = (
-            self.solver.grid.upper_bound[0] - self.solver.grid.lower_bound[0]
-        ) / self.solver.grid.number_of_cells[0]
-        delta_y = (
-            self.solver.grid.upper_bound[1] - self.solver.grid.lower_bound[1]
-        ) / self.solver.grid.number_of_cells[1]
-        delta_z = (
-            self.solver.grid.upper_bound[2] - self.solver.grid.lower_bound[2]
-        ) / self.solver.grid.number_of_cells[2]
+        # The CFL factor is sqrt(sum over the spatial dimensions of 1/cell_size^2).
+        # In 2D the z term is dropped, so a square 2D grid yields a factor of sqrt(2)
+        # (not sqrt(3) as in 3D).
+        grid = self.solver.grid
+        cell_size = [
+            (grid.upper_bound[i] - grid.lower_bound[i]) / grid.number_of_cells[i]
+            for i in range(grid.number_of_dimensions)
+        ]
+        cfl_factor = math.sqrt(sum(1.0 / cs**2 for cs in cell_size))
+
+        if self.solver.method in ("Yee", "Lehe"):
+            # Legacy second-order FDTD: cfl = delta_t * c * sqrt(sum 1/dx^2).
+            # Kept as the original arithmetic (cfl_factor is the dimension-aware
+            # version and equals the 3D formula for a 3D grid) so Yee/Lehe results
+            # are bit-for-bit unchanged.
+            cfl_scale = constants.c * cfl_factor
+
+            def _delta_t_from_cfl(cfl):
+                return cfl / cfl_scale
+
+            def _cfl_from_delta_t(delta_t):
+                return delta_t * cfl_scale
+        else:
+            # CKC (min cell) and other:ArbitraryOrderFDTD (Yee term / weight-sum):
+            # cfl = c * delta_t / max_c_dt, where max_c_dt is the solver's CFL
+            # limit on c * delta_t. The solver owns that restriction, and passing
+            # only the spatial cell sizes makes it dimension-aware (2D drops z).
+            max_c_dt = self.solver._cfl_max_cdt(*cell_size)
+            assert max_c_dt is not None, "solver does not impose a CFL limit"
+
+            def _delta_t_from_cfl(cfl):
+                return cfl * max_c_dt / constants.c
+
+            def _cfl_from_delta_t(delta_t):
+                return delta_t * constants.c / max_c_dt
 
         if self.time_step_size is not None and self.solver.cfl is not None:
             # both cfl & delta_t given -> check their compatibility
-            delta_t_from_cfl = self.solver.cfl / (
-                constants.c * math.sqrt(1 / delta_x**2 + 1 / delta_y**2 + 1 / delta_z**2)
-            )
-
+            delta_t_from_cfl = _delta_t_from_cfl(self.solver.cfl)
             if delta_t_from_cfl != self.time_step_size:
                 raise ValueError(
                     "time step size (delta t) does not match CFL "
@@ -275,14 +316,10 @@ class Simulation(picmistandard.PICMI_Simulation):
         else:
             if self.time_step_size is not None:
                 # calculate cfl
-                self.solver.cfl = self.time_step_size * (
-                    constants.c * math.sqrt(1 / delta_x**2 + 1 / delta_y**2 + 1 / delta_z**2)
-                )
+                self.solver.cfl = _cfl_from_delta_t(self.time_step_size)
             elif self.solver.cfl is not None:
                 # calculate delta_t
-                self.time_step_size = self.solver.cfl / (
-                    constants.c * math.sqrt(1 / delta_x**2 + 1 / delta_y**2 + 1 / delta_z**2)
-                )
+                self.time_step_size = _delta_t_from_cfl(self.solver.cfl)
 
             # if neither delta_t nor cfl are given simply silently pass
             # (might change in the future)
@@ -333,6 +370,7 @@ class Simulation(picmistandard.PICMI_Simulation):
                         else PyPIConGPUFieldDump(
                             name=diagnostic.fieldname,
                             filtername=diagnostic.filtername,
+                            species_name=None if isinstance(diagnostic, NativeFieldDump) else diagnostic.species_name,
                             functor=None
                             if isinstance(diagnostic, NativeFieldDump)
                             else diagnostic.functor.get_as_pypicongpu(mode="DerivedField"),
@@ -363,6 +401,21 @@ class Simulation(picmistandard.PICMI_Simulation):
             pypicongpu.util.unsupported("laser injection method", self.laser_injection_methods, [])
         if self.max_steps is None and self.max_time is None:
             raise ValueError("runtime not specified (neither as step count nor max time)")
+        if isinstance(self.solver.grid, Cartesian2DGrid):
+            # 2D3V: there is no spatial z coordinate (momentum still has all three components).
+            for diagnostic in filter(lambda d: isinstance(d, PhaseSpace), self.diagnostics):
+                if diagnostic.spatial_coordinate == "z":
+                    raise ValueError(
+                        "A phase-space diagnostic with spatial coordinate 'z' is not supported in 2D. "
+                        f"You gave {diagnostic.spatial_coordinate=} on a 2D grid."
+                    )
+            for species in self.species:
+                if isinstance(species.initial_distribution, AnalyticDistribution):
+                    if Symbol("z") in species.initial_distribution.density_expression.free_symbols:
+                        raise ValueError(
+                            "A z-dependent AnalyticDistribution density is not supported on a 2D grid. "
+                            f"You gave a density formula depending on 'z' for species {species.name!r} on a 2D grid."
+                        )
 
     def _collect_particle_filters(self):
         # This does not necessarily work on Binning plugin
@@ -440,6 +493,7 @@ class Simulation(picmistandard.PICMI_Simulation):
             base_density=self._get_base_density(),
             synchrotron_params=synchrotron_params[0],
             collisional_physics=collisions[0].get_as_pypicongpu(),
+            precision=self.picongpu_precision,
         )
 
     def _get_base_density(self) -> float:

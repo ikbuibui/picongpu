@@ -23,6 +23,8 @@
 
 #include <cstdint>
 
+#include <caravan/core.hpp>
+
 namespace picongpu
 {
     namespace simulation
@@ -33,11 +35,17 @@ namespace picongpu
             struct CurrentDeposition
             {
                 /** Compute the current created by particles and add it to the current
-                 *  density
+                 *  density.
                  *
+                 * @param context simulation-owned operation scope
+                 * @param previous completion of all prerequisites (exchange, field pre-update, reset)
                  * @param step index of time iteration
+                 * @return completion of all deposition kernels
                  */
-                void operator()(uint32_t const step) const;
+                [[nodiscard]] caravan::Event operator()(
+                    caravan::ControlContext& context,
+                    caravan::Event previous,
+                    uint32_t const step) const;
             };
 
         } // namespace stage

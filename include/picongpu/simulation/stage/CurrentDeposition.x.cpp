@@ -36,6 +36,9 @@
 #include <pmacc/type/Area.hpp>
 
 #include <cstdint>
+#include <utility>
+
+#include <caravan/core.hpp>
 
 namespace picongpu
 {
@@ -51,8 +54,16 @@ namespace picongpu
                     using SpeciesType = T_SpeciesType;
                     using FrameType = typename SpeciesType::FrameType;
 
-                    /** Compute current density created by a species in an area */
-                    HINLINE void operator()(uint32_t const currentStep, FieldJ& fieldJ, pmacc::DataConnector& dc) const
+                    /** Compute current density created by a species in an area
+                     *
+                     * @return completion of this species' deposition kernels
+                     */
+                    HINLINE caravan::Event operator()(
+                        caravan::ControlContext& context,
+                        caravan::Event previous,
+                        uint32_t const currentStep,
+                        FieldJ& fieldJ,
+                        pmacc::DataConnector& dc) const
                     {
                         auto species = dc.get<SpeciesType>(FrameType::getName());
 
@@ -91,7 +102,9 @@ namespace picongpu
                         FrameSolver solver(sim.pic.getDt());
 
                         auto const deposit = currentSolver::Deposit<Strategy>{};
-                        deposit.template execute<T_Area::value>(
+                        return deposit.template execute<T_Area::value>(
+                            context,
+                            std::move(previous),
                             species->getCellDescription(),
                             depositionKernel,
                             solver,
@@ -99,20 +112,43 @@ namespace picongpu
                             pBox);
                     }
                 };
+
+                /** Run current deposition for every species in order.
+                 *
+                 * Returned completion covers every deposited species and can be used as the
+                 * `currentReady` producer for the current-addition stage.
+                 */
+                template<typename... TSpecies>
+                HINLINE caravan::Event depositAll(
+                    caravan::ControlContext& context,
+                    caravan::Event previous,
+                    uint32_t const currentStep,
+                    FieldJ& fieldJ,
+                    pmacc::DataConnector& dc,
+                    pmacc::mp_list<TSpecies...>)
+                {
+                    ((previous = CurrentDeposition<TSpecies, pmacc::mp_int<type::CORE + type::BORDER>>{}(
+                          context,
+                          std::move(previous),
+                          currentStep,
+                          fieldJ,
+                          dc)),
+                     ...);
+                    return previous;
+                }
             } // namespace detail
 
-            void CurrentDeposition::operator()(uint32_t const step) const
+            caravan::Event CurrentDeposition::operator()(
+                caravan::ControlContext& context,
+                caravan::Event previous,
+                uint32_t const step) const
             {
                 using namespace pmacc;
                 DataConnector& dc = Environment<>::get().DataConnector();
                 auto& fieldJ = *dc.get<FieldJ>(FieldJ::getName());
                 using SpeciesWithCurrentSolver =
                     typename pmacc::particles::traits::FilterByFlag<VectorAllSpecies, current<>>::type;
-                meta::ForEach<
-                    SpeciesWithCurrentSolver,
-                    detail::CurrentDeposition<boost::mpl::_1, pmacc::mp_int<type::CORE + type::BORDER>>>
-                    depositCurrent;
-                depositCurrent(step, fieldJ, dc);
+                return detail::depositAll(context, std::move(previous), step, fieldJ, dc, SpeciesWithCurrentSolver{});
             }
         } // namespace stage
     } // namespace simulation

@@ -559,6 +559,39 @@ alpaka_add_executable(picongpu
 target_link_libraries(picongpu PUBLIC ${LIBS} ${HOST_LIBS} picongpu-hostonly)
 target_link_libraries(picongpu PRIVATE pmacc::pmacc)
 
+option(PICONGPU_MINIMAL_CARAVAN_THERMAL "Build the plugin-free Thermal Caravan migration target" OFF)
+
+option(
+    PICONGPU_THERMAL_PROBE
+    "Build the test-only Thermal correctness probe (requires PICONGPU_MINIMAL_CARAVAN_THERMAL)"
+    OFF
+)
+
+if(PICONGPU_THERMAL_PROBE AND NOT PICONGPU_MINIMAL_CARAVAN_THERMAL)
+    message(FATAL_ERROR "PICONGPU_THERMAL_PROBE requires PICONGPU_MINIMAL_CARAVAN_THERMAL=ON")
+endif()
+
+if(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+    set(MINIMAL_ACCSRCFILES ${ACCSRCFILES})
+    set(MINIMAL_SRCFILES ${SRCFILES})
+    list(FILTER MINIMAL_ACCSRCFILES EXCLUDE REGEX "(^|/)plugins/")
+    list(FILTER MINIMAL_SRCFILES EXCLUDE REGEX "(^|/)plugins/")
+
+    add_library(picongpu-minimal-thermal-hostonly STATIC ${MINIMAL_SRCFILES})
+    target_link_libraries(picongpu-minimal-thermal-hostonly PUBLIC ${HOST_LIBS})
+
+    alpaka_add_executable(picongpu-minimal-thermal ${MINIMAL_ACCSRCFILES})
+    target_link_libraries(
+        picongpu-minimal-thermal
+        PUBLIC ${LIBS} ${HOST_LIBS} picongpu-minimal-thermal-hostonly
+        PRIVATE pmacc::pmacc
+    )
+    target_compile_definitions(picongpu-minimal-thermal PRIVATE PICONGPU_MINIMAL_CARAVAN_THERMAL=1)
+    if(PICONGPU_THERMAL_PROBE)
+        target_compile_definitions(picongpu-minimal-thermal PRIVATE PICONGPU_THERMAL_PROBE=1)
+    endif()
+endif()
+
 #PIC_dependency(FFTW3 "FFT library for shadowgraphy plugin" AUTO)
 if(PIC_HAVE_FFTW3)
     target_link_libraries(picongpu PRIVATE PkgConfig::FFTW3)
@@ -581,6 +614,15 @@ target_include_directories(
 )
 target_link_libraries(picongpu PRIVATE nlohmann_json::nlohmann_json)
 
+if(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+    target_include_directories(
+        picongpu-minimal-thermal
+        SYSTEM
+        PRIVATE $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
+    )
+    target_link_libraries(picongpu-minimal-thermal PRIVATE nlohmann_json::nlohmann_json)
+endif()
+
 if(PIC_HAVE_openPMD)
     # same tricks for toml11
     target_include_directories(
@@ -591,7 +633,12 @@ if(PIC_HAVE_openPMD)
     target_link_libraries(picongpu-hostonly PRIVATE toml11::toml11)
 endif()
 
-foreach(target picongpu picongpu-hostonly)
+set(PICONGPU_COMMON_TARGETS picongpu picongpu-hostonly)
+if(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+    list(APPEND PICONGPU_COMMON_TARGETS picongpu-minimal-thermal picongpu-minimal-thermal-hostonly)
+endif()
+
+foreach(target IN LISTS PICONGPU_COMMON_TARGETS)
     # This is a workaround for a missing API call in the openPMD-api,
     # which currently does not re-export backend version information.
     # https://github.com/openPMD/openPMD-api/issues/1563

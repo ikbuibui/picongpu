@@ -1,0 +1,96 @@
+/* Negative-test species definition for the minimal Caravan target.
+ *
+ * This is a deliberately unsupported configuration: it attaches an
+ * `atomicPhysicsParticle<>` flag to a species. The minimal target must reject
+ * it at compile time (see simulation/stage/AtomicPhysics.x.cpp) rather than
+ * silently dropping the atomic-physics/IPD contribution.
+ *
+ * The driver check_atomic_isolation.py selects which Tag is attached by
+ * defining exactly one of:
+ *   NEG_EXPECT_ION, NEG_EXPECT_ELECTRON,
+ *   NEG_EXPECT_ONLYIPDION, NEG_EXPECT_ONLYIPDEELECTRON
+ *
+ * For NEG_EXPECT_ION an additional species tagged Electron is present so the
+ * pre-existing "at least one atomic-physics electron" assertion in
+ * AtomicPhysics.hpp does not mask the Ion rejection under test.
+ */
+
+#pragma once
+
+
+#include "picongpu/particles/Particles.hpp"
+#include "picongpu/particles/atomicPhysics/ParticleType.hpp"
+
+#include <pmacc/identifier/value_identifier.hpp>
+#include <pmacc/meta/String.hpp>
+#include <pmacc/meta/conversion/MakeSeq.hpp>
+#include <pmacc/particles/Identifier.hpp>
+#include <pmacc/particles/traits/FilterByFlag.hpp>
+
+namespace picongpu
+{
+    using DefaultParticleAttributes = MakeSeq_t<position<position_pic>, momentum, weighting>;
+
+    value_identifier(float_X, MassRatioElectrons, 1.0);
+    value_identifier(float_X, ChargeRatioElectrons, 1.0);
+
+    struct NegIonTag
+    {
+        using Tag = picongpu::particles::atomicPhysics::Tags::Ion;
+    };
+
+    struct NegElectronTag
+    {
+        using Tag = picongpu::particles::atomicPhysics::Tags::Electron;
+    };
+
+    struct NegOnlyIPDIonTag
+    {
+        using Tag = picongpu::particles::atomicPhysics::Tags::OnlyIPDIon;
+    };
+
+    struct NegOnlyIPDElectronTag
+    {
+        using Tag = picongpu::particles::atomicPhysics::Tags::OnlyIPDElectron;
+    };
+
+#if defined(NEG_EXPECT_ION)
+    using NegPrimaryTag = NegIonTag;
+#elif defined(NEG_EXPECT_ELECTRON)
+    using NegPrimaryTag = NegElectronTag;
+#elif defined(NEG_EXPECT_ONLYIPDION)
+    using NegPrimaryTag = NegOnlyIPDIonTag;
+#elif defined(NEG_EXPECT_ONLYIPDEELECTRON)
+    using NegPrimaryTag = NegOnlyIPDElectronTag;
+#else
+#    error "atomic-negative fixture: define exactly one NEG_EXPECT_* macro"
+#endif
+
+    using ParticleFlagsElectrons = MakeSeq_t<
+        particlePusher<UsedParticlePusher>,
+        shape<UsedParticleShape>,
+        interpolation<UsedField2Particle>,
+        current<UsedParticleCurrentSolver>,
+        massRatio<MassRatioElectrons>,
+        chargeRatio<ChargeRatioElectrons>,
+        atomicPhysicsParticle<NegPrimaryTag>>;
+
+    using PIC_Electrons = Particles<PMACC_CSTRING("e"), ParticleFlagsElectrons, DefaultParticleAttributes>;
+
+#if defined(NEG_EXPECT_ION)
+    using ParticleFlagsCompanion = MakeSeq_t<
+        particlePusher<UsedParticlePusher>,
+        shape<UsedParticleShape>,
+        interpolation<UsedField2Particle>,
+        current<UsedParticleCurrentSolver>,
+        massRatio<MassRatioElectrons>,
+        chargeRatio<ChargeRatioElectrons>,
+        atomicPhysicsParticle<NegElectronTag>>;
+
+    using PIC_Companion = Particles<PMACC_CSTRING("e_neg"), ParticleFlagsCompanion, DefaultParticleAttributes>;
+
+    using VectorAllSpecies = MakeSeq_t<PIC_Electrons, PIC_Companion>;
+#else
+    using VectorAllSpecies = MakeSeq_t<PIC_Electrons>;
+#endif
+} // namespace picongpu

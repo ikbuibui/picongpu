@@ -1,0 +1,35 @@
+diff --git a/include/picongpu/simulation/control/Simulation.hpp b/include/picongpu/simulation/control/Simulation.hpp
+index 5673f0073..fd1b915c5 100644
+--- a/include/picongpu/simulation/control/Simulation.hpp
++++ b/include/picongpu/simulation/control/Simulation.hpp
+@@ -23,6 +23,9 @@
+ #pragma once
+
+ #include "picongpu/defines.hpp"
++#if defined(PICONGPU_THERMAL_PROBE)
++#    include "picongpu/thermalProbe/ThermalProbe.hpp"
++#endif
+ #include "picongpu/fields/FieldB.hpp"
+ #include "picongpu/fields/FieldE.hpp"
+ #include "picongpu/fields/FieldJ.hpp"
+@@ -482,6 +485,10 @@ namespace picongpu
+             EventTask eRfieldB = fieldB->asyncCommunication(eventSystem::getTransactionEvent());
+             eventSystem::setTransactionEvent(eRfieldB);
+
++#if defined(PICONGPU_THERMAL_PROBE)
++            thermalProbe::runProbe(cellDescription.get(), step, "init", false);
++#endif
++
+             log<picLog::SIMULATION_STATE>("Starting simulation from timestep 0");
+             return step;
+         }
+@@ -511,6 +518,9 @@ namespace picongpu
+             CurrentDeposition{}(currentStep);
+             (*currentInterpolationAndAdditionToEMF)(currentStep, *myFieldSolver);
+             myFieldSolver->update_afterCurrent(currentStep);
++#if defined(PICONGPU_THERMAL_PROBE)
++            thermalProbe::runProbe(cellDescription.get(), currentStep + 1u, "step", true);
++#endif
+         }
+
+         void dumpOneStep(uint32_t currentStep) override

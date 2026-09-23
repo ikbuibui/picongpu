@@ -23,12 +23,17 @@
 #pragma once
 
 #include "picongpu/defines.hpp"
+#if defined(PICONGPU_THERMAL_PROBE)
+#    include "picongpu/thermalProbe/ThermalProbe.hpp"
+#endif
 #include "picongpu/fields/FieldB.hpp"
 #include "picongpu/fields/FieldE.hpp"
 #include "picongpu/fields/FieldJ.hpp"
 #include "picongpu/fields/FieldTmp.hpp"
 #include "picongpu/fields/MaxwellSolver/Solvers.hpp"
-#include "picongpu/fields/absorber/pml/Field.hpp"
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+#    include "picongpu/fields/absorber/pml/Field.hpp"
+#endif
 #include "picongpu/initialization/InitialiserController.hpp"
 #include "picongpu/initialization/ParserGridDistribution.hpp"
 #include "picongpu/particles/ParticlesFunctors.hpp"
@@ -83,6 +88,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -106,7 +112,9 @@ namespace picongpu
         /**
          * Constructor
          */
-        Simulation() = default;
+        explicit Simulation(caravan::MpiContext& mpiContext) : mpiContext(mpiContext)
+        {
+        }
 
         void pluginRegisterHelp(po::options_description& desc) override
         {
@@ -217,7 +225,11 @@ namespace picongpu
                 isPeriodic[i] = periodic[i];
             }
 
-            Environment<simDim>::get().initDevices(gpus, isPeriodic);
+            Environment<simDim>::get().initDevices(mpiContext, gpus, isPeriodic);
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+            // Match the old event system's seven-queue cap: PMacc owns one, PIConGPU adds six.
+            Environment<>::get().DeviceContext().addQueues(6u);
+#endif
             pmacc::GridController<simDim>& gc = pmacc::Environment<simDim>::get().GridController();
 
             DataSpace<simDim> myGPUpos(gc.getPosition());
@@ -293,11 +305,22 @@ namespace picongpu
             }
         }
 
+        ~Simulation() override
+        {
+            /* Complete outstanding operations while derived fields, particles, mappings,
+             * and the device heap still exist. Idempotent with pluginUnload().
+             */
+            asyncContext.drain();
+        }
+
         void pluginUnload() override
         {
             DataConnector& dc = Environment<>::get().DataConnector();
 
             SimHelper::pluginUnload();
+
+            /* Complete all owned operations before unsharing/cleaning derived resources. */
+            asyncContext.drain();
 
             /** unshare all registered ISimulationData sets
              *
@@ -364,16 +387,26 @@ namespace picongpu
 
             // init and share random number generator
             pmacc::GridController<simDim>& gridCon = pmacc::Environment<simDim>::get().GridController();
-            rngFactory->init(gridCon.getScalarPosition() ^ seed);
+            asyncContext.wait(asyncContext.spawn(
+                caravan::alpaka::withDevice(
+                    Environment<>::get().DeviceContext(),
+                    rngFactory->init(gridCon.getScalarPosition() ^ seed))));
             dc.consume(std::move(rngFactory));
 
 #if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
-            auto alpakaQueue = pmacc::eventSystem::getComputeDeviceQueue(ITask::TASK_DEVICE)->getAlpakaQueue();
             auto alpakaDevice = manager::Device<ComputeDevice>::get().current();
+            /* Setup-only native queue for the synchronous mallocMC heap lifecycle
+             * (construction, resize, and statistics). The mallocMC allocator owns
+             * its own pool storage and does not retain this queue; the queue is used
+             * only to enqueue those host-driven heap operations and is destroyed at
+             * the end of this function. It is deliberately separate from the
+             * fixed-size simulation queue pool.
+             */
+            ComputeDeviceQueue setupQueue(alpakaDevice);
             /* Create an empty allocator. This one is resized after all exchanges
              * for particles are created */
-            deviceHeap = std::make_shared<DeviceHeap>(alpakaDevice, alpakaQueue, 0u);
-            alpaka::wait(alpakaQueue);
+            deviceHeap = std::make_shared<DeviceHeap>(alpakaDevice, setupQueue, 0u);
+            alpaka::wait(setupQueue);
 #endif
 
             static_assert(
@@ -383,6 +416,11 @@ namespace picongpu
             // Allocate and initialize particle species with all left-over memory below
             meta::ForEach<VectorAllSpecies, particles::CreateSpecies<boost::mpl::_1>> createSpeciesMemory;
             createSpeciesMemory(deviceHeap, cellDescription.get());
+
+            /* PMacc allocation does not zero storage: initialize supercell/frame metadata
+             * before any consumer (RNG/particle initialization and steps).
+             */
+            initSpeciesStorage(asyncContext);
 
             size_t freeGpuMem = freeDeviceMemory();
             if(freeGpuMem < reservedGpuMemorySize)
@@ -408,28 +446,22 @@ namespace picongpu
                     "Device RAM is NOT shared between GPU and host, use '--apu' to signal shared device memory.");
 
             // initializing the heap for particles
-            deviceHeap->destructiveResize(alpakaDevice, alpakaQueue, heapSize);
-            alpaka::wait(alpakaQueue);
+            deviceHeap->destructiveResize(alpakaDevice, setupQueue, heapSize);
+            alpaka::wait(setupQueue);
 
             auto mallocMCBuffer = std::make_unique<MallocMCBuffer<DeviceHeap>>(*deviceHeap);
             dc.consume(std::move(mallocMCBuffer));
 
-#endif
-
             meta::ForEach<VectorAllSpecies, particles::LogMemoryStatisticsForSpecies<boost::mpl::_1>>
                 logMemoryStatisticsForSpecies;
-            logMemoryStatisticsForSpecies(deviceHeap);
+            logMemoryStatisticsForSpecies(deviceHeap, setupQueue);
+#endif
 
             if(picLog::log_level & picLog::MEMORY::lvl)
             {
                 freeGpuMem = freeDeviceMemory();
                 log<picLog::MEMORY>("free mem after all mem is allocated %1% MiB") % (freeGpuMem / 1024 / 1024);
             }
-
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
-            /* add CUDA streams to the QueueController for concurrent execution */
-            Environment<>::get().QueueController().addQueues(6);
-#endif
         }
 
         uint32_t fillSimulation() override
@@ -458,7 +490,7 @@ namespace picongpu
                 }
                 else
                 {
-                    simulation::stage::ParticleInit{}(step);
+                    asyncContext.wait(simulation::stage::ParticleInit{}(asyncContext, step));
                     (*atomicPhysics).fixAtomicStateInit(*cellDescription);
                     // Check Debye resolution
                     particles::debyeLength::check(*cellDescription);
@@ -477,10 +509,15 @@ namespace picongpu
             auto fieldB = dc.get<FieldB>(FieldB::getName());
 
             // generate valid GUARDS (overwrite)
-            EventTask eRfieldE = fieldE->asyncCommunication(eventSystem::getTransactionEvent());
-            eventSystem::setTransactionEvent(eRfieldE);
-            EventTask eRfieldB = fieldB->asyncCommunication(eventSystem::getTransactionEvent());
-            eventSystem::setTransactionEvent(eRfieldB);
+            std::array communications{
+                fieldE->spawnCommunication(asyncContext),
+                fieldB->spawnCommunication(asyncContext)};
+            asyncContext.wait(caravan::whenAll(communications));
+
+#if defined(PICONGPU_THERMAL_PROBE)
+            /* Initialized state: E/B are defined, J is not written until the first step. */
+            thermalProbe::runProbe(asyncContext, cellDescription.get(), step, "init", false, caravan::readyEvent());
+#endif
 
             log<picLog::SIMULATION_STATE>("Starting simulation from timestep 0");
             return step;
@@ -494,23 +531,56 @@ namespace picongpu
         void runOneStep(uint32_t currentStep) override
         {
             using namespace simulation::stage;
+            auto& device = Environment<>::get().DeviceContext();
             fieldBackground->enable(currentStep);
             IterationStart{}(currentStep);
-            MomentumBackup{}(currentStep);
-            CurrentReset{}(currentStep);
+            /* Pre-push writers: momentum backup (particles) and J reset (field). */
+            auto momentumBackup
+                = asyncContext.spawn(caravan::alpaka::withDevice(device, MomentumBackup{}(currentStep)));
+            auto currentReset = CurrentReset{}(asyncContext, caravan::readyEvent(), currentStep);
             Collision{deviceHeap}(*cellDescription, currentStep);
             ParticleIonization{*cellDescription}(currentStep);
             (*atomicPhysics)(*cellDescription, currentStep);
             (*synchrotronRadiation)(currentStep);
-            EventTask commEvent;
-            ParticlePush{}(currentStep, commEvent);
+            /* The push reads the old E/B and the backed-up momentum. Communication starts after
+             * each species' own push completion.
+             */
+            auto pushEvents = ParticlePush{}(asyncContext, std::move(momentumBackup), currentStep);
             fieldBackground->disable(currentStep);
-            myFieldSolver->update_beforeCurrent(currentStep);
-            eventSystem::setTransactionEvent(commEvent);
+            /* The field pre-update must not overwrite E/B before the push has read them; it can
+             * overlap the particle exchange.
+             */
+            auto fieldsReady = myFieldSolver->update_beforeCurrent(asyncContext, pushEvents.pushed, currentStep);
+            /* J background is inactive in minimal mode (rejected elsewhere) and is a host-side no-op. */
             (*currentBackground)(currentStep);
-            CurrentDeposition{}(currentStep);
-            (*currentInterpolationAndAdditionToEMF)(currentStep, *myFieldSolver);
-            myFieldSolver->update_afterCurrent(currentStep);
+            /* Current deposition reads the communicated frames and writes J, so it must observe
+             * the J reset but not the field pre-update.
+             */
+            auto currentReady = CurrentDeposition{}(
+                asyncContext,
+                caravan::whenAll(std::array{std::move(pushEvents.communicated), std::move(currentReset)}),
+                currentStep);
+            /* Adding J to E writes the pre-updated E/B, so it must follow both deposition and the
+             * field pre-update.
+             */
+            auto currentAdded = (*currentInterpolationAndAdditionToEMF)(
+                asyncContext,
+                caravan::whenAll(std::array{std::move(currentReady), std::move(fieldsReady)}),
+                *myFieldSolver);
+            auto stepComplete = myFieldSolver->update_afterCurrent(asyncContext, currentAdded, currentStep);
+            /* Deliberate end-of-step boundary until asynchronous cross-step orchestration is proven. */
+            asyncContext.wait(stepComplete);
+            lastStepComplete = stepComplete;
+#if defined(PICONGPU_THERMAL_PROBE)
+            /* Completed state after advancing from `currentStep` to `currentStep + 1`. */
+            thermalProbe::runProbe(
+                asyncContext,
+                cellDescription.get(),
+                currentStep + 1u,
+                "step",
+                true,
+                lastStepComplete);
+#endif
         }
 
         void dumpOneStep(uint32_t currentStep) override
@@ -536,9 +606,47 @@ namespace picongpu
         void resetAll(uint32_t currentStep) override
         {
             resetFields(currentStep);
-            meta::ForEach<VectorAllSpecies, particles::CallReset<boost::mpl::_1>> resetParticles;
-            resetParticles(currentStep);
+            resetParticles(asyncContext, currentStep);
             /// @todo need to add atomicPhysics super cell fields?, Brian Marre, 2022
+        }
+
+        /** Zero the supercell/frame storage of every freshly allocated species. */
+        template<typename... TSpecies>
+        void initSpeciesStorageImpl(caravan::ControlContext& context, pmacc::mp_list<TSpecies...>)
+        {
+            auto& device = Environment<>::get().DeviceContext();
+            caravan::Event previous;
+            ((previous = context.spawn(
+                  caravan::alpaka::withDevice(
+                      device,
+                      caravan::asSender(previous) | caravan::sequence(particles::ResetSpeciesStorage<TSpecies>{}())))),
+             ...);
+            context.wait(previous);
+        }
+
+        void initSpeciesStorage(caravan::ControlContext& context)
+        {
+            initSpeciesStorageImpl(context, VectorAllSpecies{});
+        }
+
+        /** Reset all species' particle storage and wait for completion.
+         *
+         * The reset must finish before any new step reuses the particle storage.
+         */
+        template<typename... TSpecies>
+        void resetParticlesImpl(
+            caravan::ControlContext& context,
+            uint32_t const currentStep,
+            pmacc::mp_list<TSpecies...>)
+        {
+            std::array<caravan::Event, sizeof...(TSpecies)> events{
+                particles::CallReset<TSpecies>{}(context, lastStepComplete, currentStep)...};
+            context.wait(caravan::whenAll(std::span<caravan::Event const>{events}));
+        }
+
+        void resetParticles(caravan::ControlContext& context, uint32_t const currentStep)
+        {
+            resetParticlesImpl(context, currentStep, VectorAllSpecies{});
         }
 
         void slide(uint32_t currentStep)
@@ -549,7 +657,7 @@ namespace picongpu
             {
                 log<picLog::SIMULATION_STATE>("slide in step %1%") % currentStep;
                 resetAll(currentStep);
-                simulation::stage::ParticleInit{}(currentStep);
+                asyncContext.wait(simulation::stage::ParticleInit{}(asyncContext, currentStep));
                 (*atomicPhysics).fixAtomicStateInit(*cellDescription);
             }
         }
@@ -567,6 +675,11 @@ namespace picongpu
 
     protected:
         std::shared_ptr<DeviceHeap> deviceHeap;
+
+        /* Completion of the most recent fully waited step; the predecessor for any
+         * live particle reset so it cannot race the step that produced them.
+         */
+        caravan::Event lastStepComplete;
 
         std::shared_ptr<fields::Solver> myFieldSolver;
         std::shared_ptr<simulation::stage::CurrentInterpolationAndAdditionToEMF> currentInterpolationAndAdditionToEMF;
@@ -614,6 +727,8 @@ namespace picongpu
         bool isDeviceMemoryShared{false};
 
     private:
+        caravan::MpiContext& mpiContext;
+
         /** Get available memory on device
          *
          * @attention This method is using MPI collectives and must be called from all MPI processes collectively.
@@ -629,8 +744,8 @@ namespace picongpu
             GridController<simDim>& gc = Environment<simDim>::get().GridController();
             if(isDeviceSharedBetweenRanks)
             {
-                // Synchronize to guarantee that all other MPI process on the same device allocated there memory.
-                MPI_CHECK(MPI_Barrier(gc.getCommunicator().getMPIComm()));
+                // Synchronize to guarantee that all other MPI process on the same device allocated their memory.
+                caravan::syncWait(gc.getCommunicator().barrier());
             }
 
             // free memory reported by the driver
@@ -651,7 +766,7 @@ namespace picongpu
                 freeDeviceMemory /= numRanksPerDevice;
                 // Synchronize to guarantee that all other MPI process on the same device see the same amount of free
                 // memory.
-                MPI_CHECK(MPI_Barrier(gc.getCommunicator().getMPIComm()));
+                caravan::syncWait(gc.getCommunicator().barrier());
             }
 
             size_t allocatableMemory = freeDeviceMemory;
@@ -692,7 +807,7 @@ namespace picongpu
             if(isDeviceSharedBetweenRanks)
             {
                 // Wait that all MPI processes had checked the available/allocatable memory.
-                MPI_CHECK(MPI_Barrier(gc.getCommunicator().getMPIComm()));
+                caravan::syncWait(gc.getCommunicator().barrier());
             }
 
             return allocatableMemory;
@@ -719,6 +834,16 @@ namespace picongpu
          */
         void resetFields(uint32_t const currentStep)
         {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+            static_cast<void>(currentStep);
+            // This is an outer initialization/moving-window boundary. Do not let
+            // the subsequent particle/field initialization observe a lazy clear.
+            DataConnector& dc = Environment<>::get().DataConnector();
+            std::array resets{
+                dc.get<FieldE>(FieldE::getName())->reset(asyncContext),
+                dc.get<FieldB>(FieldB::getName())->reset(asyncContext)};
+            asyncContext.wait(caravan::whenAll(resets));
+#else
             auto resetField = [currentStep](std::string const name)
             {
                 DataConnector& dc = Environment<>::get().DataConnector();
@@ -758,6 +883,7 @@ namespace picongpu
                  fields::absorber::pml::FieldE::getName(),
                  fields::absorber::pml::FieldB::getName()}};
             std::for_each(fieldNames.cbegin(), fieldNames.cend(), resetField);
+#endif
         }
     };
 } /* namespace picongpu */

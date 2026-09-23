@@ -22,7 +22,9 @@
 #include "picongpu/algorithms/Velocity.hpp"
 #include "picongpu/defines.hpp"
 #include "picongpu/fields/absorber.hpp"
-#include "picongpu/fields/absorber/pml/Pml.kernel"
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+#    include "picongpu/fields/absorber/pml/Pml.kernel"
+#endif
 #include "picongpu/particles/Manipulate.hpp"
 #include "picongpu/particles/boundary/ApplyImpl.hpp"
 #include "picongpu/particles/boundary/Kind.hpp"
@@ -93,6 +95,7 @@ namespace picongpu
                     species.fillGaps(mapperFactory);
                 }
 
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
                 //! Parameters to be passed to DampWeightsInPml functor
                 struct DampWeightsInPmlParameters
                 {
@@ -232,6 +235,7 @@ namespace picongpu
                     using Manipulator = manipulators::unary::FreeTotalCellOffset<DampWeightsInPml>;
                     particles::manipulate<Manipulator, T_Species>(currentStep, mapperFactory);
                 }
+#endif // !PICONGPU_MINIMAL_CARAVAN_THERMAL
 
             } // namespace detail
 
@@ -250,8 +254,15 @@ namespace picongpu
                 template<typename T_Species>
                 void operator()(T_Species& species, uint32_t const exchangeType, uint32_t const currentStep)
                 {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+                    static_cast<void>(species);
+                    static_cast<void>(exchangeType);
+                    static_cast<void>(currentStep);
+                    throw std::runtime_error("PICONGPU_MINIMAL_CARAVAN_THERMAL requires periodic particle boundaries");
+#else
                     detail::removeOuterParticles(species, exchangeType, currentStep);
                     detail::dampWeightsInPml(species, exchangeType, currentStep);
+#endif
                 }
             };
 

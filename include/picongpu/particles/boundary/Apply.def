@@ -22,6 +22,8 @@
 
 #include <cstdint>
 
+#include <caravan/core.hpp>
+
 namespace picongpu
 {
     namespace particles
@@ -30,13 +32,18 @@ namespace picongpu
         {
             /** Apply boundary conditions to the given species
              *
-             * @tparam T_Species particle species type
-             *
+             * @param context simulation-owned operation scope
+             * @param previous completion of the particle push
              * @param species particle species
              * @param currentStep current time iteration
+             * @return completion after boundary application
              */
             template<typename T_Species>
-            inline void apply(T_Species&& species, uint32_t currentStep);
+            inline caravan::Event apply(
+                caravan::ControlContext& context,
+                caravan::Event previous,
+                T_Species&& species,
+                uint32_t currentStep);
 
         } // namespace boundary
     } // namespace particles

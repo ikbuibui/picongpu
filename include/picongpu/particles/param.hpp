@@ -26,7 +26,12 @@
 #include "picongpu/particles/ionization/param.hpp"
 #include "picongpu/param/density.param"
 #include "picongpu/param/particle.param"
-#include "picongpu/particles/atomicPhysics/param.hpp"
+// The atomic-physics/IPD implementation is not migrated to Caravan. Minimal mode
+// excludes it here and rejects any configured atomic-physics species at the
+// AtomicPhysics stage (see simulation/stage/AtomicPhysics.x.cpp).
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+#    include "picongpu/particles/atomicPhysics/param.hpp"
+#endif
 #include "picongpu/param/particleFilters.param"
 #include "picongpu/param/species.param"
 #include "picongpu/param/speciesDefinition.param"
@@ -41,6 +46,8 @@
 #include "picongpu/unitless/collision.unitless"
 // clang-format on
 
-#include "picongpu/particles/atomicPhysics/ionizationPotentialDepression/stage/ApplyIPDIonization.hpp"
-#include "picongpu/particles/atomicPhysics/ionizationPotentialDepression/stage/FillIPDSumFields_Electron.hpp"
-#include "picongpu/particles/atomicPhysics/ionizationPotentialDepression/stage/FillIPDSumFields_Ion.hpp"
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+#    include "picongpu/particles/atomicPhysics/ionizationPotentialDepression/stage/ApplyIPDIonization.hpp"
+#    include "picongpu/particles/atomicPhysics/ionizationPotentialDepression/stage/FillIPDSumFields_Electron.hpp"
+#    include "picongpu/particles/atomicPhysics/ionizationPotentialDepression/stage/FillIPDSumFields_Ion.hpp"
+#endif

@@ -112,8 +112,21 @@ namespace picongpu
                  */
                 void setKind(Absorber::Kind newKind)
                 {
+                    // Rejects kinds unsupported by this build, including any non-None kind in minimal mode.
+                    validateFactoryKind(newKind);
                     kind = newKind;
                     isInitialized = true;
+                }
+
+                /** Get the currently installed kind
+                 *
+                 * @throw std::runtime_error if the factory has not been initialized
+                 */
+                Absorber::Kind getKind() const
+                {
+                    if(!isInitialized)
+                        throw std::runtime_error("Absorber factory used before being initialized");
+                    return kind;
                 }
 
             private:

@@ -22,7 +22,7 @@
 #include "picongpu/fields/incidentField/profiles/DispersivePulse.hpp"
 #include "picongpu/fields/incidentField/profiles/Free.hpp"
 #include "picongpu/fields/incidentField/profiles/GaussianPulse.hpp"
-#if (ENABLE_OPENPMD == 1)
+#if (ENABLE_OPENPMD == 1) && !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
 #    include "picongpu/fields/incidentField/profiles/FromOpenPMDPulse.hpp"
 #endif
 #include "picongpu/fields/incidentField/profiles/None.hpp"
