@@ -49,7 +49,10 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include <caravan/alpaka.hpp>
 
 namespace picongpu
 {
@@ -417,8 +420,6 @@ namespace picongpu
         template<uint32_t AREA>
         void calBinEnergyParticles(uint32_t currentStep)
         {
-            gBins->getDeviceBuffer().setValue(0);
-
             DataConnector& dc = Environment<>::get().DataConnector();
             auto particles = dc.get<ParticlesType>(ParticlesType::FrameType::getName());
             auto idProvider = dc.get<IdProvider>("globalId");
@@ -428,34 +429,39 @@ namespace picongpu
             float_X const maxEnergy = sim.pic.conv().eV2Joule(maxEnergy_keV * 1.0e3);
 
             auto const mapper = makeAreaMapper<AREA>(*m_cellDescription);
-
-            auto kernel = PMACC_LOCKSTEP_KERNEL(KernelBinEnergyParticles{})
-                              .configSMem(mapper.getGridDim(), *particles, realNumBins * sizeof(float_X));
-
-            auto bindKernel = std::bind(
-                kernel,
-                particles->getDeviceParticlesBox(),
-                gBins->getDeviceBuffer().getDataBox(),
-                numBins,
-                minEnergy,
-                maxEnergy,
-                mapper,
-                std::placeholders::_1);
+            auto& device = Environment<>::get().DeviceContext();
+            auto runKernel = [&](auto filter)
+            {
+                auto initialize = caravan::alpaka::fill(gBins->getDeviceBuffer().getOwnedAlpakaView(), 0u);
+                auto kernel = PMACC_LOCKSTEP_KERNEL(KernelBinEnergyParticles{})
+                                  .configSMem(mapper.getGridDim(), *particles, realNumBins * sizeof(float_X))(
+                                      particles->getDeviceParticlesBox(),
+                                      gBins->getDeviceBuffer().getDataBox(),
+                                      numBins,
+                                      minEnergy,
+                                      maxEnergy,
+                                      mapper,
+                                      filter);
+                auto copy = gBins->deviceToHost();
+                caravan::syncWait(
+                    caravan::alpaka::withDevice(
+                        device,
+                        std::move(initialize) | caravan::alpaka::sequence(std::move(kernel))
+                            | caravan::alpaka::sequence(std::move(copy))));
+            };
 
             meta::ForEach<typename Help::EligibleFilters, plugins::misc::ExecuteIfNameIsEqual<boost::mpl::_1>>{}(
                 m_help->filter.get(m_id),
                 currentStep,
                 idProvider->getDeviceGenerator(),
-                bindKernel);
+                runKernel);
 
-            gBins->deviceToHost();
-
-            reduce(
+            caravan::syncWait(reduce.reduce(
                 pmacc::math::operation::Add(),
                 binReduced.data(),
                 gBins->getHostBuffer().data(),
                 realNumBins,
-                mpi::reduceMethods::Reduce());
+                mpi::reduceMethods::Reduce()));
 
 
             if(writeToFile)

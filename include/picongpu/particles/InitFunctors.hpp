@@ -37,6 +37,10 @@
 
 #include <boost/mpl/apply.hpp>
 
+#include <utility>
+
+#include <caravan/core.hpp>
+
 namespace picongpu
 {
     namespace particles
@@ -101,7 +105,12 @@ namespace picongpu
             /* add interface for compile time interface validation*/
             using PositionFunctor = manipulators::IUnary<UserPositionFunctor>;
 
-            HINLINE void operator()(uint32_t const currentStep)
+            /** Initialize the species from the density profile
+             *
+             * @param currentStep current time iteration
+             * @return lazy sender creating the particles and filling frame gaps
+             */
+            HINLINE auto operator()(uint32_t const currentStep) const
             {
                 DataConnector& dc = Environment<>::get().DataConnector();
                 auto speciesPtr = dc.get<SpeciesType>(FrameType::getName());
@@ -119,16 +128,16 @@ namespace picongpu
                 totalGpuCellOffset.y() += numSlides * localCells.y();
 
                 auto const mapper = makeAreaMapper<CORE + BORDER>(speciesPtr->getCellDescription());
-                PMACC_LOCKSTEP_KERNEL(KernelFillGridWithParticles<std::decay_t<decltype(*speciesPtr)>>{})
-                    .config(mapper.getGridDim(), SuperCellSize{})(
-                        densityFunctor,
-                        positionFunctor,
-                        totalGpuCellOffset,
-                        speciesPtr->getParticlesBuffer().getDeviceParticleBox(),
-                        idProvider->getDeviceGenerator(),
-                        mapper);
+                auto fill = PMACC_LOCKSTEP_KERNEL(KernelFillGridWithParticles<std::decay_t<decltype(*speciesPtr)>>{})
+                                .config(mapper.getGridDim(), SuperCellSize{})(
+                                    densityFunctor,
+                                    positionFunctor,
+                                    totalGpuCellOffset,
+                                    speciesPtr->getParticlesBuffer().getDeviceParticleBox(),
+                                    idProvider->getDeviceGenerator(),
+                                    mapper);
 
-                speciesPtr->fillAllGaps();
+                return std::move(fill) | caravan::sequence(speciesPtr->fillAllGaps());
             }
         };
 
@@ -233,11 +242,16 @@ namespace picongpu
             using SpeciesType = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, T_SpeciesType>;
             using FrameType = typename SpeciesType::FrameType;
 
-            HINLINE void operator()(uint32_t const currentStep)
+            /** Fill frame gaps for the species
+             *
+             * @param currentStep current time iteration
+             * @return lazy sender filling the frame gaps
+             */
+            HINLINE auto operator()(uint32_t const currentStep) const
             {
                 DataConnector& dc = Environment<>::get().DataConnector();
                 auto speciesPtr = dc.get<SpeciesType>(FrameType::getName());
-                speciesPtr->fillAllGaps();
+                return speciesPtr->fillAllGaps();
             }
         };
 
@@ -252,10 +266,17 @@ namespace picongpu
             template<uint32_t T_timeStep, typename T_Functor, typename T_Comparator>
             struct ExecuteIfTimeStep
             {
-                HINLINE void operator()(uint32_t const currentStep)
+                HINLINE auto operator()(uint32_t const currentStep) const
                 {
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+                    static_assert(
+                        !std::is_same_v<T_Functor, T_Functor>,
+                        "PICONGPU_MINIMAL_CARAVAN_THERMAL does not support time-step conditional init "
+                        "functors; use an unconditional functor");
+#else
                     if(T_Comparator{}(currentStep, T_timeStep))
                         T_Functor{}(currentStep);
+#endif
                 }
             };
         } // namespace detail

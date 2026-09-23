@@ -36,6 +36,8 @@
 #include <type_traits>
 #include <vector>
 
+#include <caravan/core.hpp>
+
 namespace picongpu
 {
     namespace fields
@@ -93,23 +95,35 @@ namespace picongpu
             //! Get the device data box for the field values
             DataBoxType getDeviceDataBox();
 
-            /** Start asynchronous communication of field values
+            /** Start guard exchange after preceding field work completes.
              *
-             * @param serialEvent event to depend on
+             * The returned event retains PMacc's per-direction communication tails;
+             * the caller must keep this field alive through its completion.
              */
-            EventTask asyncCommunication(EventTask serialEvent);
+            [[nodiscard]] caravan::Event spawnCommunication(
+                caravan::ControlContext& context,
+                caravan::Event previous = {});
 
-            /** Reset the host-device buffer for field values
+            /** Start a host-to-device copy after all conflicting producers complete.
              *
-             * @param currentStep index of time iteration
+             * The field, its host buffer, and device context must outlive the
+             * returned event; device consumers must depend on it.
              */
-            void reset(uint32_t currentStep) override;
+            [[nodiscard]] caravan::Event syncToDevice(caravan::ControlContext& context, caravan::Event previous = {});
 
-            //! Synchronize device data with host data
-            void syncToDevice() override;
+            /** Start a device-to-host copy after all device writers complete.
+             *
+             * The field, its host buffer, and device context must outlive the
+             * returned event. Host inspection or reuse is valid only afterwards.
+             */
+            [[nodiscard]] caravan::Event synchronize(caravan::ControlContext& context, caravan::Event previous = {});
 
-            //! Synchronize host data with device data
-            void synchronize() override;
+            /** Reset host metadata and clear device field storage after preceding work.
+             *
+             * Host reads require a subsequent synchronize() completion. The field,
+             * its buffer, and the device context must outlive the returned event.
+             */
+            [[nodiscard]] caravan::Event reset(caravan::ControlContext& context, caravan::Event previous = {});
 
             //! Get id
             SimulationDataId getUniqueId() override;

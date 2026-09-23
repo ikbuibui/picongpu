@@ -197,12 +197,12 @@ namespace picongpu
             localReducedFieldEnergy[0] = reduceField(fieldB);
             localReducedFieldEnergy[1] = reduceField(fieldE);
 
-            mpiReduce(
+            caravan::syncWait(mpiReduce.reduce(
                 pmacc::math::operation::Add(),
                 globalFieldEnergy,
                 localReducedFieldEnergy,
                 2,
-                mpi::reduceMethods::Reduce());
+                mpi::reduceMethods::Reduce()));
 
             float_64 energyFieldBReduced = 0.0;
             float_64 energyFieldEReduced = 0.0;
@@ -253,10 +253,9 @@ namespace picongpu
             Box64bit field64bit(fieldTransform);
             D1Box d1Access(field64bit, fieldSize);
 
-            EneVectorType fieldEnergyReduced
-                = (*localReduce)(pmacc::math::operation::Add(), d1Access, fieldSize.productOfComponents());
-
-            return fieldEnergyReduced;
+            return caravan::syncWait<EneVectorType>(caravan::alpaka::withDevice(
+                Environment<>::get().DeviceContext(),
+                localReduce->reduce(pmacc::math::operation::Add(), d1Access, fieldSize.productOfComponents())));
         }
     };
 

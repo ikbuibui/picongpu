@@ -22,11 +22,11 @@
 
 #include "picongpu/defines.hpp"
 #include "picongpu/fields/MaxwellSolver/Solvers.hpp"
+#include "picongpu/fields/detail/FieldBufferOperations.hpp"
 #include "picongpu/particles/filter/filter.hpp"
 #include "picongpu/particles/traits/GetInterpolation.hpp"
 #include "picongpu/particles/traits/GetMarginPusher.hpp"
 #include "picongpu/traits/GetMargin.hpp"
-#include "picongpu/traits/SIBaseUnits.hpp"
 
 #include <pmacc/dataManagement/DataConnector.hpp>
 #include <pmacc/dimensions/SuperCellDescription.hpp>
@@ -129,26 +129,29 @@ namespace picongpu
             return buffer->getDeviceBuffer().getDataBox();
         }
 
-        EventTask EMFieldBase::asyncCommunication(EventTask serialEvent)
+        caravan::Event EMFieldBase::spawnCommunication(caravan::ControlContext& context, caravan::Event previous)
         {
-            EventTask eB = buffer->asyncCommunication(serialEvent);
-            return eB;
+            /* E/B exchanges are registered with `addExchange(GUARD, ...)`, so the receive buffer
+             * aliases the field guard and the generic buffer communication performs the
+             * overwrite. Do not use the additive field helper here: that path uses a separate
+             * exchange buffer with `AddExchangeToBorder` and is reserved for J/derived fields.
+             */
+            return buffer->spawnCommunication(context, std::move(previous));
         }
 
-        void EMFieldBase::reset(uint32_t)
+        caravan::Event EMFieldBase::syncToDevice(caravan::ControlContext& context, caravan::Event previous)
         {
-            buffer->getHostBuffer().reset(true);
-            buffer->getDeviceBuffer().reset(false);
+            return detail::upload(context, *buffer, std::move(previous));
         }
 
-        void EMFieldBase::syncToDevice()
+        caravan::Event EMFieldBase::synchronize(caravan::ControlContext& context, caravan::Event previous)
         {
-            buffer->hostToDevice();
+            return detail::download(context, *buffer, std::move(previous));
         }
 
-        void EMFieldBase::synchronize()
+        caravan::Event EMFieldBase::reset(caravan::ControlContext& context, caravan::Event previous)
         {
-            buffer->deviceToHost();
+            return detail::reset(context, *buffer, ValueType(0._X, 0._X, 0._X), std::move(previous));
         }
 
         pmacc::SimulationDataId EMFieldBase::getUniqueId()

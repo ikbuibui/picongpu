@@ -25,7 +25,9 @@ namespace picongpu
 {
 
     static constexpr pmacc::simulationControl::CheckpointingAvailability checkpointingEnabled =
-#if (ENABLE_OPENPMD == 1)
+#if defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
+        pmacc::simulationControl::CheckpointingAvailability::DISABLED;
+#elif (ENABLE_OPENPMD == 1)
         pmacc::simulationControl::CheckpointingAvailability::ENABLED;
 #else
         pmacc::simulationControl::CheckpointingAvailability::DISABLED;

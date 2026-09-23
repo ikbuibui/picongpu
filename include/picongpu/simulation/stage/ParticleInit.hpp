@@ -21,6 +21,8 @@
 
 #include <cstdint>
 
+#include <caravan/core.hpp>
+
 namespace picongpu
 {
     namespace simulation
@@ -30,11 +32,17 @@ namespace picongpu
             //! Initialize particles
             struct ParticleInit
             {
-                /** Initialize particles dependent of the given step
+                /** Initialize particles dependent of the given step and return completion.
                  *
+                 * The returned event completes when the whole initialization pipeline and the
+                 * following removal of outer particles have finished. Callers must wait for it
+                 * before reading particles or reusing their buffers.
+                 *
+                 * @param context simulation-owned operation scope
                  * @param step index of time iteration
+                 * @return completion of all particle initialization work
                  */
-                void operator()(uint32_t const step) const;
+                [[nodiscard]] caravan::Event operator()(caravan::ControlContext& context, uint32_t const step) const;
             };
         } // namespace stage
     } // namespace simulation

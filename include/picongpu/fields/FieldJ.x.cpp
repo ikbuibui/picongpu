@@ -23,6 +23,7 @@
 
 #include "picongpu/defines.hpp"
 #include "picongpu/fields/currentInterpolation/CurrentInterpolation.hpp"
+#include "picongpu/fields/detail/FieldBufferOperations.hpp"
 #include "picongpu/particles/filter/filter.hpp"
 #include "picongpu/particles/param.hpp"
 #include "picongpu/particles/traits/GetCurrentSolver.hpp"
@@ -30,9 +31,7 @@
 #include "picongpu/traits/SIBaseUnits.hpp"
 
 #include <pmacc/Environment.hpp>
-#include <pmacc/fields/operations/AddExchangeToBorder.hpp>
-#include <pmacc/fields/operations/CopyGuardToExchange.hpp>
-#include <pmacc/fields/tasks/FieldFactory.hpp>
+#include <pmacc/fields/Communication.hpp>
 #include <pmacc/mappings/kernel/AreaMapping.hpp>
 #include <pmacc/math/Vector.hpp>
 #include <pmacc/particles/memory/boxes/ParticlesBox.hpp>
@@ -45,6 +44,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <utility>
 
 namespace picongpu
 {
@@ -152,33 +152,17 @@ namespace picongpu
         return cellDescription.getGridLayout();
     }
 
-    EventTask FieldJ::asyncCommunication(EventTask serialEvent)
+    caravan::Event FieldJ::spawnCommunication(caravan::ControlContext& context, caravan::Event previous)
     {
-        EventTask ret;
-        eventSystem::startTransaction(serialEvent);
-        FieldFactory::getInstance().createTaskFieldReceiveAndInsert(*this);
-        ret = eventSystem::endTransaction();
-
-        eventSystem::startTransaction(serialEvent);
-        FieldFactory::getInstance().createTaskFieldSend(*this);
-        ret += eventSystem::endTransaction();
-
-        if(fieldJrecv != nullptr)
-        {
-            EventTask eJ = fieldJrecv->asyncCommunication(ret);
-            return eJ;
-        }
-        else
-            return ret;
+        auto communicated = pmacc::fields::spawnCommunication(context, *this, std::move(previous));
+        if(fieldJrecv)
+            return fieldJrecv->spawnCommunication(context, std::move(communicated));
+        return communicated;
     }
 
-    void FieldJ::reset(uint32_t)
+    caravan::Event FieldJ::synchronize(caravan::ControlContext& context, caravan::Event previous)
     {
-    }
-
-    void FieldJ::synchronize()
-    {
-        buffer.deviceToHost();
+        return fields::detail::download(context, buffer, std::move(previous));
     }
 
     SimulationDataId FieldJ::getUniqueId()
@@ -212,20 +196,13 @@ namespace picongpu
         return "J";
     }
 
-    void FieldJ::assign(ValueType value)
+    caravan::Event FieldJ::assign(caravan::ControlContext& context, ValueType value, caravan::Event previous)
     {
-        buffer.getDeviceBuffer().setValue(value);
-        // fieldJ.reset(false);
-    }
-
-    void FieldJ::bashField(uint32_t exchangeType)
-    {
-        pmacc::fields::operations::CopyGuardToExchange{}(buffer, SuperCellSize{}, exchangeType);
-    }
-
-    void FieldJ::insertField(uint32_t exchangeType)
-    {
-        pmacc::fields::operations::AddExchangeToBorder{}(buffer, SuperCellSize{}, exchangeType);
+        auto& device = Environment<>::get().DeviceContext();
+        return context.spawn(
+            caravan::alpaka::withDevice(
+                device,
+                caravan::asSender(std::move(previous)) | caravan::sequence(buffer.getDeviceBuffer().setValue(value))));
     }
 
 } // namespace picongpu

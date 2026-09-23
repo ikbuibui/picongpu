@@ -19,25 +19,30 @@
 
 #pragma once
 
-#include "picongpu/defines.hpp"
-#include "picongpu/fields/FieldTmpOperations.hpp"
-#include "picongpu/fields/YeeCell.hpp"
-#include "picongpu/particles/atomicPhysics/SetChargeState.hpp"
-#include "picongpu/particles/ionization/byCollision/ThomasFermi/AlgorithmThomasFermi.hpp"
-#include "picongpu/particles/ionization/byCollision/ThomasFermi/ThomasFermi.def"
-#include "picongpu/traits/GetMargin.hpp"
+// Thomas-Fermi by-collision ionization is not migrated to Caravan. Minimal mode
+// excludes this implementation; a configured ionizer is rejected at the
+// ParticleIonization stage. The declaration in ThomasFermi.def is retained.
+#if !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
 
-#include <pmacc/dataManagement/DataConnector.hpp>
-#include <pmacc/lockstep/lockstep.hpp>
-#include <pmacc/math/operation.hpp>
-#include <pmacc/memory/boxes/DataBox.hpp>
-#include <pmacc/memory/boxes/SharedBox.hpp>
-#include <pmacc/meta/conversion/TypeToPointerPair.hpp>
-#include <pmacc/particles/meta/FindByNameOrType.hpp>
-#include <pmacc/random/RNGProvider.hpp>
-#include <pmacc/random/distributions/Uniform.hpp>
-#include <pmacc/random/methods/methods.hpp>
-#include <pmacc/traits/Resolve.hpp>
+#    include "picongpu/defines.hpp"
+#    include "picongpu/fields/FieldTmpOperations.hpp"
+#    include "picongpu/fields/YeeCell.hpp"
+#    include "picongpu/particles/atomicPhysics/SetChargeState.hpp"
+#    include "picongpu/particles/ionization/byCollision/ThomasFermi/AlgorithmThomasFermi.hpp"
+#    include "picongpu/particles/ionization/byCollision/ThomasFermi/ThomasFermi.def"
+#    include "picongpu/traits/GetMargin.hpp"
+
+#    include <pmacc/dataManagement/DataConnector.hpp>
+#    include <pmacc/lockstep/lockstep.hpp>
+#    include <pmacc/math/operation.hpp>
+#    include <pmacc/memory/boxes/DataBox.hpp>
+#    include <pmacc/memory/boxes/SharedBox.hpp>
+#    include <pmacc/meta/conversion/TypeToPointerPair.hpp>
+#    include <pmacc/particles/meta/FindByNameOrType.hpp>
+#    include <pmacc/random/RNGProvider.hpp>
+#    include <pmacc/random/distributions/Uniform.hpp>
+#    include <pmacc/random/methods/methods.hpp>
+#    include <pmacc/traits/Resolve.hpp>
 
 namespace picongpu
 {
@@ -334,3 +339,5 @@ namespace picongpu
         } // namespace ionization
     } // namespace particles
 } // namespace picongpu
+
+#endif // !PICONGPU_MINIMAL_CARAVAN_THERMAL

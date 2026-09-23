@@ -27,6 +27,9 @@
 #include <pmacc/dataManagement/DataConnector.hpp>
 
 #include <cstdint>
+#include <utility>
+
+#include <caravan/core.hpp>
 
 namespace picongpu
 {
@@ -37,17 +40,25 @@ namespace picongpu
             //! Functor for the stage of the PIC loop setting the current values to zero
             struct CurrentReset
             {
-                /** Set all current density values to zero
+                /** Start setting all current density values to zero.
                  *
-                 * @param step index of time iteration
+                 * J writers must depend on the returned event; the field and its
+                 * buffer must outlive it.
+                 *
+                 * @param context simulation-owned operation scope
+                 * @param previous completion of prior J access
+                 * @param step index of time iteration (unused)
+                 * @return completion of the device fill
                  */
-                void operator()(uint32_t const) const
+                [[nodiscard]] caravan::Event operator()(
+                    caravan::ControlContext& context,
+                    caravan::Event previous,
+                    uint32_t const) const
                 {
-                    using namespace pmacc;
                     DataConnector& dc = Environment<>::get().DataConnector();
                     auto& fieldJ = *dc.get<FieldJ>(FieldJ::getName());
                     FieldJ::ValueType zeroJ(FieldJ::ValueType::create(0._X));
-                    fieldJ.assign(zeroJ);
+                    return fieldJ.assign(context, zeroJ, std::move(previous));
                 }
             };
 

@@ -40,6 +40,10 @@
 
 #include <cstdint>
 #include <functional>
+#include <utility>
+
+#include <caravan/alpaka.hpp>
+#include <caravan/core.hpp>
 
 namespace picongpu
 {
@@ -122,7 +126,8 @@ namespace picongpu
                         DataConnector& dc = Environment<>::get().DataConnector();
                         auto& fieldJ = *dc.get<FieldJ>(FieldJ::getName());
                         auto const& gridBuffer = fieldJ.getGridBuffer();
-                        previousJ = pmacc::makeDeepCopy(gridBuffer.getDeviceBuffer());
+                        if constexpr(T_numSubsteps > 1u)
+                            previousJ = std::make_unique<DeviceBufferJ>(gridBuffer.getDeviceBuffer().capacityND());
                     }
                 }
 
@@ -148,65 +153,18 @@ namespace picongpu
                  *
                  * @tparam T_area area to operate on
                  *
-                 * @param subStep substep index, in [0, numSubsteps)
+                 * @param currentInterpolation spatial current interpolation functor
                  */
-                template<uint32_t T_area>
-                void addCurrent(uint32_t const subStep = 0u)
+                template<uint32_t T_area, typename T_CurrentInterpolation>
+                auto addCurrent(T_CurrentInterpolation currentInterpolation)
                 {
-                    if(!existsCurrent)
-                        return;
+                    return addCurrent<T_area>(0u, std::move(currentInterpolation));
+                }
 
-                    // J values in the middle of the current PIC time iteration
-                    DataConnector& dc = Environment<>::get().DataConnector();
-                    auto& fieldJ = *dc.get<FieldJ>(FieldJ::getName());
-
-                    /* Initialize previousJ if necessary so that we can process everything uniformly.
-                     * The condition can only be true at the very first time step or just after a restart.
-                     * For these cases we approximate J with first and not second order of accuracy.
-                     * The issue is in principle minor as it only concerns a fixed number of time iterations.
-                     *
-                     * @TODO Remove this limitation by implementing current deposition at step -1 and saving the
-                     * resulting J as previous; save previous J in checkpointing. Note: with existing code base
-                     * there can only be a single FieldJ object due to IDs of communications, so checkpointing of
-                     * previous J would require some fix or workaround for it.
-                     */
-                    if(!previousJInitialized)
-                        copyToPreviousJ(fieldJ);
-
-                    /* In order to keep the central nature of time derivatives in the field solver (and the consequent
-                     * approximation order in time), we have to add contribution of J in the middle of the given
-                     * subStep, so at time
-                     *     t_sub = currentStep * sim.pic.getDt() + (subStep + 0.5) * sim.pic.getDt() / numSubsteps.
-                     * We process each grid point separately and independently, so the following only concerts time.
-                     * With Esirkepov/EmZ current deposition we have, assuming sufficient smoothness of J(t):
-                     *     fieldJ = J(t_curr) + O(sim.pic.getDt()^2) with t_curr = (currentStep + 0.5) *
-                     * sim.pic.getDt(), previousJ = J(t_prev) + O(sim.pic.getDt()^2) with t_prev = (currentStep - 0.5)
-                     * * sim.pic.getDt(). Using linear interpolation or extrapolation (depending on subStep) of J(t)
-                     * yields J_sub = J(t_prev) + (t_sub - t_prev) / (t_curr - t_prev) * (J(t_curr) - J(t_prev)).
-                     * Applying Taylor expansion and again assuming sufficient smoothness of J(t) one can obtain
-                     *     J_sub =  J(t_sub) + O(sim.pic.getDt()^2).
-                     * Since J(t_curr), J(t_prev) terms appear linearly in J_sub, same approximation order holds when
-                     * fieldJ, previousJ are used instead.
-                     * Denoting
-                     *     alpha = (subStep + 0.5) / numSubsteps,
-                     * substepping solver then has to apply the following current density value:
-                     *     J = (0.5 - alpha) * previousJ + (0.5 + alpha) * fieldJ.
-                     */
-
-                    // Base coefficient in front of J in Ampere's law
-                    constexpr float_X baseCoeff = -(1.0_X / sim.pic.getEps0()) * getTimeStep();
-                    auto const alpha = static_cast<float_X>((subStep + 0.5) / this->numSubsteps);
-                    auto const prevCoeff = (0.5_X - alpha) * baseCoeff;
-                    auto const currentCoeff = (0.5_X + alpha) * baseCoeff;
-                    this->template addCurrentImpl<T_area>(previousJ->getDataBox(), prevCoeff);
-                    this->template addCurrentImpl<T_area>(fieldJ.getDeviceDataBox(), currentCoeff);
-
-                    /* After the last substep copy current J to previous.
-                     * In case numSubsteps > 1 we are here once per PIC time iteration and T_area == CORE + BORDER.
-                     * In case numSubsteps == 1 we may be here more than once, but prevCoeff == 0 and so copy is safe.
-                     */
-                    if(subStep == this->numSubsteps - 1)
-                        copyToPreviousJ(fieldJ);
+                /** Whether the first current addition must wait for communicated FieldJ values. */
+                bool requiresCurrentPreparation() const
+                {
+                    return existsCurrent && T_numSubsteps > 1u && !previousJInitialized;
                 }
 
                 /** Perform the last part of E and B propagation by a PIC time step
@@ -230,21 +188,110 @@ namespace picongpu
                             = static_cast<float_X>(currentStep) + static_cast<float_X>(subStep) * getTimeStep();
                         this->updateBeforeCurrent(currentStepAndSubstep);
                         // By now FieldJ has been communicated so we can directly add it
-                        addCurrent<type::CORE + type::BORDER>(subStep);
+                        auto const kind = currentInterpolation::CurrentInterpolation::get().kind;
+                        if(kind == currentInterpolation::CurrentInterpolation::Kind::None)
+                            (void) addCurrent<type::CORE + type::BORDER>(subStep, currentInterpolation::None{});
+                        else
+                            (void) addCurrent<type::CORE + type::BORDER>(subStep, currentInterpolation::Binomial{});
                         this->updateAfterCurrent(currentStepAndSubstep);
                     }
                 }
 
             private:
-                /** Copy given current density device values to previousJ
+                /** Add the interpolated current for one field-solver substep.
+                 *
+                 * @param subStep substep index, in [0, numSubsteps)
+                 * @param currentInterpolation spatial current interpolation functor
+                 */
+                template<uint32_t T_area, typename T_CurrentInterpolation>
+                auto addCurrent(uint32_t const subStep, T_CurrentInterpolation currentInterpolation)
+                {
+                    // J values in the middle of the current PIC time iteration
+                    DataConnector& dc = Environment<>::get().DataConnector();
+                    auto& fieldJ = *dc.get<FieldJ>(FieldJ::getName());
+
+                    // Base coefficient in front of J in Ampere's law
+                    constexpr float_X baseCoeff = -(1.0_X / sim.pic.getEps0()) * getTimeStep();
+                    if constexpr(!existsCurrent)
+                        return caravan::whenAll();
+                    else if constexpr(T_numSubsteps == 1u)
+                        return this->template addCurrentImpl<T_area>(
+                            fieldJ.getDeviceDataBox(),
+                            std::move(currentInterpolation),
+                            baseCoeff);
+                    else
+                    {
+                        /* Initialize previousJ if necessary so that we can process everything uniformly.
+                         * The condition can only be true at the very first time step or just after a restart.
+                         * For these cases we approximate J with first and not second order of accuracy.
+                         * The issue is in principle minor as it only concerns a fixed number of time iterations.
+                         * CurrentInterpolationAndAdditionToEMF delays this first call until communication completes.
+                         *
+                         * @TODO Remove this limitation by implementing current deposition at step -1 and saving the
+                         * resulting J as previous; save previous J in checkpointing. Note: with existing code base
+                         * there can only be a single FieldJ object due to IDs of communications, so checkpointing of
+                         * previous J would require some fix or workaround for it.
+                         */
+                        bool const initializePrevious = !previousJInitialized;
+                        previousJInitialized = true;
+
+                        /* In order to keep the central nature of time derivatives in the field solver (and the
+                         * consequent approximation order in time), we have to add contribution of J in the middle of
+                         * the given subStep, so at time
+                         *     t_sub = currentStep * sim.pic.getDt() + (subStep + 0.5) * sim.pic.getDt() / numSubsteps.
+                         * We process each grid point separately and independently, so the following only concerns
+                         * time. With Esirkepov/EmZ current deposition we have, assuming sufficient smoothness of J(t):
+                         *     fieldJ = J(t_curr) + O(sim.pic.getDt()^2) with t_curr = (currentStep + 0.5) *
+                         * sim.pic.getDt(), previousJ = J(t_prev) + O(sim.pic.getDt()^2) with t_prev = (currentStep -
+                         * 0.5) * sim.pic.getDt(). Using linear interpolation or extrapolation (depending on subStep)
+                         * of J(t) yields J_sub = J(t_prev) + (t_sub - t_prev) / (t_curr - t_prev) * (J(t_curr) -
+                         * J(t_prev)). Applying Taylor expansion and again assuming sufficient smoothness of J(t) one
+                         * can obtain J_sub = J(t_sub) + O(sim.pic.getDt()^2). Since J(t_curr), J(t_prev) terms appear
+                         * linearly in J_sub, same approximation order holds when fieldJ, previousJ are used instead.
+                         * Denoting
+                         *     alpha = (subStep + 0.5) / numSubsteps,
+                         * substepping solver then has to apply the following current density value:
+                         *     J = (0.5 - alpha) * previousJ + (0.5 + alpha) * fieldJ.
+                         */
+                        auto const alpha = static_cast<float_X>((subStep + 0.5) / this->numSubsteps);
+                        auto const prevCoeff = (0.5_X - alpha) * baseCoeff;
+                        auto const currentCoeff = (0.5_X + alpha) * baseCoeff;
+                        auto initialize = copyToPreviousJ(fieldJ, initializePrevious);
+                        auto addPrevious = this->template addCurrentImpl<T_area>(
+                            previousJ->getDataBox(),
+                            currentInterpolation,
+                            prevCoeff);
+                        auto addCurrent = this->template addCurrentImpl<T_area>(
+                            fieldJ.getDeviceDataBox(),
+                            std::move(currentInterpolation),
+                            currentCoeff);
+                        /* After the last substep copy current J to previous.
+                         * In case numSubsteps > 1 we are here once per PIC time iteration and T_area == CORE + BORDER.
+                         */
+                        auto storeCurrent = copyToPreviousJ(fieldJ, subStep == this->numSubsteps - 1u);
+                        return std::move(initialize) | caravan::sequence(std::move(addPrevious))
+                               | caravan::sequence(std::move(addCurrent)) | caravan::sequence(std::move(storeCurrent));
+                    }
+                }
+
+                /** Optionally copy given current density device values to previousJ
                  *
                  * @param fieldJ current density
+                 * @param enabled whether to enqueue the copy
                  */
-                void copyToPreviousJ(FieldJ& fieldJ)
+                auto copyToPreviousJ(FieldJ& fieldJ, bool const enabled)
                 {
-                    auto& currentGridBuffer = fieldJ.getGridBuffer();
-                    previousJ->copyFrom(currentGridBuffer.getDeviceBuffer());
-                    previousJInitialized = true;
+                    auto& current = fieldJ.getGridBuffer().getDeviceBuffer();
+                    auto destination = previousJ->getOwnedAlpakaView();
+                    auto source = current.getOwnedAlpakaView();
+                    auto const extent = current.capacityND().toAlpakaMemVec();
+                    return caravan::alpaka::submit(
+                        [destination = std::move(destination), source = std::move(source), extent, enabled](
+                            auto& queue) mutable
+                        {
+                            if(enabled)
+                                alpaka::memcpy(queue, caravan::unwrap(destination), caravan::unwrap(source), extent);
+                        });
                 }
 
                 //! Buffer type to store previous J values
@@ -252,7 +299,7 @@ namespace picongpu
 
                 /** Device buffer for values of J on previous PIC time step
                  *
-                 * Not used when existsCurrent is false.
+                 * Only allocated when current exists and more than one substep is used.
                  */
                 std::unique_ptr<DeviceBufferJ> previousJ;
 

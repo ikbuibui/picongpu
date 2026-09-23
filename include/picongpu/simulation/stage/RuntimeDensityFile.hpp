@@ -62,8 +62,10 @@ namespace picongpu
                      */
                     void operator()(po::options_description& desc)
                     {
-                        // Density from openPMD is conditionally enabled, so use same condition
-#if (ENABLE_OPENPMD == 1)
+                        // Density from openPMD is conditionally enabled, so use the same condition.
+                        // Minimal mode has no runtime-density implementation, so it must not
+                        // advertise an option that would be silently ignored.
+#if (ENABLE_OPENPMD == 1) && !defined(PICONGPU_MINIMAL_CARAVAN_THERMAL)
                         auto* filename = &densityProfiles::RuntimeDensityFile<T_Species>::get();
                         desc.add_options()(
                             (prefix + "_runtimeDensityFile").c_str(),

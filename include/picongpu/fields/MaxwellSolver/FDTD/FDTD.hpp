@@ -32,6 +32,9 @@
 #include <pmacc/traits/GetStringProperties.hpp>
 
 #include <cstdint>
+#include <utility>
+
+#include <caravan/core.hpp>
 
 namespace picongpu
 {
@@ -66,23 +69,29 @@ namespace picongpu
                  *
                  * @param currentStep index of the current time iteration
                  */
-                void update_beforeCurrent(uint32_t const currentStep)
+                caravan::Event update_beforeCurrent(
+                    caravan::ControlContext& context,
+                    caravan::Event previous,
+                    uint32_t const currentStep)
                 {
-                    this->updateBeforeCurrent(static_cast<float_X>(currentStep));
+                    return this->updateBeforeCurrent(context, std::move(previous), static_cast<float_X>(currentStep));
                 }
 
                 /** Add contribution of FieldJ in the given area according to Ampere's law
                  *
                  * @tparam T_area area to operate on
                  */
-                template<uint32_t T_area>
-                void addCurrent()
+                template<uint32_t T_area, typename T_CurrentInterpolation>
+                auto addCurrent(T_CurrentInterpolation currentInterpolation)
                 {
                     DataConnector& dc = Environment<>::get().DataConnector();
                     auto& fieldJ = *dc.get<FieldJ>(FieldJ::getName());
                     // Coefficient in front of J in Ampere's law
                     constexpr float_X coeff = -(1.0_X / sim.pic.getEps0()) * sim.pic.getDt();
-                    this->template addCurrentImpl<T_area>(fieldJ.getDeviceDataBox(), coeff);
+                    return this->template addCurrentImpl<T_area>(
+                        fieldJ.getDeviceDataBox(),
+                        std::move(currentInterpolation),
+                        coeff);
                 }
 
                 /** Perform the last part of E and B propagation by a PIC time step
@@ -92,9 +101,12 @@ namespace picongpu
                  *
                  * @param currentStep index of the current time iteration
                  */
-                void update_afterCurrent(uint32_t const currentStep)
+                caravan::Event update_afterCurrent(
+                    caravan::ControlContext& context,
+                    caravan::Event previous,
+                    uint32_t const currentStep)
                 {
-                    this->updateAfterCurrent(static_cast<float_X>(currentStep));
+                    return this->updateAfterCurrent(context, std::move(previous), static_cast<float_X>(currentStep));
                 }
 
                 //! Get string properties
@@ -114,7 +126,7 @@ namespace picongpu
                  * Synchronizes simulation data, meaning accessing (host side) data
                  * will return up-to-date values.
                  */
-                void synchronize() override {};
+                void synchronize() {};
 
                 /**
                  * Return the globally unique identifier for this simulation data.
