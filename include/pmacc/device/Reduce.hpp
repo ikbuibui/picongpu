@@ -173,6 +173,40 @@ namespace pmacc
                 }
             }
 
+            /** calculate number of threads per block
+             *
+             * @param threads maximal number of threads per block
+             * @return number of threads per block
+             */
+            HINLINE static uint32_t getThreadsPerBlock(uint32_t threads)
+            {
+                /// \todo this list is not complete
+                ///        extend it and maybe check for sm_version
+                ///        and add possible threads accordingly.
+                ///        maybe this function should be exported
+                ///        to a more general nvidia class, too.
+                if(threads >= 512)
+                    return 512;
+                if(threads >= 256)
+                    return 256;
+                if(threads >= 128)
+                    return 128;
+                if(threads >= 64)
+                    return 64;
+                if(threads >= 32)
+                    return 32;
+                if(threads >= 16)
+                    return 16;
+                if(threads >= 8)
+                    return 8;
+                if(threads >= 4)
+                    return 4;
+                if(threads >= 2)
+                    return 2;
+
+                return 1;
+            }
+
             template<typename Type, typename T_Queue, typename... T_Args>
             HINLINE static void enqueueReduceKernel(
                 T_Queue& queue,
@@ -221,40 +255,6 @@ namespace pmacc
                     PMACC_LOCKSTEP_KERNEL(reduce::Kernel<Type>{})
                         .template configSMem<1u>(blocks, sharedMemSize)
                         .enqueueNative(queue, std::forward<T_Args>(args)...);
-            }
-
-            /** calculate number of threads per block
-             *
-             * @param threads maximal number of threads per block
-             * @return number of threads per block
-             */
-            HINLINE static uint32_t getThreadsPerBlock(uint32_t threads)
-            {
-                /// \todo this list is not complete
-                ///        extend it and maybe check for sm_version
-                ///        and add possible threads accordingly.
-                ///        maybe this function should be exported
-                ///        to a more general nvidia class, too.
-                if(threads >= 512)
-                    return 512;
-                if(threads >= 256)
-                    return 256;
-                if(threads >= 128)
-                    return 128;
-                if(threads >= 64)
-                    return 64;
-                if(threads >= 32)
-                    return 32;
-                if(threads >= 16)
-                    return 16;
-                if(threads >= 8)
-                    return 8;
-                if(threads >= 4)
-                    return 4;
-                if(threads >= 2)
-                    return 2;
-
-                return 1;
             }
 
             /** calculate optimal number of threads per block with respect to shared memory limitations
