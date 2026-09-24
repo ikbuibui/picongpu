@@ -96,7 +96,7 @@ namespace pmacc
                     if(useParticle)
                     {
                         if(accParFilter(lockstepWorker, particle))
-                            kernel::atomicAllInc(lockstepWorker, &counter, ::alpaka::hierarchy::Threads{});
+                            kernel::atomicAllInc(lockstepWorker, &counter, ::alpaka::onAcc::scope::Block{});
                     }
                 });
 
@@ -105,11 +105,11 @@ namespace pmacc
             onlyMaster(
                 [&]()
                 {
-                    alpaka::atomicAdd(
+                    ::alpaka::onAcc::atomicAdd(
                         worker.getAcc(),
                         gCounter,
                         static_cast<uint64_cu>(counter),
-                        ::alpaka::hierarchy::Blocks{});
+                        ::alpaka::onAcc::scope::Device{});
                 });
         }
     };

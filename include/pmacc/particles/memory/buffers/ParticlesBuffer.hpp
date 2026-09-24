@@ -168,8 +168,12 @@ namespace pmacc
             return caravan::alpaka::submit(
                 [host = std::move(host), device = std::move(device), elements](auto& nativeQueue) mutable
                 {
-                    std::fill_n(alpaka::getPtrNative(host.value), elements, SuperCellType{});
-                    alpaka::memcpy(nativeQueue, device.value, host.value, alpaka::getExtents(host.value));
+                    std::fill_n(::alpaka::onHost::data(host.value), elements, SuperCellType{});
+                    ::alpaka::onHost::memcpy(
+                        nativeQueue,
+                        device.value,
+                        host.value,
+                        ::alpaka::onHost::getExtents(host.value));
                 });
         }
 

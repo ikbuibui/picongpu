@@ -160,7 +160,7 @@ namespace pmacc
             if(m_isMpiInitialized)
             {
                 // Required by scorep for flushing the buffers. Application async contexts must already be joined.
-                alpaka::wait(manager::Device<ComputeDevice>::get().current());
+                alpaka::onHost::wait(manager::Device<ComputeDevice>::get().current());
                 m_deviceContext.reset();
                 m_isDeviceSelected = false;
                 m_isMpiInitialized = false;

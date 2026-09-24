@@ -19,11 +19,8 @@ namespace pmacc
     [[nodiscard]] auto size(T_Queue& queue, T_Destination destination, T_Source source)
     {
         using Source = std::remove_cvref_t<decltype(caravan::unwrap(source))>;
-        return caravan::alpaka::copy(
-            queue,
-            std::move(destination),
-            std::move(source),
-            ::alpaka::Vec<::alpaka::Dim<Source>, ::alpaka::Idx<Source>>::ones());
+        using ExtentType = std::remove_cvref_t<decltype(::alpaka::onHost::getExtents(std::declval<Source const&>()))>;
+        return caravan::alpaka::copy(queue, std::move(destination), std::move(source), ExtentType::fill(1));
     }
 
     /** Queue-free lazy size copy; withDevice supplies the managed queue context. */
@@ -31,9 +28,7 @@ namespace pmacc
     [[nodiscard]] auto size(T_Destination destination, T_Source source)
     {
         using Source = std::remove_cvref_t<decltype(caravan::unwrap(source))>;
-        return caravan::alpaka::copy(
-            std::move(destination),
-            std::move(source),
-            ::alpaka::Vec<::alpaka::Dim<Source>, ::alpaka::Idx<Source>>::ones());
+        using ExtentType = std::remove_cvref_t<decltype(::alpaka::onHost::getExtents(std::declval<Source const&>()))>;
+        return caravan::alpaka::copy(std::move(destination), std::move(source), ExtentType::fill(1));
     }
 } // namespace pmacc

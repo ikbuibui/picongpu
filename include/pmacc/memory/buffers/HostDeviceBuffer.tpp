@@ -74,38 +74,22 @@ namespace pmacc
                  contiguous,
                  updateSize = std::move(updateSize)](auto& nativeQueue) mutable
                 {
-                    auto const size = *::alpaka::getPtrNative(sourceSize);
-                    *::alpaka::getPtrNative(destinationSize) = size;
+                    auto const size = *::alpaka::onHost::data(sourceSize);
+                    *::alpaka::onHost::data(destinationSize) = size;
                     updateSize(nativeQueue, destinationSize);
                     if(contiguous)
                     {
-                        using DestinationView = std::remove_cvref_t<decltype(destination.value)>;
-                        using SourceView = std::remove_cvref_t<decltype(source.value)>;
-                        using DestinationFlatView = ::alpaka::ViewPlainPtr<
-                            ::alpaka::Dev<DestinationView>,
-                            ::alpaka::Elem<DestinationView>,
-                            AlpakaDim<DIM1>,
-                            MemIdxType>;
-                        using SourceFlatView = ::alpaka::ViewPlainPtr<
-                            ::alpaka::Dev<SourceView>,
-                            ::alpaka::Elem<SourceView>,
-                            AlpakaDim<DIM1>,
-                            MemIdxType>;
                         auto const extent = MemSpace<DIM1>{size}.toAlpakaMemVec();
-                        DestinationFlatView destinationView(
-                            ::alpaka::getPtrNative(destination.value),
-                            ::alpaka::getDev(destination.value),
-                            extent);
-                        SourceFlatView sourceView(
-                            ::alpaka::getPtrNative(source.value),
-                            ::alpaka::getDev(source.value),
-                            extent);
-                        ::alpaka::memcpy(nativeQueue, destinationView, sourceView, extent);
+                        auto destinationView
+                            = ::alpaka::makeView(destination.value, ::alpaka::onHost::data(destination.value), extent);
+                        auto sourceView
+                            = ::alpaka::makeView(source.value, ::alpaka::onHost::data(source.value), extent);
+                        ::alpaka::onHost::memcpy(nativeQueue, destinationView, sourceView, extent);
                     }
                     else
                     {
                         auto const extent = copyExtent<T_dim>(size, capacity).toAlpakaMemVec();
-                        ::alpaka::memcpy(nativeQueue, destination.value, source.value, extent);
+                        ::alpaka::onHost::memcpy(nativeQueue, destination.value, source.value, extent);
                     }
                 });
         }
@@ -163,11 +147,7 @@ namespace pmacc
             [deviceSize = std::move(deviceSize)](auto& nativeQueue, auto const& hostSize) mutable
             {
                 if(deviceSize)
-                    ::alpaka::memcpy(
-                        nativeQueue,
-                        *deviceSize,
-                        hostSize,
-                        ::alpaka::Vec<AlpakaDim<DIM1>, MemIdxType>::ones());
+                    ::alpaka::onHost::memcpy(nativeQueue, *deviceSize, hostSize, MemSpace<DIM1>(1).toAlpakaMemVec());
             });
     }
 

@@ -159,40 +159,37 @@ namespace pmacc
             auto const areaSize = MemSpace<T_dim>(this->sizeND(this->size()));
             auto gridSize = areaSize;
             constexpr uint32_t xChunkSize = 256u;
-            gridSize.x() = alpaka::core::divCeil(gridSize.x(), static_cast<size_t>(xChunkSize));
+            gridSize.x() = alpaka::divCeil(gridSize.x(), static_cast<size_t>(xChunkSize));
             auto const blockCfg = lockstep::makeBlockCfg<xChunkSize>();
             auto blockSize = DataSpace<T_dim>::create(1);
             blockSize.x() = blockCfg.numWorkers();
-            auto const workDiv = alpaka::WorkDivMembers<AlpakaDim<T_dim>, IdxType>{
-                gridSize.toAlpakaKernelVec(),
-                blockSize.toAlpakaKernelVec(),
-                DataSpace<T_dim>::create(1).toAlpakaKernelVec()};
+            auto const threadSpec
+                = ::alpaka::onHost::ThreadSpec{gridSize.toAlpakaKernelVec(), blockSize.toAlpakaKernelVec()};
             auto destination = getOwnedAlpakaView();
             auto const destinationBox = getDataBox();
 
             if constexpr(sizeof(T_Type) <= 128u && std::is_trivially_copyable_v<T_Type>)
                 return caravan::alpaka::submit(
-                    [destination = std::move(destination), destinationBox, value, areaSize, workDiv, blockCfg](
+                    [destination = std::move(destination), destinationBox, value, areaSize, threadSpec, blockCfg](
                         auto& nativeQueue) mutable
                     {
                         if(areaSize.productOfComponents() != 0u)
-                            alpaka::exec<Acc<T_dim>>(
-                                nativeQueue,
-                                workDiv,
-                                detail::KernelSetValue<xChunkSize>{},
-                                destinationBox,
-                                value,
-                                areaSize,
-                                blockCfg);
+                            nativeQueue.enqueue(
+                                threadSpec,
+                                ::alpaka::KernelBundle{
+                                    detail::KernelSetValue<xChunkSize>{},
+                                    destinationBox,
+                                    value,
+                                    areaSize,
+                                    blockCfg});
                     });
             else
             {
-                auto hostValue = alpaka::allocMappedBufIfSupported<T_Type, MemIdxType>(
+                auto hostValue = ::alpaka::onHost::allocMapped<T_Type>(
                     manager::Device<HostDevice>::get().current(),
-                    manager::Device<ComputeDevice>::get().getPlatform(),
                     MemSpace<DIM1>(1).toAlpakaMemVec());
-                alpaka::getPtrNative(hostValue)[0] = value;
-                auto deviceValue = alpaka::allocBuf<T_Type, MemIdxType>(
+                ::alpaka::onHost::data(hostValue)[0] = value;
+                auto deviceValue = ::alpaka::onHost::alloc<T_Type>(
                     manager::Device<ComputeDevice>::get().current(),
                     MemSpace<DIM1>(1).toAlpakaMemVec());
                 return caravan::alpaka::submit(
@@ -201,20 +198,24 @@ namespace pmacc
                      hostValue = std::move(hostValue),
                      deviceValue = std::move(deviceValue),
                      areaSize,
-                     workDiv,
+                     threadSpec,
                      blockCfg](auto& nativeQueue) mutable
                     {
                         if(areaSize.productOfComponents() == 0u)
                             return;
-                        alpaka::memcpy(nativeQueue, deviceValue, hostValue, MemSpace<DIM1>(1).toAlpakaMemVec());
-                        alpaka::exec<Acc<T_dim>>(
+                        ::alpaka::onHost::memcpy(
                             nativeQueue,
-                            workDiv,
-                            detail::KernelSetValue<xChunkSize>{},
-                            destinationBox,
-                            detail::IndirectValue<T_Type>{alpaka::getPtrNative(deviceValue)},
-                            areaSize,
-                            blockCfg);
+                            deviceValue,
+                            hostValue,
+                            MemSpace<DIM1>(1).toAlpakaMemVec());
+                        nativeQueue.enqueue(
+                            threadSpec,
+                            ::alpaka::KernelBundle{
+                                detail::KernelSetValue<xChunkSize>{},
+                                destinationBox,
+                                detail::IndirectValue<T_Type>{::alpaka::onHost::data(deviceValue)},
+                                areaSize,
+                                blockCfg});
                     });
             }
         }

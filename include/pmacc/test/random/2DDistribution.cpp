@@ -81,7 +81,11 @@ namespace pmacc
                             for(uint32_t i = 0u; i < numSamples; i++)
                             {
                                 Space2D idx = vWorkerRand(worker, boxSize);
-                                alpaka::atomicAdd(worker.getAcc(), &box(idx), 1u, ::alpaka::hierarchy::Blocks{});
+                                ::alpaka::onAcc::atomicAdd(
+                                    worker.getAcc(),
+                                    &box(idx),
+                                    1u,
+                                    ::alpaka::onAcc::scope::Device{});
                             }
                         });
                 }
@@ -290,7 +294,7 @@ int main(int argc, char** argv)
 
             Environment<2>::get().initDevices(mpi, Space2D::create(1), Space2D::create(0));
             uint32_t const numSamples = (argc > 1) ? atoi(argv[1]) : 100;
-            runTest<random::methods::AlpakaRand<pmacc::Acc<DIM1>>>(numSamples);
+            runTest<random::methods::AlpakaRand<>>(numSamples);
             Environment<>::get().finalize();
             return 0;
         });

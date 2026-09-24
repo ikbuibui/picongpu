@@ -77,6 +77,11 @@ namespace
             return *size;
         }
 
+        size_t getHostCurrentSize() const
+        {
+            return *size;
+        }
+
         size_t const* size;
     };
 

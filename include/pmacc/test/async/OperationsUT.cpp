@@ -79,9 +79,8 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
     pmacc::ComputeDeviceQueue queue(deviceManager);
     auto const one = pmacc::MemSpace<DIM1>::create(1);
     auto const extent = one.toAlpakaMemVec();
-    auto const workExtent = ::alpaka::Vec<pmacc::AlpakaDim<DIM1>, pmacc::IdxType>::ones();
-    auto const workDiv
-        = ::alpaka::WorkDivMembers<pmacc::AlpakaDim<DIM1>, pmacc::IdxType>{workExtent, workExtent, workExtent};
+    auto const workExtent = pmacc::DataSpace<DIM1>::create(1).toAlpakaKernelVec();
+    auto const threadSpec = ::alpaka::onHost::ThreadSpec{workExtent, workExtent};
 
     auto input = std::make_unique<pmacc::HostBuffer<int, DIM1>>(one);
     auto device = std::make_unique<pmacc::DeviceBuffer<int, DIM1>>(one, true);
@@ -92,9 +91,9 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
                 | caravan::sequence(
                     caravan::alpaka::copy(queue, device->getOwnedAlpakaView(), input->getOwnedAlpakaView(), extent))
                 | caravan::sequence(
-                    caravan::alpaka::kernel<pmacc::Acc<DIM1>>(
+                    caravan::alpaka::kernel(
                         queue,
-                        workDiv,
+                        threadSpec,
                         Increment{},
                         caravan::retain(device->data(), device->getOwnedAlpakaView())))
                 | caravan::sequence(pmacc::size(queue, device->sizeOnDeviceBuffer(), device->sizeHostSideBuffer()))

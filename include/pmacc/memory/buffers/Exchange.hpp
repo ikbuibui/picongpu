@@ -287,13 +287,13 @@ namespace pmacc
                     if(hostStaging)
                         getHostBuffer().setSizeHostSide(elements);
                     if(deviceStaging)
-                        ::alpaka::memcpy(nativeQueue, deviceStaging->value, source.value, extent);
+                        ::alpaka::onHost::memcpy(nativeQueue, deviceStaging->value, source.value, extent);
                     if(hostStaging)
                     {
                         if(deviceStaging)
                             copyStaging(nativeQueue, hostStaging->value, deviceStaging->value, elements);
                         else
-                            ::alpaka::memcpy(nativeQueue, hostStaging->value, source.value, extent);
+                            ::alpaka::onHost::memcpy(nativeQueue, hostStaging->value, source.value, extent);
                     }
                 });
             return std::move(queueTail)
@@ -350,7 +350,7 @@ namespace pmacc
                                 elements = metadata.elements](auto& nativeQueue) mutable
                                {
                                    if(deviceSize)
-                                       ::alpaka::memcpy(nativeQueue, *deviceSize, hostSize, sizeExtent);
+                                       ::alpaka::onHost::memcpy(nativeQueue, *deviceSize, hostSize, sizeExtent);
                                    if(hostStaging)
                                    {
                                        if(deviceStaging)
@@ -360,21 +360,21 @@ namespace pmacc
                                                deviceStaging->value,
                                                hostStaging->value,
                                                elements);
-                                           ::alpaka::memcpy(
+                                           ::alpaka::onHost::memcpy(
                                                nativeQueue,
                                                destination.value,
                                                deviceStaging->value,
                                                dataExtent);
                                        }
                                        else
-                                           ::alpaka::memcpy(
+                                           ::alpaka::onHost::memcpy(
                                                nativeQueue,
                                                destination.value,
                                                hostStaging->value,
                                                dataExtent);
                                    }
                                    else if(deviceStaging)
-                                       ::alpaka::memcpy(
+                                       ::alpaka::onHost::memcpy(
                                            nativeQueue,
                                            destination.value,
                                            deviceStaging->value,
@@ -443,17 +443,10 @@ namespace pmacc
         template<typename T_Queue, typename T_Destination, typename T_Source>
         static void copyStaging(T_Queue& queue, T_Destination& destination, T_Source const& source, size_t elements)
         {
-            using DestinationView
-                = ::alpaka::ViewPlainPtr<::alpaka::Dev<T_Destination>, TYPE, AlpakaDim<DIM1>, MemIdxType>;
-            using SourceView
-                = ::alpaka::ViewPlainPtr<::alpaka::Dev<T_Source>, TYPE const, AlpakaDim<DIM1>, MemIdxType>;
             auto const extent = MemSpace<DIM1>(elements).toAlpakaMemVec();
-            DestinationView destinationView(
-                ::alpaka::getPtrNative(destination),
-                ::alpaka::getDev(destination),
-                extent);
-            SourceView sourceView(::alpaka::getPtrNative(source), ::alpaka::getDev(source), extent);
-            ::alpaka::memcpy(queue, destinationView, sourceView, extent);
+            auto destinationView = ::alpaka::makeView(destination, ::alpaka::onHost::data(destination), extent);
+            auto sourceView = ::alpaka::makeView(source, ::alpaka::onHost::data(source), extent);
+            ::alpaka::onHost::memcpy(queue, destinationView, sourceView, extent);
         }
 
         ReceiveMetadata receiveMetadata(caravan::ReceiveResult const& result) const
