@@ -53,7 +53,7 @@ namespace pmacc
 
                         std::vector<size_t> nElementsPerDim = getElementsPerDim<T_Dim>();
                         auto const device = manager::Device<ComputeDevice>::get().current();
-                        ComputeDeviceQueue queue(device);
+                        ComputeDeviceQueue queue = caravan::alpaka::detail::makeQueue<ComputeDeviceQueue>(device);
                         caravan::ControlContext context;
 
                         for(unsigned i = 0; i < nElementsPerDim.size(); ++i)

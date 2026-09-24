@@ -72,27 +72,32 @@ int main(int argc, char** argv)
         argv,
         [](caravan::MpiContext& mpi)
         {
-            using Dim = alpaka::DimInt<1u>;
             using Idx = std::size_t;
-#if ALPAKA_ACC_GPU_CUDA_ENABLED
-            using Acc = alpaka::AccGpuCudaRt<Dim, Idx>;
-#elif ALPAKA_ACC_GPU_HIP_ENABLED
-            using Acc = alpaka::AccGpuHipRt<Dim, Idx>;
+#if ALPAKA_LANG_CUDA
+            constexpr auto computeApi = alpaka::api::cuda;
+            constexpr auto computeDeviceKind = alpaka::deviceKind::nvidiaGpu;
+#elif ALPAKA_LANG_HIP
+            constexpr auto computeApi = alpaka::api::hip;
+            constexpr auto computeDeviceKind = alpaka::deviceKind::amdGpu;
 #else
-            using Acc = alpaka::AccCpuSerial<Dim, Idx>;
+            constexpr auto computeApi = alpaka::api::host;
+            constexpr auto computeDeviceKind = alpaka::deviceKind::cpu;
 #endif
-            using Queue = alpaka::Queue<Acc, alpaka::NonBlocking>;
-            auto const device = alpaka::getDevByIdx(alpaka::Platform<Acc>{}, 0u);
-            auto const host = alpaka::getDevByIdx(alpaka::PlatformCpu{}, 0u);
-            Queue queue{device};
-            auto const one = alpaka::Vec<Dim, Idx>{1u};
-            auto const workDiv = alpaka::WorkDivMembers<Dim, Idx>{one, one, one};
-            auto producerInput = alpaka::allocBuf<int, Idx>(host, one);
-            auto producerDevice = alpaka::allocBuf<int, Idx>(device, one);
-            auto mpiInput = alpaka::allocBuf<int, Idx>(host, one);
-            auto received = alpaka::allocBuf<int, Idx>(host, one);
-            auto consumerDevice = alpaka::allocBuf<int, Idx>(device, one);
-            auto consumerOutput = alpaka::allocBuf<int, Idx>(host, one);
+            constexpr auto computeQueueKind = alpaka::queueKind::nonBlocking;
+            using Device = alpaka::onHost::Device<ALPAKA_TYPEOF(computeApi), ALPAKA_TYPEOF(computeDeviceKind)>;
+            using Queue = alpaka::onHost::Queue<Device, ALPAKA_TYPEOF(computeQueueKind)>;
+            auto const device = alpaka::onHost::makeDeviceSelector(computeApi, computeDeviceKind).makeDevice(0u);
+            auto const host
+                = alpaka::onHost::makeDeviceSelector(alpaka::api::host, alpaka::deviceKind::cpu).makeDevice(0u);
+            auto queue = caravan::alpaka::detail::makeQueue<Queue>(device);
+            auto const one = alpaka::Vec{Idx{1u}};
+            auto const threadSpec = alpaka::onHost::ThreadSpec{one, one};
+            auto producerInput = alpaka::onHost::alloc<int>(host, one);
+            auto producerDevice = alpaka::onHost::alloc<int>(device, one);
+            auto mpiInput = alpaka::onHost::alloc<int>(host, one);
+            auto received = alpaka::onHost::alloc<int>(host, one);
+            auto consumerDevice = alpaka::onHost::alloc<int>(device, one);
+            auto consumerOutput = alpaka::onHost::alloc<int>(host, one);
             producerInput[0] = mpi.topology().rank;
             mpiInput[0] = received[0] = consumerOutput[0] = -1;
 
@@ -118,7 +123,7 @@ int main(int argc, char** argv)
             caravan::syncWait(
                 caravan::alpaka::copy(queue, producerDevice, producerInput, one)
                 | caravan::alpaka::sequence(
-                    caravan::alpaka::kernel<Acc>(queue, workDiv, Increment{}, alpaka::getPtrNative(producerDevice)))
+                    caravan::alpaka::kernel(queue, threadSpec, Increment{}, alpaka::onHost::data(producerDevice)))
                 | caravan::alpaka::sequence(caravan::alpaka::copy(queue, mpiInput, producerDevice, one))
                 | caravan::letValue(
                     [&]
@@ -146,11 +151,11 @@ int main(int argc, char** argv)
                                    [&](Queue&) { bSubmissionThread = std::this_thread::get_id(); })
                                | caravan::alpaka::sequence(caravan::alpaka::copy(queue, consumerDevice, received, one))
                                | caravan::alpaka::sequence(
-                                   caravan::alpaka::kernel<Acc>(
+                                   caravan::alpaka::kernel(
                                        queue,
-                                       workDiv,
+                                       threadSpec,
                                        Increment{},
-                                       alpaka::getPtrNative(consumerDevice)))
+                                       alpaka::onHost::data(consumerDevice)))
                                | caravan::alpaka::sequence(
                                    caravan::alpaka::copy(queue, consumerOutput, consumerDevice, one));
                     })

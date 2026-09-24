@@ -39,31 +39,32 @@ int main(int argc, char** argv)
         [](caravan::MpiContext& mpi)
         {
             namespace ex = stdexec;
-            using Dim = alpaka::DimInt<1u>;
             using Idx = std::size_t;
-#if ALPAKA_ACC_GPU_CUDA_ENABLED
-            using Acc = alpaka::AccGpuCudaRt<Dim, Idx>;
-#elif ALPAKA_ACC_GPU_HIP_ENABLED
-            using Acc = alpaka::AccGpuHipRt<Dim, Idx>;
+#if ALPAKA_LANG_CUDA
+            constexpr auto computeApi = alpaka::api::cuda;
+            constexpr auto computeDeviceKind = alpaka::deviceKind::nvidiaGpu;
+#elif ALPAKA_LANG_HIP
+            constexpr auto computeApi = alpaka::api::hip;
+            constexpr auto computeDeviceKind = alpaka::deviceKind::amdGpu;
 #else
-            using Acc = alpaka::AccCpuSerial<Dim, Idx>;
+            constexpr auto computeApi = alpaka::api::host;
+            constexpr auto computeDeviceKind = alpaka::deviceKind::cpu;
 #endif
-            using Queue = alpaka::Queue<Acc, alpaka::NonBlocking>;
+            constexpr auto computeQueueKind = alpaka::queueKind::nonBlocking;
+            using Device = alpaka::onHost::Device<ALPAKA_TYPEOF(computeApi), ALPAKA_TYPEOF(computeDeviceKind)>;
+            using Queue = alpaka::onHost::Queue<Device, ALPAKA_TYPEOF(computeQueueKind)>;
 
-            auto const device = alpaka::getDevByIdx(alpaka::Platform<Acc>{}, 0u);
-            Queue queue{device};
-            auto const one = alpaka::Vec<Dim, Idx>{1u};
-            auto value = alpaka::allocBuf<int, Idx>(device, one);
+            auto const device = alpaka::onHost::makeDeviceSelector(computeApi, computeDeviceKind).makeDevice(0u);
+            auto queue = caravan::alpaka::detail::makeQueue<Queue>(device);
+            auto const one = alpaka::Vec{Idx{1u}};
+            auto const threadSpec = alpaka::onHost::ThreadSpec{one, one};
+            auto value = alpaka::onHost::alloc<int>(device, one);
             int sent = mpi.topology().rank;
 
             stdexec::run_loop controlLoop;
             std::thread::id controlThread;
             auto chain = caravan::stdexecInterop::adapt(
-                             caravan::alpaka::kernel<Acc>(
-                                 queue,
-                                 alpaka::WorkDivMembers<Dim, Idx>{one, one, one},
-                                 Preserve{},
-                                 alpaka::getPtrNative(value)))
+                             caravan::alpaka::kernel(queue, threadSpec, Preserve{}, alpaka::onHost::data(value)))
                          | ex::let_value(
                              [&]
                              {

@@ -21,6 +21,15 @@
 
 namespace
 {
+
+    /** alpaka 1.x submitted host tasks through alpaka::enqueue(queue, task); alpaka 3 spells this
+     * queue.enqueueHostFn(task). */
+    template<typename T_Queue, typename T_Task>
+    void enqueueHostTask(T_Queue& queue, T_Task const& task)
+    {
+        queue.enqueueHostFn(task);
+    }
+
     thread_local unsigned allocationFailures = 0u;
     std::weak_ptr<int> fatalOwner;
     std::atomic<bool> fatalTaskFinished = false;
@@ -54,11 +63,15 @@ void operator delete(void* memory, std::size_t) noexcept
 int main(int argc, char** argv)
 {
     // These regressions exercise CPU queues even in CUDA/HIP builds; no accelerator device is required.
-    using Queue = alpaka::QueueCpuNonBlocking;
-    auto const device = alpaka::getDevByIdx(alpaka::PlatformCpu{}, 0u);
-    Queue queue{device};
-    Queue secondQueue{device};
-    Queue blockerQueue{device};
+    constexpr auto computeApi = alpaka::api::host;
+    constexpr auto computeDeviceKind = alpaka::deviceKind::cpu;
+    using Device = alpaka::onHost::Device<ALPAKA_TYPEOF(computeApi), ALPAKA_TYPEOF(computeDeviceKind)>;
+    using Queue = alpaka::onHost::Queue<Device, alpaka::queueKind::NonBlocking>;
+    using BlockingQueue = alpaka::onHost::Queue<Device, alpaka::queueKind::Blocking>;
+    auto const device = alpaka::onHost::makeDeviceSelector(computeApi, computeDeviceKind).makeDevice(0u);
+    auto queue = caravan::alpaka::detail::makeQueue<Queue>(device);
+    auto secondQueue = caravan::alpaka::detail::makeQueue<Queue>(device);
+    auto blockerQueue = caravan::alpaka::detail::makeQueue<Queue>(device);
     caravan::AsyncScope scope;
 
     if(argc > 1 && std::string_view(argv[1]) == "--fatal-fence")
@@ -74,7 +87,7 @@ int main(int argc, char** argv)
                 queue,
                 [storage = std::move(storage), gate](Queue& nativeQueue)
                 {
-                    alpaka::enqueue(
+                    enqueueHostTask(
                         nativeQueue,
                         [raw = storage.get(), gate]
                         {
@@ -155,8 +168,8 @@ int main(int argc, char** argv)
         auto submissions = pool.submissions();
         int value = 0;
         auto work = caravan::sequence(
-            submissions.submit([&](Queue& q) { alpaka::enqueue(q, [&] { value = 42; }); }),
-            submissions.submit([&](Queue& q) { alpaka::enqueue(q, [&] { assert(value == 42); }); }));
+            submissions.submit([&](Queue& q) { enqueueHostTask(q, [&] { value = 42; }); }),
+            submissions.submit([&](Queue& q) { enqueueHostTask(q, [&] { assert(value == 42); }); }));
         static_assert(
             std::is_same_v<decltype(caravan::getDomain(work)), caravan::alpaka::PooledSubmissionDomain<Queue>>);
         caravan::syncWait(std::move(work));
@@ -182,7 +195,7 @@ int main(int argc, char** argv)
         int seed = 0, left = 0, right = 0;
         bool joinSubmitted = false;
         std::atomic<bool> hostCompleted = false;
-        auto seedWork = caravan::alpaka::submit(queue, [&](Queue& q) { alpaka::enqueue(q, [&] { seed = 42; }); });
+        auto seedWork = caravan::alpaka::submit(queue, [&](Queue& q) { enqueueHostTask(q, [&] { seed = 42; }); });
         static_assert(
             std::is_same_v<decltype(caravan::getDomain(seedWork)), caravan::alpaka::SubmissionDomain<Queue>>);
         auto work = std::move(seedWork)
@@ -192,7 +205,7 @@ int main(int argc, char** argv)
                                 queue,
                                 [&](Queue& q)
                                 {
-                                    alpaka::enqueue(
+                                    enqueueHostTask(
                                         q,
                                         [&]
                                         {
@@ -205,7 +218,7 @@ int main(int argc, char** argv)
                                     secondQueue,
                                     [&](Queue& q)
                                     {
-                                        alpaka::enqueue(
+                                        enqueueHostTask(
                                             q,
                                             [&]
                                             {
@@ -221,7 +234,7 @@ int main(int argc, char** argv)
                             [&, owner = std::make_unique<int>(42)](Queue& q)
                             {
                                 joinSubmitted = true;
-                                alpaka::enqueue(q, [&, raw = owner.get()] { assert(left == *raw && right == *raw); });
+                                enqueueHostTask(q, [&, raw = owner.get()] { assert(left == *raw && right == *raw); });
                             }))
                     | caravan::then(
                         [&]
@@ -247,7 +260,7 @@ int main(int argc, char** argv)
         std::atomic<bool> submitted = false;
         auto done = scope.spawn(
             caravan::whenAll(
-                caravan::alpaka::submit(queue, [gate](Queue& q) { alpaka::enqueue(q, [gate] { gate.wait(); }); }),
+                caravan::alpaka::submit(queue, [gate](Queue& q) { enqueueHostTask(q, [gate] { gate.wait(); }); }),
                 caravan::asSender(release.event()))
             | caravan::sequence(caravan::alpaka::submit(secondQueue, [&](Queue&) { submitted = true; })));
         assert(!submitted);
@@ -264,7 +277,7 @@ int main(int argc, char** argv)
         auto gate = release.get_future().share();
         std::atomic<bool> submitted = false;
         auto done = scope.spawn(
-            caravan::alpaka::submit(queue, [gate](Queue& q) { alpaka::enqueue(q, [gate] { gate.wait(); }); })
+            caravan::alpaka::submit(queue, [gate](Queue& q) { enqueueHostTask(q, [gate] { gate.wait(); }); })
             | caravan::then([] { assert(caravan::isExecutorThread()); })
             | caravan::sequence(caravan::alpaka::submit(secondQueue, [&](Queue&) { submitted = true; })));
         assert(!submitted);
@@ -294,7 +307,7 @@ int main(int argc, char** argv)
         auto pending = scope.spawn(
             caravan::alpaka::submit(
                 queue,
-                [gate](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [gate] { gate.wait(); }); }));
+                [gate](Queue& nativeQueue) { enqueueHostTask(nativeQueue, [gate] { gate.wait(); }); }));
         scope.spawn(caravan::alpaka::submit(secondQueue, [](Queue&) {}) | caravan::then([&] { release.set_value(); }))
             .wait();
         pending.wait();
@@ -311,7 +324,7 @@ int main(int argc, char** argv)
                 queue,
                 [&](Queue& nativeQueue)
                 {
-                    alpaka::enqueue(
+                    enqueueHostTask(
                         nativeQueue,
                         [&, gate]
                         {
@@ -333,18 +346,18 @@ int main(int argc, char** argv)
         auto blocker = scope.spawn(
             caravan::alpaka::submit(
                 blockerQueue,
-                [gate](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [gate] { gate.wait(); }); }));
+                [gate](Queue& nativeQueue) { enqueueHostTask(nativeQueue, [gate] { gate.wait(); }); }));
         auto predecessor = scope.spawn(caravan::alpaka::submit(queue, [](Queue&) {}));
-        alpaka::enqueue(queue, [predecessor] { predecessor.wait(); });
+        enqueueHostTask(queue, [predecessor] { predecessor.wait(); });
         release.set_value();
         predecessor.wait();
         blocker.wait();
-        alpaka::wait(queue);
+        alpaka::onHost::wait(queue);
     }
 
     // Blocking CPU queues exercise the native-event fence implementation too.
-    alpaka::QueueCpuBlocking blockingQueue{device};
-    alpaka::QueueCpuBlocking secondBlockingQueue{device};
+    auto blockingQueue = caravan::alpaka::detail::makeQueue<BlockingQueue>(device);
+    auto secondBlockingQueue = caravan::alpaka::detail::makeQueue<BlockingQueue>(device);
     scope
         .spawn(
             caravan::alpaka::sequence(

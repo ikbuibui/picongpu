@@ -271,7 +271,7 @@ TEST_CASE("blocking kernel diagnostics", "[lockstep]")
     using namespace pmacc;
 
     auto const device = manager::Device<ComputeDevice>::get().current();
-    ComputeDeviceQueue queue(device);
+    ComputeDeviceQueue queue = caravan::alpaka::detail::makeQueue<ComputeDeviceQueue>(device);
     std::ostringstream diagnostics;
     auto* const previousBuffer = std::cerr.rdbuf(diagnostics.rdbuf());
     auto const sourceLine = __LINE__ + 1u;

@@ -76,7 +76,7 @@ namespace
 TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async][memory]")
 {
     auto const deviceManager = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
-    pmacc::ComputeDeviceQueue queue(deviceManager);
+    pmacc::ComputeDeviceQueue queue = caravan::alpaka::detail::makeQueue<pmacc::ComputeDeviceQueue>(deviceManager);
     auto const one = pmacc::MemSpace<DIM1>::create(1);
     auto const extent = one.toAlpakaMemVec();
     auto const workExtent = pmacc::DataSpace<DIM1>::create(1).toAlpakaKernelVec();
@@ -122,7 +122,8 @@ TEST_CASE("PMacc explicitly composes and owns a local accelerator step", "[async
 TEST_CASE("PMacc size copies synchronize buffer size storage", "[async][memory]")
 {
     auto& device = pmacc::Environment<>::get().DeviceContext();
-    pmacc::ComputeDeviceQueue queue(pmacc::manager::Device<pmacc::ComputeDevice>::get().current());
+    pmacc::ComputeDeviceQueue queue = caravan::alpaka::detail::makeQueue<pmacc::ComputeDeviceQueue>(
+        pmacc::manager::Device<pmacc::ComputeDevice>::get().current());
     pmacc::DeviceBuffer<int, DIM1> buffer(pmacc::MemSpace<DIM1>{128u}, true);
     pmacc::HostBuffer<int, DIM1> output(pmacc::MemSpace<DIM1>{128u});
     buffer.setSizeHostSide(123u);

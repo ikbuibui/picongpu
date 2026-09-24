@@ -31,8 +31,8 @@ namespace caravan::alpaka
     inline constexpr GetDeviceContext getDeviceContext{};
 
     /** Default automatically growing device context for nonblocking alpaka queues. */
-    template<typename T_Acc>
-    using Context = QueuePool<::alpaka::Queue<T_Acc, ::alpaka::NonBlocking>>;
+    template<typename T_Device>
+    using Context = QueuePool<::alpaka::onHost::Queue<T_Device, ::alpaka::queueKind::NonBlocking>>;
 
     template<typename... T_Submits>
     class ManagedSubmitSender;

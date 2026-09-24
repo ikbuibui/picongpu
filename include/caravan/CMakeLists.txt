@@ -54,30 +54,35 @@ if(CARAVAN_BUILD_TESTING)
     add_test(NAME caravan-graph COMMAND caravan-graph-test)
 
     if(TARGET caravan::alpaka)
-        alpaka_add_executable(caravan-alpaka-test test/alpaka.cpp)
+        add_executable(caravan-alpaka-test test/alpaka.cpp)
         target_link_libraries(caravan-alpaka-test PRIVATE caravan::alpaka)
+        alpaka_finalize(caravan-alpaka-test)
         add_test(NAME caravan-alpaka COMMAND caravan-alpaka-test)
         set_tests_properties(caravan-alpaka PROPERTIES TIMEOUT 30)
 
-        alpaka_add_executable(caravan-alpaka-completion-test test/alpaka_completion.cpp)
+        add_executable(caravan-alpaka-completion-test test/alpaka_completion.cpp)
         target_link_libraries(caravan-alpaka-completion-test PRIVATE caravan::alpaka)
+        alpaka_finalize(caravan-alpaka-completion-test)
         add_test(NAME caravan-alpaka-completion COMMAND caravan-alpaka-completion-test)
         add_test(NAME caravan-alpaka-fence-failure COMMAND caravan-alpaka-completion-test --fatal-fence)
         set_tests_properties(caravan-alpaka-completion caravan-alpaka-fence-failure PROPERTIES TIMEOUT 30)
 
-        alpaka_add_executable(caravan-event-pool-test test/event_pool.cpp)
+        add_executable(caravan-event-pool-test test/event_pool.cpp)
         target_link_libraries(caravan-event-pool-test PRIVATE caravan::alpaka)
+        alpaka_finalize(caravan-event-pool-test)
         add_test(NAME caravan-event-pool COMMAND caravan-event-pool-test)
         set_tests_properties(caravan-event-pool PROPERTIES TIMEOUT 30)
 
-        alpaka_add_executable(caravan-shared-queue-pool-test test/shared_queue_pool.cpp)
+        add_executable(caravan-shared-queue-pool-test test/shared_queue_pool.cpp)
         target_link_libraries(caravan-shared-queue-pool-test PRIVATE caravan::alpaka)
+        alpaka_finalize(caravan-shared-queue-pool-test)
         add_test(NAME caravan-shared-queue-pool COMMAND caravan-shared-queue-pool-test)
         set_tests_properties(caravan-shared-queue-pool PROPERTIES TIMEOUT 30)
 
         if(TARGET caravan::mpi)
-            alpaka_add_executable(caravan-alpaka-mpi-test test/alpaka_mpi.cpp)
+            add_executable(caravan-alpaka-mpi-test test/alpaka_mpi.cpp)
             target_link_libraries(caravan-alpaka-mpi-test PRIVATE caravan::alpaka caravan::mpi)
+            alpaka_finalize(caravan-alpaka-mpi-test)
             add_test(
                 NAME caravan-alpaka-mpi
                 COMMAND
@@ -93,9 +98,10 @@ if(CARAVAN_BUILD_TESTING)
             message(FATAL_ERROR "CARAVAN_BUILD_STDEXEC_SPIKE requires Caravan alpaka and MPI")
         endif()
         find_path(CARAVAN_STDEXEC_INCLUDE_DIR NAMES stdexec/execution.hpp REQUIRED)
-        alpaka_add_executable(caravan-stdexec-spike test/stdexec.cpp)
+        add_executable(caravan-stdexec-spike test/stdexec.cpp)
         target_include_directories(caravan-stdexec-spike PRIVATE ${CARAVAN_STDEXEC_INCLUDE_DIR})
         target_link_libraries(caravan-stdexec-spike PRIVATE caravan::alpaka caravan::mpi)
+        alpaka_finalize(caravan-stdexec-spike)
         add_test(
             NAME caravan-stdexec-spike
             COMMAND

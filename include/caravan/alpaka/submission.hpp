@@ -268,8 +268,10 @@ namespace caravan::alpaka
      * sequence uses FIFO/events; whenAll preserves independent branches. Ordinary then/letValue
      * callbacks and explicit placement wrappers remain host-completion boundaries. Unbranched same-queue runs
      * share a fence. A shared progress thread polls all recorded fences before terminal completion and reclamation.
-     * Backend, submission, and CPU task failures terminate the process. Receivers run on an executor thread: use
-     * continuesOn before blocking callbacks.
+     * Backend and submission failures crossing Caravan's noexcept execution boundary terminate the process.
+     * Ordinary queue events establish completion, not task success. Asynchronous host callbacks must not let
+     * exceptions escape; native submissions are a trusted escape hatch and callers must enforce this contract.
+     * Receivers run on an executor thread: use continuesOn before blocking callbacks.
      */
     template<typename T_Queue, typename... T_Submits>
     class SubmitSender
@@ -390,7 +392,7 @@ namespace caravan::alpaka
     template<typename T_Queue, typename T_Submit>
     auto submit(T_Queue& queue, T_Submit submit)
     {
-        static_assert(::alpaka::isQueue<T_Queue>);
+        static_assert(detail::QueueHandle<T_Queue>);
         using Submit = std::decay_t<T_Submit>;
         return SubmitSender<T_Queue, Submit>{{&queue}, {std::move(submit)}};
     }

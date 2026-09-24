@@ -18,8 +18,12 @@
 
 int main()
 {
-    using Queue = alpaka::QueueCpuNonBlocking;
-    auto const device = alpaka::getDevByIdx(alpaka::PlatformCpu{}, 0u);
+    constexpr auto computeApi = alpaka::api::host;
+    constexpr auto computeDeviceKind = alpaka::deviceKind::cpu;
+    constexpr auto computeQueueKind = alpaka::queueKind::nonBlocking;
+    using Device = alpaka::onHost::Device<ALPAKA_TYPEOF(computeApi), ALPAKA_TYPEOF(computeDeviceKind)>;
+    using Queue = alpaka::onHost::Queue<Device, ALPAKA_TYPEOF(computeQueueKind)>;
+    auto const device = alpaka::onHost::makeDeviceSelector(computeApi, computeDeviceKind).makeDevice(0u);
     try
     {
         caravan::alpaka::SharedQueuePool<Queue> invalid{device, 0u};
@@ -136,14 +140,13 @@ int main()
         caravan::alpaka::SharedQueuePool<Queue> pool{device, 2u};
         auto submissions = pool.submissions();
         std::atomic<unsigned> step = 0u;
-        auto first = caravan::node<"first">(
-            submissions.submit([&](Queue& queue) { alpaka::enqueue(queue, [&] { ++step; }); }));
+        auto first
+            = caravan::node<"first">(submissions.submit([&](Queue& queue) { queue.enqueueHostFn([&] { ++step; }); }));
         auto second = caravan::node<"second">(
             submissions.submit(
                 [&](Queue& queue)
                 {
-                    alpaka::enqueue(
-                        queue,
+                    queue.enqueueHostFn(
                         [&]
                         {
                             assert(step == 1u);

@@ -11,17 +11,19 @@
 #include <utility>
 #include <vector>
 
+#include <caravan/alpaka/queue/traits.hpp>
+
 namespace caravan::alpaka::detail
 {
     /** Device-local event storage. Leases must outlive native use and the pool must outlive its leases. */
     template<typename T_Queue>
     class EventPool
     {
-        using Event = ::alpaka::Event<T_Queue>;
+        using Event = ::alpaka::onHost::Event<QueueDevice<T_Queue>>;
 
         struct Entry
         {
-            explicit Entry(::alpaka::Dev<T_Queue> const& device) : event(device)
+            explicit Entry(QueueDevice<T_Queue>& device) : event(device.makeEvent())
             {
             }
 
@@ -66,7 +68,7 @@ namespace caravan::alpaka::detail
             Entry* m_entry;
         };
 
-        explicit EventPool(::alpaka::Dev<T_Queue> device) : m_device(std::move(device))
+        explicit EventPool(QueueDevice<T_Queue> device) : m_device(std::move(device))
         {
         }
 
@@ -88,7 +90,7 @@ namespace caravan::alpaka::detail
         }
 
     private:
-        ::alpaka::Dev<T_Queue> m_device;
+        QueueDevice<T_Queue> m_device;
         std::mutex m_mutex;
         std::vector<std::unique_ptr<Entry>> m_entries;
         Entry* m_free = nullptr;

@@ -18,6 +18,15 @@
 
 namespace
 {
+
+    /** alpaka 1.x submitted host tasks through alpaka::enqueue(queue, task); alpaka 3 spells this
+     * queue.enqueueHostFn(task). */
+    template<typename T_Queue, typename T_Task>
+    void enqueueHostTask(T_Queue& queue, T_Task const& task)
+    {
+        queue.enqueueHostFn(task);
+    }
+
     struct Increment
     {
         template<typename T_Acc>
@@ -40,25 +49,29 @@ namespace
 int main()
 {
     assert(!caravan::alpaka::isCompletionCallback());
-    using Dim = alpaka::DimInt<1u>;
     using Idx = std::size_t;
-#if ALPAKA_ACC_GPU_CUDA_ENABLED
-    using Acc = alpaka::AccGpuCudaRt<Dim, Idx>;
-#elif ALPAKA_ACC_GPU_HIP_ENABLED
-    using Acc = alpaka::AccGpuHipRt<Dim, Idx>;
+#if ALPAKA_LANG_CUDA
+    constexpr auto computeApi = alpaka::api::cuda;
+    constexpr auto computeDeviceKind = alpaka::deviceKind::nvidiaGpu;
+#elif ALPAKA_LANG_HIP
+    constexpr auto computeApi = alpaka::api::hip;
+    constexpr auto computeDeviceKind = alpaka::deviceKind::amdGpu;
 #else
-    using Acc = alpaka::AccCpuSerial<Dim, Idx>;
+    constexpr auto computeApi = alpaka::api::host;
+    constexpr auto computeDeviceKind = alpaka::deviceKind::cpu;
 #endif
-    using Queue = alpaka::Queue<Acc, alpaka::NonBlocking>;
+    constexpr auto computeQueueKind = alpaka::queueKind::nonBlocking;
+    using Device = alpaka::onHost::Device<ALPAKA_TYPEOF(computeApi), ALPAKA_TYPEOF(computeDeviceKind)>;
+    using Queue = alpaka::onHost::Queue<Device, ALPAKA_TYPEOF(computeQueueKind)>;
 
-    auto const device = alpaka::getDevByIdx(alpaka::Platform<Acc>{}, 0u);
-    auto const host = alpaka::getDevByIdx(alpaka::PlatformCpu{}, 0u);
-    Queue queue{device};
-    Queue secondQueue{device};
-    auto const one = alpaka::Vec<Dim, Idx>{1u};
-    auto const workDiv = alpaka::WorkDivMembers<Dim, Idx>{one, one, one};
-    auto deviceValue = alpaka::allocBuf<int, Idx>(device, one);
-    auto hostValue = alpaka::allocBuf<int, Idx>(host, one);
+    auto const device = alpaka::onHost::makeDeviceSelector(computeApi, computeDeviceKind).makeDevice(0u);
+    auto const host = alpaka::onHost::makeDeviceSelector(alpaka::api::host, alpaka::deviceKind::cpu).makeDevice(0u);
+    auto queue = caravan::alpaka::detail::makeQueue<Queue>(device);
+    auto secondQueue = caravan::alpaka::detail::makeQueue<Queue>(device);
+    auto const one = alpaka::Vec{Idx{1u}};
+    auto const threadSpec = alpaka::onHost::ThreadSpec{one, one};
+    auto deviceValue = alpaka::onHost::alloc<int>(device, one);
+    auto hostValue = alpaka::onHost::alloc<int>(host, one);
     hostValue[0] = 41;
 
     bool submitted = false;
@@ -73,11 +86,11 @@ int main()
                   caravan::Retained{hostValue, retained},
                   one))
           | caravan::alpaka::sequence(
-              caravan::alpaka::kernel<Acc>(
+              caravan::alpaka::kernel(
                   queue,
-                  workDiv,
+                  threadSpec,
                   Increment{},
-                  caravan::retain(alpaka::getPtrNative(deviceValue), caravan::Retained{deviceValue, retained})))
+                  caravan::retain(alpaka::onHost::data(deviceValue), caravan::Retained{deviceValue, retained})))
           | caravan::alpaka::sequence(
               caravan::alpaka::copy(
                   queue,
@@ -102,12 +115,12 @@ int main()
     caravan::AsyncScope scope;
 
     // Managed operations remain bound to their device context across a host scheduler transfer.
-    caravan::alpaka::Context<Acc> context{device};
-    auto managedInput = alpaka::allocBuf<int, Idx>(host, one);
-    auto managedOutput = alpaka::allocBuf<int, Idx>(host, one);
-    auto managedOtherOutput = alpaka::allocBuf<int, Idx>(host, one);
-    auto managedValue = alpaka::allocBuf<int, Idx>(device, one);
-    auto managedOther = alpaka::allocBuf<int, Idx>(device, one);
+    caravan::alpaka::Context<Device> context{device};
+    auto managedInput = alpaka::onHost::alloc<int>(host, one);
+    auto managedOutput = alpaka::onHost::alloc<int>(host, one);
+    auto managedOtherOutput = alpaka::onHost::alloc<int>(host, one);
+    auto managedValue = alpaka::onHost::alloc<int>(device, one);
+    auto managedOther = alpaka::onHost::alloc<int>(device, one);
     managedInput[0] = 8;
     managedOutput[0] = 0;
     managedOtherOutput[0] = 0;
@@ -122,8 +135,8 @@ int main()
                     caravan::alpaka::fill(managedOther, 0u))
                     | caravan::alpaka::sequence(
                         caravan::whenAll(
-                            caravan::alpaka::kernel<Acc>(workDiv, Increment{}, alpaka::getPtrNative(managedValue)),
-                            caravan::alpaka::kernel<Acc>(workDiv, Increment{}, alpaka::getPtrNative(managedOther))))
+                            caravan::alpaka::kernel(threadSpec, Increment{}, alpaka::onHost::data(managedValue)),
+                            caravan::alpaka::kernel(threadSpec, Increment{}, alpaka::onHost::data(managedOther))))
                     | caravan::alpaka::sequence(caravan::alpaka::copy(managedOutput, managedValue, one))
                     | caravan::continuesOn(loop.scheduler())
                     | caravan::letValue(
@@ -164,24 +177,24 @@ int main()
     // A non-owning view and a raw kernel argument survive their original allocation handle's scope.
     auto localStep = [&]
     {
-        auto allocation = alpaka::allocBuf<int, Idx>(device, one);
-        auto view = caravan::retain(alpaka::createView(device, alpaka::getPtrNative(allocation), one), allocation);
+        auto allocation = alpaka::onHost::alloc<int>(device, one);
+        auto view = caravan::retain(alpaka::makeView(device, alpaka::onHost::data(allocation), one), allocation);
         return caravan::alpaka::fill(queue, view, 0u)
                | caravan::alpaka::sequence(
-                   caravan::alpaka::kernel<Acc>(
+                   caravan::alpaka::kernel(
                        queue,
-                       workDiv,
+                       threadSpec,
                        Increment{},
-                       caravan::retain(alpaka::getPtrNative(allocation), view)))
+                       caravan::retain(alpaka::onHost::data(allocation), view)))
                | caravan::alpaka::sequence(caravan::alpaka::copy(queue, hostValue, view, one));
     }();
     caravan::syncWait(std::move(localStep));
     assert(hostValue[0] == 1);
 
     // A queue change is lowered to an alpaka event/native wait, not host completion between these copies.
-    auto crossInput = alpaka::allocBuf<int, Idx>(host, one);
-    auto crossOutput = alpaka::allocBuf<int, Idx>(host, one);
-    auto crossDevice = alpaka::allocBuf<int, Idx>(device, one);
+    auto crossInput = alpaka::onHost::alloc<int>(host, one);
+    auto crossOutput = alpaka::onHost::alloc<int>(host, one);
+    auto crossDevice = alpaka::onHost::alloc<int>(device, one);
     crossInput[0] = 73;
     crossOutput[0] = 0;
     scope
@@ -194,13 +207,13 @@ int main()
     // Explicit graph edges lower to native queue ordering without adding the false A -> D dependency.
     std::atomic<unsigned> graphA = 0u, graphB = 0u, graphC = 0u, graphD = 0u;
     auto graphNodeA = caravan::node<"a">(
-        caravan::alpaka::submit(queue, [&](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [&] { ++graphA; }); })
+        caravan::alpaka::submit(queue, [&](Queue& nativeQueue) { enqueueHostTask(nativeQueue, [&] { ++graphA; }); })
         | caravan::alpaka::sequence(
             caravan::alpaka::submit(
                 queue,
                 [&](Queue& nativeQueue)
                 {
-                    alpaka::enqueue(
+                    enqueueHostTask(
                         nativeQueue,
                         [&]
                         {
@@ -210,7 +223,7 @@ int main()
                 })));
     auto graphNodeB = caravan::node<"b">(caravan::alpaka::submit(
         secondQueue,
-        [&](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [&] { ++graphB; }); }));
+        [&](Queue& nativeQueue) { enqueueHostTask(nativeQueue, [&] { ++graphB; }); }));
     // Exercise graph-node detection in CUDA/HIP translation units as well as host builds.
     static_assert(caravan::detail::isGraphNode<decltype(graphNodeA)>);
     static_assert(caravan::detail::GraphNodeType<decltype(graphNodeA) const&>);
@@ -220,7 +233,7 @@ int main()
             queue,
             [&](Queue& nativeQueue)
             {
-                alpaka::enqueue(
+                enqueueHostTask(
                     nativeQueue,
                     [&]
                     {
@@ -233,7 +246,7 @@ int main()
                     queue,
                     [&](Queue& nativeQueue)
                     {
-                        alpaka::enqueue(
+                        enqueueHostTask(
                             nativeQueue,
                             [&]
                             {
@@ -247,7 +260,7 @@ int main()
             secondQueue,
             [&](Queue& nativeQueue)
             {
-                alpaka::enqueue(
+                enqueueHostTask(
                     nativeQueue,
                     [&]
                     {
@@ -264,7 +277,7 @@ int main()
     bool mixedHostRan = false;
     auto mixedNative = caravan::node<"native">(caravan::alpaka::submit(
         queue,
-        [&](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [&] { mixedNativeRan = true; }); }));
+        [&](Queue& nativeQueue) { enqueueHostTask(nativeQueue, [&] { mixedNativeRan = true; }); }));
     auto mixedHost = caravan::node<"host">(
         caravan::InlineScheduler{}.schedule()
             | caravan::then(
@@ -280,11 +293,15 @@ int main()
     // whenAll and sequence remain native across independent queues and join before the final copy.
     caravan::syncWait(
         caravan::whenAll(
-            caravan::alpaka::kernel<Acc>(queue, workDiv, Increment{}, alpaka::getPtrNative(deviceValue)),
-            caravan::alpaka::kernel<Acc>(secondQueue, workDiv, Increment{}, alpaka::getPtrNative(crossDevice)))
+            caravan::alpaka::kernel(queue, threadSpec, Increment{}, alpaka::onHost::data(deviceValue)),
+            caravan::alpaka::kernel(secondQueue, threadSpec, Increment{}, alpaka::onHost::data(crossDevice)))
         | caravan::alpaka::sequence(
-            caravan::alpaka::kernel<
-                Acc>(queue, workDiv, Add{}, alpaka::getPtrNative(deviceValue), alpaka::getPtrNative(crossDevice)))
+            caravan::alpaka::kernel(
+                queue,
+                threadSpec,
+                Add{},
+                alpaka::onHost::data(deviceValue),
+                alpaka::onHost::data(crossDevice)))
         | caravan::alpaka::sequence(caravan::alpaka::copy(queue, hostValue, deviceValue, one)));
     assert(hostValue[0] == 117); // (42 + 1) + (73 + 1)
 
@@ -306,14 +323,14 @@ int main()
                 scope.spawn(
                     caravan::alpaka::submit(
                         queue,
-                        [&](Queue& nativeQueue) { alpaka::enqueue(nativeQueue, [&] { ++callbacks; }); }));
+                        [&](Queue& nativeQueue) { enqueueHostTask(nativeQueue, [&] { ++callbacks; }); }));
             });
     for(auto& thread : submitters)
         thread.join();
 
     // No external owner: retained allocations are reclaimed only after terminal synchronization, off backend
     // callbacks.
-    scope.spawn(caravan::alpaka::fill(queue, alpaka::allocBuf<int, Idx>(device, one), 0u)).wait();
+    scope.spawn(caravan::alpaka::fill(queue, alpaka::onHost::alloc<int>(device, one), 0u)).wait();
 
     scope.join().wait();
     assert(callbacks == 8u);

@@ -32,7 +32,7 @@ namespace caravan::alpaka
     template<typename T_Queue>
     class SharedQueuePool
     {
-        static_assert(::alpaka::isQueue<T_Queue>);
+        static_assert(detail::QueueHandle<T_Queue>);
 
     public:
         using Queue = T_Queue;
@@ -106,7 +106,9 @@ namespace caravan::alpaka
             SharedQueuePool* m_pool;
         };
 
-        SharedQueuePool(::alpaka::Dev<T_Queue> const& device, std::size_t queueCount) : m_events(device)
+        SharedQueuePool(detail::QueueDevice<T_Queue> device, std::size_t queueCount)
+            : m_device(std::move(device))
+            , m_events(m_device)
         {
             if(queueCount == 0u)
                 throw std::invalid_argument("SharedQueuePool requires at least one queue");
@@ -114,7 +116,7 @@ namespace caravan::alpaka
             m_queueMutexes.reserve(queueCount);
             for(std::size_t i = 0u; i < queueCount; ++i)
             {
-                m_queues.emplace_back(device);
+                m_queues.emplace_back(detail::makeQueue<T_Queue>(m_device));
                 m_queueMutexes.push_back(std::make_unique<std::mutex>());
             }
         }
@@ -135,7 +137,7 @@ namespace caravan::alpaka
                 throw std::logic_error("SharedQueuePool cannot grow after its first submission");
             while(count-- != 0u)
             {
-                m_queues.emplace_back(::alpaka::getDev(m_queues.front()));
+                m_queues.emplace_back(detail::makeQueue<T_Queue>(m_device));
                 m_queueMutexes.push_back(std::make_unique<std::mutex>());
             }
         }
@@ -159,6 +161,7 @@ namespace caravan::alpaka
             return Binding{*this, base};
         }
 
+        detail::QueueDevice<T_Queue> m_device;
         detail::EventPool<T_Queue> m_events;
         std::vector<T_Queue> m_queues;
         // One submission lock per physical queue instead of one pool-wide lock. See Binding::start.

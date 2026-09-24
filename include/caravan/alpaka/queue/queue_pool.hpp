@@ -58,11 +58,11 @@ namespace caravan::alpaka
     template<typename T_Queue>
     class QueuePool
     {
-        static_assert(::alpaka::isQueue<T_Queue>);
+        static_assert(detail::QueueHandle<T_Queue>);
 
         struct Entry
         {
-            explicit Entry(::alpaka::Dev<T_Queue> const& device) : queue(device)
+            explicit Entry(detail::QueueDevice<T_Queue>& device) : queue(detail::makeQueue<T_Queue>(device))
             {
             }
 
@@ -143,7 +143,7 @@ namespace caravan::alpaka
          * Pre-creating queues avoids native queue construction during the first connections. The pool still grows
          * on demand when concurrent connected graphs require more queues than are currently available.
          */
-        explicit QueuePool(::alpaka::Dev<T_Queue> device, std::size_t initialQueueCount = 0u)
+        explicit QueuePool(detail::QueueDevice<T_Queue> device, std::size_t initialQueueCount = 0u)
             : m_device(std::move(device))
             , m_events(m_device)
         {
@@ -191,7 +191,7 @@ namespace caravan::alpaka
                 entry->leased = false;
         }
 
-        ::alpaka::Dev<T_Queue> m_device;
+        detail::QueueDevice<T_Queue> m_device;
         detail::EventPool<T_Queue> m_events;
         std::mutex m_mutex;
         std::vector<std::unique_ptr<Entry>> m_entries;

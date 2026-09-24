@@ -17,19 +17,26 @@
 
 namespace
 {
-#if ALPAKA_ACC_GPU_CUDA_ENABLED
-    using Acc = alpaka::AccGpuCudaRt<alpaka::DimInt<1u>, std::size_t>;
-    using Queue = alpaka::Queue<Acc, alpaka::NonBlocking>;
-#elif ALPAKA_ACC_GPU_HIP_ENABLED
-    using Acc = alpaka::AccGpuHipRt<alpaka::DimInt<1u>, std::size_t>;
-    using Queue = alpaka::Queue<Acc, alpaka::NonBlocking>;
+#if ALPAKA_LANG_CUDA
+    inline constexpr auto computeApi = alpaka::api::cuda;
+    inline constexpr auto computeDeviceKind = alpaka::deviceKind::nvidiaGpu;
+#elif ALPAKA_LANG_HIP
+    inline constexpr auto computeApi = alpaka::api::hip;
+    inline constexpr auto computeDeviceKind = alpaka::deviceKind::amdGpu;
 #else
-    using Acc = alpaka::AccCpuSerial<alpaka::DimInt<1u>, std::size_t>;
-    // Exercise actual alpaka events, not Caravan's nonblocking CPU error-barrier specialization.
-    using Queue = alpaka::QueueCpuBlocking;
+    inline constexpr auto computeApi = alpaka::api::host;
+    inline constexpr auto computeDeviceKind = alpaka::deviceKind::cpu;
 #endif
+    using Device = alpaka::onHost::Device<ALPAKA_TYPEOF(computeApi), ALPAKA_TYPEOF(computeDeviceKind)>;
+#if ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP
+    inline constexpr auto computeQueueKind = alpaka::queueKind::nonBlocking;
+#else
+    // Exercise actual alpaka events on the CPU backend.
+    inline constexpr auto computeQueueKind = alpaka::queueKind::blocking;
+#endif
+    using Queue = alpaka::onHost::Queue<Device, ALPAKA_TYPEOF(computeQueueKind)>;
     using Pool = caravan::alpaka::detail::EventPool<Queue>;
-    using Event = alpaka::Event<Queue>;
+    using Event = alpaka::onHost::Event<Device>;
 
     struct Receiver
     {
@@ -56,7 +63,7 @@ namespace
 
 int main()
 {
-    auto const device = alpaka::getDevByIdx(alpaka::Platform<Acc>{}, 0u);
+    auto const device = alpaka::onHost::makeDeviceSelector(computeApi, computeDeviceKind).makeDevice(0u);
     Pool pool{device}, otherPool{device};
     auto original = [&] { return Event{pool.acquire().event()}; }();
     {
@@ -67,7 +74,7 @@ int main()
         assert(moved.event() != second.event());
         auto other = otherPool.acquire();
         assert(other.event() != moved.event());
-        assert(alpaka::getDev(other.event()) == device);
+        assert(other.event().getDevice() == device);
     }
     assert(pool.acquire().event() == original);
 
@@ -91,14 +98,14 @@ int main()
                 assert(*events[i] != *events[j]);
     }
 
-    Queue queue{device};
+    auto queue = caravan::alpaka::detail::makeQueue<Queue>(device);
     // Fresh bookkeeping on every reuse, including destruction without start.
     for(unsigned iteration = 0u; iteration < 8u; ++iteration)
     {
         auto expected = Event{pool.acquire().event()};
         std::promise<void> result;
         auto completed = result.get_future();
-        auto submit = [](Queue& q) { alpaka::enqueue(q, [] {}); };
+        auto submit = [](Queue& q) { q.enqueueHostFn([] {}); };
         auto connect = [&]
         {
             return caravan::alpaka::detail::SubmitOperation{
@@ -130,17 +137,16 @@ int main()
         }();
         // Fences are acquired in reverse stage order and returned in stage order.
         auto expected = events[0];
-        Queue otherQueue{device};
+        auto otherQueue = caravan::alpaka::detail::makeQueue<Queue>(device);
         std::promise<void> release, entered;
         auto gate = release.get_future().share();
         auto running = entered.get_future();
         std::promise<void> result;
         auto completed = result.get_future();
-        auto readyBranch = [](Queue& q) { alpaka::enqueue(q, [] {}); };
+        auto readyBranch = [](Queue& q) { q.enqueueHostFn([] {}); };
         auto pendingBranch = [&](Queue& q)
         {
-            alpaka::enqueue(
-                q,
+            q.enqueueHostFn(
                 [&]
                 {
                     entered.set_value();
@@ -155,7 +161,7 @@ int main()
             &pendingPool};
         operation.start();
         running.get();
-        alpaka::wait(queue);
+        alpaka::onHost::wait(queue);
         assert(completed.wait_for(std::chrono::milliseconds{10}) == std::future_status::timeout);
         {
             // Both original events are leased: this must allocate a third distinct event.

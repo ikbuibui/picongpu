@@ -9,7 +9,6 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
-#include <future>
 #include <mutex>
 #include <optional>
 #include <string_view>
@@ -17,6 +16,7 @@
 #include <utility>
 
 #include <caravan/alpaka/event_pool.hpp>
+#include <caravan/alpaka/queue/traits.hpp>
 #include <caravan/core/eager.hpp>
 
 namespace caravan::alpaka::detail
@@ -28,7 +28,7 @@ namespace caravan::alpaka::detail
     public:
         explicit CompletionFence(T_Queue const& queue, EventPool<T_Queue>* pool = nullptr)
             : m_lease(pool ? std::make_optional(pool->acquire()) : std::nullopt)
-            , m_event(m_lease ? m_lease->event() : ::alpaka::Event<T_Queue>{::alpaka::getDev(queue)})
+            , m_event(m_lease ? m_lease->event() : queue.getDevice().makeEvent())
         {
         }
 
@@ -36,68 +36,28 @@ namespace caravan::alpaka::detail
         {
             if(!m_recorded)
             {
-                ::alpaka::enqueue(queue, m_event);
+                queue.enqueue(m_event);
                 m_recorded = true;
             }
         }
 
         void waitOn(T_Queue& queue)
         {
-            ::alpaka::wait(queue, m_event);
+            queue.waitFor(m_event);
         }
 
         bool poll() noexcept
         {
             if(!m_recorded || m_complete)
                 return true;
-            m_complete = ::alpaka::isComplete(m_event);
+            m_complete = m_event.isComplete();
             return m_complete;
         }
 
     private:
         std::optional<typename EventPool<T_Queue>::Lease> m_lease;
-        ::alpaka::Event<T_Queue> m_event;
+        ::alpaka::onHost::Event<QueueDevice<T_Queue>> m_event;
         bool m_recorded = false;
-        bool m_complete = false;
-    };
-
-    /** CPU barriers snapshot preceding task errors and signal only after those tasks have been destroyed. */
-    template<typename T_Dev>
-    class CompletionFence<::alpaka::QueueGenericThreadsNonBlocking<T_Dev>>
-    {
-        using Queue = ::alpaka::QueueGenericThreadsNonBlocking<T_Dev>;
-
-    public:
-        explicit CompletionFence(Queue const&, EventPool<Queue>* = nullptr)
-        {
-        }
-
-        void record(Queue& queue)
-        {
-            if(!m_future.valid())
-                m_future = queue.m_spQueueImpl->m_workerThread.submitErrorBarrier().share();
-        }
-
-        void waitOn(Queue& queue)
-        {
-            // Match alpaka's CPU queue-event wait without consuming or losing the fence's error snapshot.
-            queue.m_spQueueImpl->m_workerThread.submit([future = m_future] { future.wait(); });
-        }
-
-        bool poll() noexcept
-        {
-            if(!m_future.valid() || m_complete)
-                return true;
-            if(m_future.wait_for(std::chrono::seconds{0}) != std::future_status::ready)
-                return false;
-            m_complete = true;
-            // get() terminates through this noexcept boundary if a CPU task failed.
-            m_future.get();
-            return true;
-        }
-
-    private:
-        std::shared_future<void> m_future;
         bool m_complete = false;
     };
 
