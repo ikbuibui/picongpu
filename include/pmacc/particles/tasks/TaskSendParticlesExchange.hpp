@@ -40,7 +40,7 @@ namespace pmacc
             , lastSendEvent(EventTask())
             , initDependency(eventSystem::getTransactionEvent())
             , exchange(exchange)
-            , maxSize(parBase.getParticlesBuffer().getSendExchangeStack(exchange).getMaxParticlesCount())
+            , maxSize(parBase.getParticlesBuffer().getSendExchangeStack(exchange).maxPayloadCount())
             , lastSize(0)
             , retryCounter(0)
         {
@@ -69,8 +69,11 @@ namespace pmacc
                     state = InitSend;
                     // bash is finished
                     eventSystem::startTransaction();
-                    lastSize
-                        = parBase.getParticlesBuffer().getSendExchangeStack(exchange).getDeviceParticlesCurrentSize();
+                    /* Publish the counters first: they are the pack result and they stamp the
+                     * transport lengths the send tasks read.
+                     */
+                    parBase.getParticlesBuffer().getSendExchangeStack(exchange).publish();
+                    lastSize = parBase.getParticlesBuffer().getSendExchangeStack(exchange).payloadCount();
                     lastSendEvent = parBase.getParticlesBuffer().asyncSendParticles(
                         eventSystem::getTransactionEvent(),
                         exchange);

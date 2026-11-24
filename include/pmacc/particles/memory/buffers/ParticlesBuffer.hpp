@@ -22,6 +22,7 @@
 #pragma once
 
 #include "pmacc/dimensions/GridLayout.hpp"
+#include "pmacc/eventSystem/eventSystem.hpp"
 #include "pmacc/lockstep/BlockCfg.hpp"
 #include "pmacc/math/Vector.hpp"
 #include "pmacc/memory/buffers/GridBuffer.hpp"
@@ -39,8 +40,13 @@
 #include "pmacc/particles/memory/dataTypes/SuperCell.hpp"
 #include "pmacc/particles/memory/frames/Frame.hpp"
 #include "pmacc/traits/GetUniqueTypeId.hpp"
+#include "pmacc/traits/NumberOfExchanges.hpp"
 
+#include <array>
+#include <limits>
 #include <memory>
+#include <stdexcept>
+#include <utility>
 
 namespace pmacc
 {
@@ -155,6 +161,15 @@ namespace pmacc
             reset();
         }
 
+        ~ParticlesBuffer()
+        {
+            /* An exchange that is still in flight holds pointers into the counter blocks and into
+             * the exchange buffers. Drain the device queue before any member storage is released;
+             * the buffers alone would do this, but only after the counters were already freed.
+             */
+            eventSystem::startOperation(ITask::TASK_HOST);
+        }
+
         /**
          * Resets all internal buffers.
          */
@@ -172,17 +187,32 @@ namespace pmacc
          */
         void addExchange(Mask receive, size_t usedMemory, uint32_t communicationTag)
         {
-            size_t numFrameTypeBorders = usedMemory / SizeOfOneBorderElement;
+            size_t const numFrameTypeBorders = usedMemory / SizeOfOneBorderElement;
+            /* The frame count sizes the exchange buffers and is written by the atomic counters;
+             * both use narrower index types than the size_t byte budget.
+             */
+            using ExtentType = typename DataSpace<DIM1>::BaseType::type;
+            if(!std::in_range<ExtentType>(numFrameTypeBorders) || !std::in_range<vint_t>(numFrameTypeBorders))
+                throw std::runtime_error(
+                    "particle exchange buffer exceeds the range of the exchange extent and counter types");
+            DataSpace<DIM1> const frameTypeBorders{static_cast<ExtentType>(numFrameTypeBorders)};
 
-            framesExchanges
-                ->addExchangeBuffer(receive, DataSpace<DIM1>(numFrameTypeBorders), communicationTag, true, false);
+            framesExchanges->addExchangeBuffer(receive, frameTypeBorders, communicationTag);
 
-            exchangeMemoryIndexer->addExchangeBuffer(
-                receive,
-                DataSpace<DIM1>(numFrameTypeBorders),
-                exchangeMemoryIndexerTag,
-                true,
-                false);
+            exchangeMemoryIndexer->addExchangeBuffer(receive, frameTypeBorders, exchangeMemoryIndexerTag);
+
+            /* Only send directions push data from a kernel, so only they need device counters.
+             * addExchangeBuffer() skips empty buffers, hence the zero check.
+             */
+            if(numFrameTypeBorders != 0u)
+            {
+                Mask const send = receive.getMirroredMask();
+                for(uint32_t ex = 1u; ex < traits::NumberOfExchanges<DIM>::value; ++ex)
+                {
+                    if(send.isSet(ex))
+                        sendCounters[ex] = std::make_unique<ExchangeCounterBlock>();
+                }
+            }
         }
 
         /**
@@ -230,16 +260,21 @@ namespace pmacc
             return framesExchanges->hasReceiveExchange(ex);
         }
 
-        StackExchangeBuffer<FrameTypeBorder, BorderFrameIndex, DIM - 1> getSendExchangeStack(uint32_t ex)
+        /** Borrow the send view of one direction; the counter block is owned by this buffer. */
+        SendExchangeStack<FrameTypeBorder, BorderFrameIndex, DIM - 1> getSendExchangeStack(uint32_t ex)
         {
-            return StackExchangeBuffer<FrameTypeBorder, BorderFrameIndex, DIM - 1>(
+            PMACC_ASSERT(ex < traits::NumberOfExchanges<DIM>::value);
+            PMACC_ASSERT_MSG(sendCounters[ex] != nullptr, "no send exchange counters for this direction");
+            return SendExchangeStack<FrameTypeBorder, BorderFrameIndex, DIM - 1>(
                 framesExchanges->getSendExchange(ex),
-                exchangeMemoryIndexer->getSendExchange(ex));
+                exchangeMemoryIndexer->getSendExchange(ex),
+                *sendCounters[ex]);
         }
 
-        StackExchangeBuffer<FrameTypeBorder, BorderFrameIndex, DIM - 1> getReceiveExchangeStack(uint32_t ex)
+        /** Borrow the receive view of one direction. */
+        ReceiveExchangeStack<FrameTypeBorder, BorderFrameIndex, DIM - 1> getReceiveExchangeStack(uint32_t ex)
         {
-            return StackExchangeBuffer<FrameTypeBorder, BorderFrameIndex, DIM - 1>(
+            return ReceiveExchangeStack<FrameTypeBorder, BorderFrameIndex, DIM - 1>(
                 framesExchanges->getReceiveExchange(ex),
                 exchangeMemoryIndexer->getReceiveExchange(ex));
         }
@@ -317,6 +352,13 @@ namespace pmacc
         std::unique_ptr<GridBuffer<SuperCellType, DIM>> superCells;
         /*GridBuffer for hold borderFrames, we need a own buffer to create first exchanges without core memory*/
         std::unique_ptr<GridBuffer<FrameType, DIM1, FrameTypeBorder>> framesExchanges;
+
+        /* device counters of the send directions, indexed by exchange type
+         *
+         * An in-flight exchange may still write them, so they must not outlive the drain in the
+         * destructor above.
+         */
+        std::array<std::unique_ptr<ExchangeCounterBlock>, traits::NumberOfExchanges<DIM>::value> sendCounters;
 
         DataSpace<DIM> superCellSize;
         DataSpace<DIM> gridSize;

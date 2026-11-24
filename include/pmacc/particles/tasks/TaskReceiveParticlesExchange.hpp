@@ -39,7 +39,7 @@ namespace pmacc
             , state(Constructor)
             , initDependency(eventSystem::getTransactionEvent())
             , exchange(exchange)
-            , maxSize(parBase.getParticlesBuffer().getReceiveExchangeStack(exchange).getMaxParticlesCount())
+            , maxSize(parBase.getParticlesBuffer().getReceiveExchangeStack(exchange).maxPayloadCount())
             , lastSize(0)
         {
         }
@@ -65,8 +65,7 @@ namespace pmacc
                     state = InitInsert;
                     // bash is finished
                     eventSystem::startTransaction();
-                    lastSize
-                        = parBase.getParticlesBuffer().getReceiveExchangeStack(exchange).getHostParticlesCurrentSize();
+                    lastSize = parBase.getParticlesBuffer().getReceiveExchangeStack(exchange).payloadCount();
                     parBase.insertParticles(exchange);
                     tmpEvent = eventSystem::endTransaction();
                     initDependency = tmpEvent;

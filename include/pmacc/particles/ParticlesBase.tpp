@@ -64,7 +64,8 @@ namespace pmacc
         {
             ExchangeMapping<GUARD, MappingDesc> mapper(this->cellDescription, exchangeType);
 
-            particlesBuffer->getSendExchangeStack(exchangeType).setSize(0);
+            /* The counters, not a buffer size slot, carry the pack result. */
+            particlesBuffer->getSendExchangeStack(exchangeType).reset();
 
             PMACC_LOCKSTEP_KERNEL(KernelCopyGuardToExchange{})
                 .config(mapper.getGridDim(), *particlesBuffer)(
@@ -79,11 +80,10 @@ namespace pmacc
     {
         if(particlesBuffer->hasReceiveExchange(exchangeType))
         {
-            size_t numParticles = 0u;
-            if(Environment<>::get().isMpiDirectEnabled())
-                numParticles = particlesBuffer->getReceiveExchangeStack(exchangeType).getDeviceCurrentSize();
-            else
-                numParticles = particlesBuffer->getReceiveExchangeStack(exchangeType).getHostCurrentSize();
+            /* The insertion kernel is launched with one block per exchange-index entry, so it
+             * needs the index-entry count, not the particle payload count.
+             */
+            size_t const numParticles = particlesBuffer->getReceiveExchangeStack(exchangeType).indexCount();
 
             if(numParticles != 0u)
             {

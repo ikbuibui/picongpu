@@ -25,13 +25,13 @@
 #include "pmacc/eventSystem/queues/QueueController.hpp"
 #include "pmacc/eventSystem/tasks/Factory.hpp"
 #include "pmacc/eventSystem/tasks/TaskCopy.hpp"
-#include "pmacc/eventSystem/tasks/TaskGetCurrentSizeFromDevice.hpp"
 #include "pmacc/eventSystem/tasks/TaskKernel.hpp"
+#include "pmacc/eventSystem/tasks/TaskPublishExchangeCounters.hpp"
 #include "pmacc/eventSystem/tasks/TaskReceive.hpp"
 #include "pmacc/eventSystem/tasks/TaskReceiveMPI.hpp"
+#include "pmacc/eventSystem/tasks/TaskResetExchangeCounters.hpp"
 #include "pmacc/eventSystem/tasks/TaskSend.hpp"
 #include "pmacc/eventSystem/tasks/TaskSendMPI.hpp"
-#include "pmacc/eventSystem/tasks/TaskSetCurrentSizeOnDevice.hpp"
 #include "pmacc/eventSystem/tasks/TaskSetValue.hpp"
 #include "pmacc/eventSystem/tasks/TaskSignal.hpp"
 #include "pmacc/memory/buffers/DeviceBuffer.hpp"
@@ -124,33 +124,27 @@ namespace pmacc
     }
 
     /**
-     * Creates a new TaskSetCurrentSizeOnDevice.
-     * @param dst destination DeviceBuffer to set current size on
-     * @param size size to be set on DeviceBuffer
+     * Creates a new TaskResetExchangeCounters.
+     * @param counters exchange counter group to zero on the device
      * @param registeringTask optional pointer to an ITask which should be registered at the new task as an observer
      */
-    template<class TYPE, unsigned DIM>
-    inline EventTask Factory::createTaskSetCurrentSizeOnDevice(
-        DeviceBuffer<TYPE, DIM>& dst,
-        size_t size,
-        ITask* registeringTask)
+    template<typename T_Counters>
+    inline EventTask Factory::createTaskResetExchangeCounters(T_Counters& counters, ITask* registeringTask)
     {
-        auto* task = new TaskSetCurrentSizeOnDevice<DeviceBuffer<TYPE, DIM>>(dst, size);
+        auto* task = new TaskResetExchangeCounters<T_Counters>(counters);
 
         return startTask(*task, registeringTask);
     }
 
     /**
-     * Creates a new TaskGetCurrentSizeFromDevic.
-     * @param buffer DeviceBuffer to get current size from
+     * Creates a new TaskPublishExchangeCounters.
+     * @param counters exchange counter group to copy from the device to the host
      * @param registeringTask optional pointer to an ITask which should be registered at the new task as an observer
      */
-    template<class TYPE, unsigned DIM>
-    inline EventTask Factory::createTaskGetCurrentSizeFromDevice(
-        DeviceBuffer<TYPE, DIM>& buffer,
-        ITask* registeringTask)
+    template<typename T_Counters>
+    inline EventTask Factory::createTaskPublishExchangeCounters(T_Counters& counters, ITask* registeringTask)
     {
-        auto* task = new TaskGetCurrentSizeFromDevice<DeviceBuffer<TYPE, DIM>>(buffer);
+        auto* task = new TaskPublishExchangeCounters<T_Counters>(counters);
 
         return startTask(*task, registeringTask);
     }

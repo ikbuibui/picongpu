@@ -23,7 +23,6 @@
 #pragma once
 
 #include "pmacc/Environment.hpp"
-#include "pmacc/eventSystem/Manager.hpp"
 #include "pmacc/eventSystem/events/EventDataReceive.hpp"
 #include "pmacc/eventSystem/tasks/MPITask.hpp"
 
@@ -91,12 +90,12 @@ namespace pmacc
                 {
                     if(Environment<>::get().isMpiDirectEnabled())
                     {
-                        exchange->getDeviceBuffer().setSize(newBufferSize);
-                        /* We can not be notified from setSize() therefore
-                         * we need to wait that the current event is finished.
+                        /* `setSize()` is host-only bookkeeping which already waits for the
+                         * current transaction, so the received length is applied immediately
+                         * and there is nothing left to wait for.
                          */
-                        setSizeEvent = eventSystem::getTransactionEvent();
-                        state = WaitForSetSize;
+                        exchange->getDeviceBuffer().setSize(newBufferSize);
+                        state = Finish;
                     }
                     else
                     {
@@ -109,14 +108,6 @@ namespace pmacc
                 }
 
                 eventSystem::endTransaction();
-                break;
-            case WaitForSetSize:
-                // this code is only passed if gpu direct is enabled
-                if(nullptr == Manager::getInstance().getITaskIfNotFinished(setSizeEvent.getTaskId()))
-                {
-                    state = Finish;
-                    return true;
-                }
                 break;
             case WaitForFinish:
                 break;
@@ -169,7 +160,6 @@ namespace pmacc
             Constructor,
             WaitForReceived,
             RunCopy,
-            WaitForSetSize,
             WaitForFinish,
             Finish
         };
@@ -177,7 +167,6 @@ namespace pmacc
         Exchange<TYPE, DIM>* exchange;
         state_t state;
         size_t newBufferSize;
-        EventTask setSizeEvent;
     };
 
 } // namespace pmacc

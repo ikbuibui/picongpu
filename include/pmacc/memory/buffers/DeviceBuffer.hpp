@@ -52,21 +52,11 @@ namespace pmacc
     {
         using BufferType = ::alpaka::Buf<ComputeDevice, T_Type, AlpakaDim<DIM1>, MemIdxType>;
         using ViewType = alpaka::ViewPlainPtr<ComputeDevice, T_Type, AlpakaDim<T_dim>, MemIdxType>;
-        using CurrentSizeBufferDevice = ::alpaka::Buf<ComputeDevice, size_t, AlpakaDim<DIM1>, MemIdxType>;
-
-        void createSizeOnDeviceBuffers()
-        {
-            currentSizeBufferDevice.emplace(
-                alpaka::allocBuf<size_t, MemIdxType>(
-                    manager::Device<ComputeDevice>::get().current(),
-                    MemSpace<DIM1>(1).toAlpakaMemVec()));
-        }
 
     public:
         using DataBoxType = typename Buffer<T_Type, T_dim>::DataBoxType;
         std::optional<BufferType> devBuffer;
         std::optional<ViewType> view;
-        std::optional<CurrentSizeBufferDevice> currentSizeBufferDevice;
 
         using BufferType1D = ::alpaka::ViewPlainPtr<ComputeDevice, T_Type, AlpakaDim<DIM1>, MemIdxType>;
 
@@ -80,9 +70,16 @@ namespace pmacc
                 MemSpace<DIM1>(numElements).toAlpakaMemVec());
         }
 
+        /** 1D view onto the first `numElements` elements of this buffer
+         *
+         * @param numElements number of elements the view spans; it may cover the whole
+         *                    valid range but no more than the current (logical) size
+         */
         BufferType1D as1DBufferNElem(size_t const numElements)
         {
-            PMACC_ASSERT(numElements < this->size());
+            PMACC_ASSERT_MSG(
+                numElements <= this->size(),
+                "the requested view is larger than the current size of the buffer");
             eventSystem::startOperation(ITask::TASK_DEVICE);
             return BufferType1D(
                 alpaka::getPtrNative(*view),
@@ -98,12 +95,14 @@ namespace pmacc
 
         /** allocate data accessible from the device
          *
-         * @param size extent for each dimension (in elements)
-         * @param sizeOnDevice memory with the current size of the grid is stored on device
+         * The logical element count is host-only state (@see Buffer::setSize); the buffer does not
+         * keep a device-side copy of it. Counts that device kernels produce for a transfer are kept
+         * in an ExchangeCounters group instead, e.g. the particle exchange pack counters owned by
+         * ParticlesBuffer, and are published to the host before they are used as a size.
          *
-         * @attention offset + size must be less or equal to the size of the source buffer
+         * @param size extent for each dimension (in elements)
          */
-        DeviceBuffer(MemSpace<T_dim> const& size, bool sizeOnDevice = false)
+        DeviceBuffer(MemSpace<T_dim> const& size)
             : Buffer<T_Type, T_dim>(size)
             , devBuffer(
                   alpaka::allocBuf<T_Type, MemIdxType>(
@@ -119,12 +118,6 @@ namespace pmacc
                 alpaka::getDev(*devBuffer),
                 size.toAlpakaMemVec(),
                 pitchInBytes.toAlpakaMemVec()));
-
-            if(sizeOnDevice)
-            {
-                createSizeOnDeviceBuffers();
-            }
-            this->setSize(size.productOfComponents());
             this->isMemoryContiguous = true;
             reset(false);
         }
@@ -134,15 +127,10 @@ namespace pmacc
          * @param source buffer to create the view on
          * @param size extent for each dimension (in elements)
          * @param offset offset within the source (in elements)
-         * @param sizeOnDevice memory with the current size of the grid is stored on device
          *
          * @attention offset + size must be less or equal to the size of the source buffer
          */
-        DeviceBuffer(
-            DeviceBuffer<T_Type, T_dim>& source,
-            MemSpace<T_dim> size,
-            MemSpace<T_dim> offset,
-            bool sizeOnDevice = false)
+        DeviceBuffer(DeviceBuffer<T_Type, T_dim>& source, MemSpace<T_dim> size, MemSpace<T_dim> offset)
             : Buffer<T_Type, T_dim>(size)
             , devBuffer(source.devBuffer)
         {
@@ -152,11 +140,6 @@ namespace pmacc
                 alpaka::getDev(subView),
                 alpaka::getExtents(subView),
                 alpaka::getPitchesInBytes(subView)));
-            if(sizeOnDevice)
-            {
-                createSizeOnDeviceBuffers();
-            }
-            this->setSize(size.productOfComponents());
             this->isMemoryContiguous = T_dim == DIM1;
             reset(true);
         }
@@ -195,61 +178,6 @@ namespace pmacc
             return DataBoxType(PitchedBox<T_Type, T_dim>(alpaka::getPtrNative(*view), pitchBytes));
         }
 
-        /** Show if current size is stored on device.
-         *
-         * @return return false if no size is stored on device, true otherwise
-         */
-        bool hasCurrentSizeOnDevice() const
-        {
-            return currentSizeBufferDevice.has_value();
-        }
-
-        /** get the device alpaka buffer with the current size
-         *
-         * @return device side current size buffer
-         */
-        CurrentSizeBufferDevice sizeOnDeviceBuffer()
-        {
-            eventSystem::startOperation(ITask::TASK_DEVICE);
-            if(!hasCurrentSizeOnDevice())
-            {
-                throw std::runtime_error("Buffer has no size on device!, currentSize is only stored on host side.");
-            }
-            return currentSizeBufferDevice.value();
-        }
-
-        /** get the host alpaka buffer with the current size
-         *
-         * @return host side current size buffer
-         */
-        typename Buffer<T_Type, T_dim>::CurrentSizeBufferHost sizeHostSideBuffer()
-        {
-            eventSystem::startOperation(ITask::TASK_HOST);
-            return this->currentSizeBufferHost;
-        }
-
-        size_t size() override
-        {
-            if(hasCurrentSizeOnDevice())
-            {
-                eventSystem::startTransaction(eventSystem::getTransactionEvent());
-                Environment<>::get().Factory().createTaskGetCurrentSizeFromDevice(*this);
-                eventSystem::endTransaction().waitForFinished();
-            }
-
-            return Buffer<T_Type, T_dim>::size();
-        }
-
-        void setSize(size_t const newSize) override
-        {
-            Buffer<T_Type, T_dim>::setSize(newSize);
-
-            if(hasCurrentSizeOnDevice())
-            {
-                Environment<>::get().Factory().createTaskSetCurrentSizeOnDevice(*this, newSize);
-            }
-        }
-
         /** Copies data from the given HostBuffer to this DeviceBuffer.
          *
          * @param other the HostBuffer to copy from
@@ -272,12 +200,6 @@ namespace pmacc
         {
             Environment<>::get().Factory().createTaskSetValue(*this, value);
         };
-
-        auto sizeDeviceSideBuffer()
-        {
-            eventSystem::startOperation(ITask::TASK_DEVICE);
-            return currentSizeBufferDevice.value();
-        }
 
         typename Buffer<T_Type, T_dim>::CPtr getCPtrCurrentSize() final
         {

@@ -129,9 +129,6 @@ namespace pmacc
             MemSpace<T_dim> tmp;
             auto current_size = size;
 
-            //!\todo: current size can be changed if it is a DeviceBuffer and current size is on device
-            // call first get current size (but const not allow this)
-
             if constexpr(T_dim == DIM1)
             {
                 tmp[0] = current_size;
