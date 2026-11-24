@@ -66,14 +66,28 @@ namespace pmacc
                 if(nullptr == Manager::getInstance().getITaskIfNotFinished(tmpEvent.getTaskId())
                    && nullptr == Manager::getInstance().getITaskIfNotFinished(lastSendEvent.getTaskId()))
                 {
-                    state = InitSend;
-                    // bash is finished
-                    eventSystem::startTransaction();
-                    /* Publish the counters first: they are the pack result and they stamp the
-                     * transport lengths the send tasks read.
+                    state = InitPublish;
+                    /* bash is finished: publish the counters, they are the pack result. The
+                     * publish copy runs in the device queue while the host keeps going; the
+                     * counts and the transport lengths are read once it completed.
                      */
-                    parBase.getParticlesBuffer().getSendExchangeStack(exchange).publish();
-                    lastSize = parBase.getParticlesBuffer().getSendExchangeStack(exchange).payloadCount();
+                    eventSystem::startTransaction();
+                    publishEvent = parBase.getParticlesBuffer().getSendExchangeStack(exchange).startPublish();
+                    eventSystem::endTransaction();
+                    state = WaitForPublish;
+                }
+
+                break;
+            case InitPublish:
+                break;
+            case WaitForPublish:
+                if(nullptr == Manager::getInstance().getITaskIfNotFinished(publishEvent.getTaskId()))
+                {
+                    state = InitSend;
+                    eventSystem::startTransaction();
+                    auto stack = parBase.getParticlesBuffer().getSendExchangeStack(exchange);
+                    stack.applyPublishedLengths();
+                    lastSize = stack.payloadCount();
                     lastSendEvent = parBase.getParticlesBuffer().asyncSendParticles(
                         eventSystem::getTransactionEvent(),
                         exchange);
@@ -81,9 +95,6 @@ namespace pmacc
                     eventSystem::endTransaction();
                     state = WaitForSend;
                 }
-
-                break;
-            case InitSend:
                 break;
             case WaitForSend:
                 if(nullptr == Manager::getInstance().getITaskIfNotFinished(tmpEvent.getTaskId()))
@@ -143,6 +154,8 @@ namespace pmacc
             Constructor,
             Init,
             WaitForBash,
+            InitPublish,
+            WaitForPublish,
             InitSend,
             WaitForSend,
             WaitForSendEnd,
@@ -152,6 +165,7 @@ namespace pmacc
         ParBase& parBase;
         state_t state;
         EventTask tmpEvent;
+        EventTask publishEvent;
         EventTask lastSendEvent;
         EventTask initDependency;
         uint32_t exchange;

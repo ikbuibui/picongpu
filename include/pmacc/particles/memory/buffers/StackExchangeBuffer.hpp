@@ -133,17 +133,14 @@ namespace pmacc
             return Environment<>::get().Factory().createTaskResetExchangeCounters(counters);
         }
 
-        /** Copy both counters to the host and stamp them as the transport lengths.
+        /** Queue the device-to-host copy of both counters and return its task.
          *
-         * Blocks until the device copy finished, so the published values and the stamped buffer
-         * sizes are valid when this returns.
+         * Non-blocking: the caller ends the transaction it created this task in, polls the
+         * returned event, and only then reads payloadCount() or calls applyPublishedLengths().
          */
-        void publish()
+        EventTask startPublish()
         {
-            eventSystem::startTransaction(eventSystem::getTransactionEvent());
-            Environment<>::get().Factory().createTaskPublishExchangeCounters(counters);
-            eventSystem::endTransaction().waitForFinished();
-            applyPublishedLengths();
+            return Environment<>::get().Factory().createTaskPublishExchangeCounters(counters);
         }
 
         /** Stamp the published counters as the logical sizes of the transport buffers.
