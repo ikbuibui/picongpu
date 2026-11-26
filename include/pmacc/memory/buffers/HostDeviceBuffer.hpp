@@ -50,33 +50,15 @@ namespace pmacc
          * Constructor that creates the buffers with the given size
          *
          * @param size DataSpace representing buffer size
-         * @param sizeOnDevice if true, internal buffers must store their
-         *        size additionally on the device
-         *        (as we keep this information coherent with the host, it influences
-         *        performance on host-device copies, but some algorithms on the device
-         *        might need to know the size of the buffer)
          */
-        HostDeviceBuffer(DataSpace<T_dim> const& size, bool sizeOnDevice = false);
+        HostDeviceBuffer(DataSpace<T_dim> const& size);
 
         /**
          * Constructor that reuses the given device buffer instead of creating an own one.
          * Sizes should match. If size is smaller than the buffer size, then only the part near the origin is used.
          * Passing a size bigger than the buffer is undefined.
          */
-        HostDeviceBuffer(DBuffer& otherDeviceBuffer, DataSpace<T_dim> const& size, bool sizeOnDevice = false);
-
-        /**
-         * Constructor that reuses the given buffers instead of creating own ones.
-         * The data from [offset, offset+size) is used
-         * Passing a size bigger than the buffer (minus the offset) is undefined.
-         */
-        HostDeviceBuffer(
-            HBuffer& otherHostBuffer,
-            DataSpace<T_dim> const& offsetHost,
-            DBuffer& otherDeviceBuffer,
-            DataSpace<T_dim> const& offsetDevice,
-            GridLayout<T_dim> const size,
-            bool sizeOnDevice = false);
+        HostDeviceBuffer(DBuffer& otherDeviceBuffer, DataSpace<T_dim> const& size);
 
         /**
          * Returns the internal data buffer on host side

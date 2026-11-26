@@ -91,10 +91,9 @@ namespace pmacc
          * Constructor.
          *
          * @param gridLayout layout of the buffers, including border-cells
-         * @param sizeOnDevice if true, size information exists on device, too.
          */
-        GridBuffer(GridLayout<DIM> const& gridLayout, bool sizeOnDevice = false)
-            : Parent(gridLayout.sizeND(), sizeOnDevice)
+        GridBuffer(GridLayout<DIM> const& gridLayout)
+            : Parent(gridLayout.sizeND())
             , hasOneExchange(false)
             , gridLayout(gridLayout)
             , maxExchange(0)
@@ -106,14 +105,9 @@ namespace pmacc
          * Constructor.
          *
          * @param dataSpace DataSpace representing buffer size without border-cells
-         * @param sizeOnDevice if true, internal buffers must store their
-         *        size additionally on the device
-         *        (as we keep this information coherent with the host, it influences
-         *        performance on host-device copies, but some algorithms on the device
-         *        might need to know the size of the buffer)
          */
-        GridBuffer(DataSpace<DIM> const& dataSpace, bool sizeOnDevice = false)
-            : Parent(dataSpace, sizeOnDevice)
+        GridBuffer(DataSpace<DIM> const& dataSpace)
+            : Parent(dataSpace)
             , hasOneExchange(false)
             , gridLayout(dataSpace)
             , maxExchange(0)
@@ -126,32 +120,9 @@ namespace pmacc
          *
          * @param otherDeviceBuffer DeviceBuffer which should be used instead of creating own DeviceBuffer
          * @param gridLayout layout of the buffers, including border-cells
-         * @param sizeOnDevice if true, internal buffers must store their
-         *        size additionally on the device
-         *        (as we keep this information coherent with the host, it influences
-         *        performance on host-device copies, but some algorithms on the device
-         *        might need to know the size of the buffer)
          */
-        GridBuffer(
-            DeviceBuffer<TYPE, DIM>& otherDeviceBuffer,
-            GridLayout<DIM> const& gridLayout,
-            bool sizeOnDevice = false)
-            : Parent(otherDeviceBuffer, gridLayout.sizeND(), sizeOnDevice)
-            , hasOneExchange(false)
-            , gridLayout(gridLayout)
-            , maxExchange(0)
-        {
-            init();
-        }
-
-        GridBuffer(
-            HostBuffer<TYPE, DIM>& otherHostBuffer,
-            DataSpace<DIM> const& offsetHost,
-            DeviceBuffer<TYPE, DIM>& otherDeviceBuffer,
-            DataSpace<DIM> const& offsetDevice,
-            GridLayout<DIM> const& gridLayout,
-            bool sizeOnDevice = false)
-            : Parent(otherHostBuffer, offsetHost, otherDeviceBuffer, offsetDevice, gridLayout.sizeND(), sizeOnDevice)
+        GridBuffer(DeviceBuffer<TYPE, DIM>& otherDeviceBuffer, GridLayout<DIM> const& gridLayout)
+            : Parent(otherDeviceBuffer, gridLayout.sizeND())
             , hasOneExchange(false)
             , gridLayout(gridLayout)
             , maxExchange(0)
@@ -173,21 +144,12 @@ namespace pmacc
          * @param communicationTag unique tag/id for communication
          *        has to be the same when this method is called multiple times for the same object
          *        (with non-overlapping masks)
-         * @param sizeOnDeviceSend if true, internal send buffers must store their
-         *        size additionally on the device
-         *        (as we keep this information coherent with the host, it influences
-         *        performance on host-device copies, but some algorithms on the device
-         *        might need to know the size of the buffer)
-         * @param sizeOnDeviceReceive if true, internal receive buffers must store their
-         *        size additionally on the device
          */
         void addExchange(
             uint32_t dataPlace,
             Mask const& receive,
             DataSpace<DIM> guardingCells,
-            uint32_t communicationTag,
-            bool sizeOnDeviceSend,
-            bool sizeOnDeviceReceive)
+            uint32_t communicationTag)
         {
             if(hasOneExchange && (communicationTag != lastUsedCommunicationTag))
                 throw std::runtime_error("It is not allowed to give the same GridBuffer different communicationTags");
@@ -230,8 +192,7 @@ namespace pmacc
                         guardingCells,
                         (ExchangeType) ex,
                         uniqCommunicationTag,
-                        dataPlace == GUARD ? BORDER : GUARD,
-                        sizeOnDeviceSend);
+                        dataPlace == GUARD ? BORDER : GUARD);
                     ExchangeType recvex = Mask::getMirroredExchangeType(ex);
                     maxExchange = std::max(maxExchange, recvex + 1u);
                     receiveExchanges[recvex] = std::make_unique<Exchange<BORDERTYPE, DIM>>(
@@ -240,63 +201,22 @@ namespace pmacc
                         guardingCells,
                         recvex,
                         uniqCommunicationTag,
-                        dataPlace == GUARD ? GUARD : BORDER,
-                        sizeOnDeviceReceive);
+                        dataPlace == GUARD ? GUARD : BORDER);
                 }
             }
-        }
-
-        /**
-         * Add Exchange in GridBuffer memory space.
-         *
-         * An Exchange is added to this GridBuffer. The exchange buffers use
-         * the same memory as this GridBuffer.
-         *
-         * @param dataPlace place where received data is stored [GUARD | BORDER]
-         *        if dataPlace=GUARD than copy other BORDER to my GUARD
-         *        if dataPlace=BORDER than copy other GUARD to my BORDER
-         * @param receive a Mask which describes the directions for the exchange
-         * @param guardingCells number of guarding cells in each dimension
-         * @param communicationTag unique tag/id for communication
-         * @param sizeOnDevice if true, internal buffers must store their
-         *        size additionally on the device
-         *        (as we keep this information coherent with the host, it influences
-         *        performance on host-device copies, but some algorithms on the device
-         *        might need to know the size of the buffer)
-         */
-        void addExchange(
-            uint32_t dataPlace,
-            Mask const& receive,
-            DataSpace<DIM> guardingCells,
-            uint32_t communicationTag,
-            bool sizeOnDevice = false)
-        {
-            addExchange(dataPlace, receive, guardingCells, communicationTag, sizeOnDevice, sizeOnDevice);
         }
 
         /**
          * Add Exchange in dedicated memory space.
          *
          * An Exchange is added to this GridBuffer. The exchange buffers use
-         * the their own memory instead of using the GridBuffer's memory space.
+         * their own memory instead of using the GridBuffer's memory space.
          *
          * @param receive a Mask which describes the directions for the exchange
          * @param dataSpace size of the newly created exchange buffer in each dimension
          * @param communicationTag unique tag/id for communication
-         * @param sizeOnDeviceSend if true, internal send buffers must store their
-         *        size additionally on the device
-         *        (as we keep this information coherent with the host, it influences
-         *        performance on host-device copies, but some algorithms on the device
-         *        might need to know the size of the buffer)
-         * @param sizeOnDeviceReceive if true, internal receive buffers must store their
-         *        size additionally on the device
          */
-        void addExchangeBuffer(
-            Mask const& receive,
-            DataSpace<DIM> const& dataSpace,
-            uint32_t communicationTag,
-            bool sizeOnDeviceSend,
-            bool sizeOnDeviceReceive)
+        void addExchangeBuffer(Mask const& receive, DataSpace<DIM> const& dataSpace, uint32_t communicationTag)
         {
             if(hasOneExchange && (communicationTag != lastUsedCommunicationTag))
                 throw std::runtime_error("It is not allowed to give the same GridBuffer different communicationTags");
@@ -338,43 +258,17 @@ namespace pmacc
                         sendExchanges[ex] = std::make_unique<Exchange<BORDERTYPE, DIM>>(
                             /*memoryLayout*/ dataSpace,
                             ex,
-                            uniqCommunicationTag,
-                            sizeOnDeviceSend);
+                            uniqCommunicationTag);
 
                         ExchangeType recvex = Mask::getMirroredExchangeType(ex);
                         maxExchange = std::max(maxExchange, recvex + 1u);
                         receiveExchanges[recvex] = std::make_unique<Exchange<BORDERTYPE, DIM>>(
                             /*memoryLayout*/ dataSpace,
                             recvex,
-                            uniqCommunicationTag,
-                            sizeOnDeviceReceive);
+                            uniqCommunicationTag);
                     }
                 }
             }
-        }
-
-        /**
-         * Add Exchange in dedicated memory space.
-         *
-         * An Exchange is added to this GridBuffer. The exchange buffers use
-         * the their own memory instead of using the GridBuffer's memory space.
-         *
-         * @param receive a Mask which describes the directions for the exchange
-         * @param dataSpace size of the newly created exchange buffer in each dimension
-         * @param communicationTag unique tag/id for communication
-         * @param sizeOnDevice if true, internal buffers must store their
-         *        size additionally on the device
-         *        (as we keep this information coherent with the host, it influences
-         *        performance on host-device copies, but some algorithms on the device
-         *        might need to know the size of the buffer)
-         */
-        void addExchangeBuffer(
-            Mask const& receive,
-            DataSpace<DIM> const& dataSpace,
-            uint32_t communicationTag,
-            bool sizeOnDevice = false)
-        {
-            addExchangeBuffer(receive, dataSpace, communicationTag, sizeOnDevice, sizeOnDevice);
         }
 
         /**

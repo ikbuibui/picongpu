@@ -26,33 +26,17 @@
 namespace pmacc
 {
     template<typename T_Type, unsigned T_dim>
-    HostDeviceBuffer<T_Type, T_dim>::HostDeviceBuffer(DataSpace<T_dim> const& size, bool sizeOnDevice)
+    HostDeviceBuffer<T_Type, T_dim>::HostDeviceBuffer(DataSpace<T_dim> const& size)
     {
         hostBuffer = std::make_unique<HostBuffer<T_Type, T_dim>>(size);
-        deviceBuffer = std::make_unique<DeviceBuffer<T_Type, T_dim>>(size, sizeOnDevice);
+        deviceBuffer = std::make_unique<DeviceBuffer<T_Type, T_dim>>(size);
     }
 
     template<typename T_Type, unsigned T_dim>
-    HostDeviceBuffer<T_Type, T_dim>::HostDeviceBuffer(
-        DBuffer& otherDeviceBuffer,
-        DataSpace<T_dim> const& size,
-        bool sizeOnDevice)
+    HostDeviceBuffer<T_Type, T_dim>::HostDeviceBuffer(DBuffer& otherDeviceBuffer, DataSpace<T_dim> const& size)
     {
         hostBuffer = std::make_unique<HostBuffer<T_Type, T_dim>>(size);
-        deviceBuffer = std::make_unique<DeviceBufferType>(otherDeviceBuffer, size, DataSpace<T_dim>(), sizeOnDevice);
-    }
-
-    template<typename T_Type, unsigned T_dim>
-    HostDeviceBuffer<T_Type, T_dim>::HostDeviceBuffer(
-        HBuffer& otherHostBuffer,
-        DataSpace<T_dim> const& offsetHost,
-        DBuffer& otherDeviceBuffer,
-        DataSpace<T_dim> const& offsetDevice,
-        GridLayout<T_dim> const size,
-        bool sizeOnDevice)
-    {
-        hostBuffer = std::make_unique<HostBufferType>(otherHostBuffer, size, offsetHost);
-        deviceBuffer = std::make_unique<DeviceBufferType>(otherDeviceBuffer, size, offsetDevice, sizeOnDevice);
+        deviceBuffer = std::make_unique<DeviceBufferType>(otherDeviceBuffer, size, DataSpace<T_dim>());
     }
 
     template<typename T_Type, unsigned T_dim>

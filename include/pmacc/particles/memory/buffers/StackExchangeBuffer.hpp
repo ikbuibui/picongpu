@@ -21,45 +21,92 @@
 
 #pragma once
 
+#include "pmacc/Environment.hpp"
 #include "pmacc/assert.hpp"
+#include "pmacc/eventSystem/eventSystem.hpp"
+#include "pmacc/eventSystem/events/EventTask.hpp"
 #include "pmacc/memory/buffers/Exchange.hpp"
+#include "pmacc/particles/frame_types.hpp"
 #include "pmacc/particles/memory/boxes/ExchangePopDataBox.hpp"
 #include "pmacc/particles/memory/boxes/ExchangePushDataBox.hpp"
+#include "pmacc/particles/memory/buffers/ExchangeCounters.hpp"
+
+#include <cstdint>
+#include <limits>
+#include <type_traits>
 
 namespace pmacc
 {
-    /**
-     * Can be used for creating several DataBox types from an Exchange.
+    /** Counter slots of one send direction.
      *
-     * @tparam FRAME frame datatype
+     * The payload counter tracks the number of pushed border frames, the index-entry counter the
+     * number of pushed per-supercell exchange index entries. Both share one allocation so a reset
+     * and a publish stay a single operation.
      */
-    template<class FRAME, class FRAMEINDEX, unsigned DIM>
-    class StackExchangeBuffer
+    enum class ExchangeCounter : uint32_t
     {
-    public:
-        /**
-         * Create a stack from any ExchangeBuffer<FRAME,DIM>.
-         *
-         * If the stack's internal GridBuffer has no sizeOnDevice, no device querys are allowed.
-         *
-         * @param stack Exchange
-         */
-        StackExchangeBuffer(Exchange<FRAME, DIM1>& stack, Exchange<FRAMEINDEX, DIM1>& stackIndexer)
-            : stack(stack)
-            , stackIndexer(stackIndexer)
+        payload = 0u,
+        indexEntries = 1u
+    };
+
+    //! number of counters shared by one send direction
+    inline constexpr uint32_t numExchangeCounters = 2u;
+
+    //! counter storage of one send direction
+    using ExchangeCounterBlock = ExchangeCounters<vint_t, numExchangeCounters>;
+
+    namespace detail
+    {
+        //! index of a counter slot inside ExchangeCounterBlock
+        constexpr uint32_t counterIndex(ExchangeCounter const slot)
         {
+            return static_cast<uint32_t>(slot);
         }
 
-        /**
-         * Returns a PopDataBox for the internal HostBuffer.
-         *
-         * @return PopDataBox for host buffer
-         */
-        ExchangePopDataBox<vint_t, FRAME, DIM> getHostExchangePopDataBox()
+        //! logical size of the buffer the MPI transfers work on
+        template<typename T_Exchange>
+        size_t transportSize(T_Exchange& exchange)
         {
-            return ExchangePopDataBox<vint_t, FRAME, DIM>(
-                stack.getHostBuffer().getDataBox(),
-                stackIndexer.getHostBuffer().getDataBox());
+            if(::pmacc::Environment<>::get().isMpiDirectEnabled())
+                return exchange.getDeviceBuffer().size();
+            return exchange.getHostBuffer().size();
+        }
+
+        //! capacity of the buffer the MPI transfers work on
+        template<typename T_Exchange>
+        size_t transportCapacity(T_Exchange& exchange)
+        {
+            if(::pmacc::Environment<>::get().isMpiDirectEnabled())
+                return exchange.getDeviceBuffer().capacityND().productOfComponents();
+            return exchange.getHostBuffer().capacityND().productOfComponents();
+        }
+    } // namespace detail
+
+    /** Send view of a (border frame, exchange index) pair.
+     *
+     * Borrows the two exchanges and the persistent counter block of one send direction; the
+     * owning ParticlesBuffer must outlive this view.
+     *
+     * The counter block is the only carrier of the pack result: reset() hands it to the packing
+     * kernel and publish() copies it back and stamps the transport lengths of both exchange
+     * buffers, so the generic transfer tasks keep reading the buffer's logical size.
+     */
+    template<class FRAME, class FRAMEINDEX, unsigned DIM>
+    class SendExchangeStack
+    {
+        static_assert(
+            std::is_same_v<typename ExchangeCounterBlock::CountType, vint_t>,
+            "the exchange counters must use the same type as the exchange index entry arithmetic");
+
+    public:
+        SendExchangeStack(
+            Exchange<FRAME, DIM1>& stack,
+            Exchange<FRAMEINDEX, DIM1>& stackIndexer,
+            ExchangeCounterBlock& counters)
+            : stack(stack)
+            , stackIndexer(stackIndexer)
+            , counters(counters)
+        {
         }
 
         /**
@@ -69,15 +116,82 @@ namespace pmacc
          */
         ExchangePushDataBox<vint_t, FRAME, DIM> getDeviceExchangePushDataBox()
         {
-            PMACC_ASSERT(stack.getDeviceBuffer().hasCurrentSizeOnDevice() == true);
-            PMACC_ASSERT(stackIndexer.getDeviceBuffer().hasCurrentSizeOnDevice() == true);
+            auto const maxSize = stack.getDeviceBuffer().capacityND().productOfComponents();
+            PMACC_ASSERT(maxSize <= static_cast<size_t>(std::numeric_limits<vint_t>::max()));
             return ExchangePushDataBox<vint_t, FRAME, DIM>(
                 stack.getDeviceBuffer().data(),
-                (vint_t*) alpaka::getPtrNative(stack.getDeviceBuffer().sizeDeviceSideBuffer()),
-                stack.getDeviceBuffer().capacityND().productOfComponents(),
+                counters.deviceData() + detail::counterIndex(ExchangeCounter::payload),
+                static_cast<vint_t>(maxSize),
                 PushDataBox<vint_t, FRAMEINDEX>(
                     stackIndexer.getDeviceBuffer().data(),
-                    (vint_t*) alpaka::getPtrNative(stackIndexer.getDeviceBuffer().sizeDeviceSideBuffer())));
+                    counters.deviceData() + detail::counterIndex(ExchangeCounter::indexEntries)));
+        }
+
+        /** Zero both device counters; the returned task is ordered before the packing kernel. */
+        EventTask reset()
+        {
+            return Environment<>::get().Factory().createTaskResetExchangeCounters(counters);
+        }
+
+        /** Queue the device-to-host copy of both counters and return its task.
+         *
+         * Non-blocking: the caller ends the transaction it created this task in, polls the
+         * returned event, and only then reads payloadCount() or calls applyPublishedLengths().
+         */
+        EventTask startPublish()
+        {
+            return Environment<>::get().Factory().createTaskPublishExchangeCounters(counters);
+        }
+
+        /** Stamp the published counters as the logical sizes of the transport buffers.
+         *
+         * Host-side only; call it after the publish task finished and before the transfer reads
+         * the buffer sizes.
+         */
+        void applyPublishedLengths()
+        {
+            stack.getDeviceBuffer().setSize(payloadCount());
+            stackIndexer.getDeviceBuffer().setSize(indexCount());
+        }
+
+        //! number of border frames produced by the last completed pack kernel
+        size_t payloadCount() const
+        {
+            return counters.hostValue(detail::counterIndex(ExchangeCounter::payload));
+        }
+
+        //! number of exchange index entries produced by the last completed pack kernel
+        size_t indexCount() const
+        {
+            return counters.hostValue(detail::counterIndex(ExchangeCounter::indexEntries));
+        }
+
+        //! maximum number of border frames one chunk can carry
+        size_t maxPayloadCount()
+        {
+            return detail::transportCapacity(stack);
+        }
+
+    private:
+        Exchange<FRAME, DIM1>& stack;
+        Exchange<FRAMEINDEX, DIM1>& stackIndexer;
+        ExchangeCounterBlock& counters;
+    };
+
+    /** Receive view of a (border frame, exchange index) pair.
+     *
+     * Borrows the two exchanges; the owning ParticlesBuffer must outlive this view. The received
+     * lengths live in the exchanges' logical sizes, which the receive tasks set from the MPI
+     * metadata.
+     */
+    template<class FRAME, class FRAMEINDEX, unsigned DIM>
+    class ReceiveExchangeStack
+    {
+    public:
+        ReceiveExchangeStack(Exchange<FRAME, DIM1>& stack, Exchange<FRAMEINDEX, DIM1>& stackIndexer)
+            : stack(stack)
+            , stackIndexer(stackIndexer)
+        {
         }
 
         /**
@@ -92,76 +206,25 @@ namespace pmacc
                 stackIndexer.getDeviceBuffer().getDataBox());
         }
 
-        void setSize(size_t const size)
+        //! number of received border frames
+        size_t payloadCount()
         {
-            // do host and device setSize parallel
-            EventTask split = eventSystem::getTransactionEvent();
-            EventTask e1;
-
-            if(!Environment<>::get().isMpiDirectEnabled())
-            {
-                eventSystem::startTransaction(split);
-                stackIndexer.getHostBuffer().setSize(size);
-                stack.getHostBuffer().setSize(size);
-                e1 = eventSystem::endTransaction();
-            }
-
-            eventSystem::startTransaction(split);
-            stackIndexer.getDeviceBuffer().setSize(size);
-            EventTask e2 = eventSystem::endTransaction();
-            eventSystem::startTransaction(split);
-            stack.getDeviceBuffer().setSize(size);
-            EventTask e3 = eventSystem::endTransaction();
-
-            eventSystem::setTransactionEvent(e1 + e2 + e3);
+            return detail::transportSize(stack);
         }
 
-        size_t getHostCurrentSize()
+        //! number of received exchange index entries
+        size_t indexCount()
         {
-            size_t result = 0u;
-            if(Environment<>::get().isMpiDirectEnabled())
-                result = stackIndexer.getDeviceBuffer().size();
-            else
-                result = stackIndexer.getHostBuffer().size();
-
-            return result;
+            return detail::transportSize(stackIndexer);
         }
 
-        size_t getDeviceCurrentSize()
+        //! maximum number of border frames one chunk can carry
+        size_t maxPayloadCount()
         {
-            return stackIndexer.getDeviceBuffer().size();
-        }
-
-        size_t getDeviceParticlesCurrentSize()
-        {
-            return stack.getDeviceBuffer().size();
-        }
-
-        size_t getHostParticlesCurrentSize()
-        {
-            if(Environment<>::get().isMpiDirectEnabled())
-                return stack.getDeviceBuffer().size();
-
-            return stack.getHostBuffer().size();
-        }
-
-        size_t getMaxParticlesCount()
-        {
-            size_t result = 0u;
-            if(Environment<>::get().isMpiDirectEnabled())
-                result = stack.getDeviceBuffer().capacityND().productOfComponents();
-            else
-                result = stack.getHostBuffer().capacityND().productOfComponents();
-
-            return result;
+            return detail::transportCapacity(stack);
         }
 
     private:
-        Exchange<FRAME, DIM1>& getExchangeBuffer()
-        {
-            return stack;
-        }
-
         Exchange<FRAME, DIM1>& stack;
         Exchange<FRAMEINDEX, DIM1>& stackIndexer;
     };

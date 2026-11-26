@@ -105,28 +105,22 @@ namespace pmacc
             ITask* registeringTask = nullptr);
 
         /**
-         * Creates a new TaskSetCurrentSizeOnDevice.
-         * @param dst destination DeviceBuffer to set current size on
-         * @param size size to be set on DeviceBuffer
+         * Creates a new TaskResetExchangeCounters.
+         * @param counters exchange counter group to zero on the device
          * @param registeringTask optional pointer to an ITask which should be registered at the new task as an
          * observer
          */
-        template<class TYPE, unsigned DIM>
-        EventTask createTaskSetCurrentSizeOnDevice(
-            DeviceBuffer<TYPE, DIM>& dst,
-            size_t size,
-            ITask* registeringTask = nullptr);
+        template<typename T_Counters>
+        EventTask createTaskResetExchangeCounters(T_Counters& counters, ITask* registeringTask = nullptr);
 
         /**
-         * Creates a new TaskGetCurrentSizeFromDevic.
-         * @param buffer DeviceBuffer to get current size from
+         * Creates a new TaskPublishExchangeCounters.
+         * @param counters exchange counter group to copy from the device to the host
          * @param registeringTask optional pointer to an ITask which should be registered at the new task as an
          * observer
          */
-        template<class TYPE, unsigned DIM>
-        EventTask createTaskGetCurrentSizeFromDevice(
-            DeviceBuffer<TYPE, DIM>& buffer,
-            ITask* registeringTask = nullptr);
+        template<typename T_Counters>
+        EventTask createTaskPublishExchangeCounters(T_Counters& counters, ITask* registeringTask = nullptr);
 
         /**
          * Creates a new TaskKernel.

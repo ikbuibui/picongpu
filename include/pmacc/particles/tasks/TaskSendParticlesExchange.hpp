@@ -40,7 +40,7 @@ namespace pmacc
             , lastSendEvent(EventTask())
             , initDependency(eventSystem::getTransactionEvent())
             , exchange(exchange)
-            , maxSize(parBase.getParticlesBuffer().getSendExchangeStack(exchange).getMaxParticlesCount())
+            , maxSize(parBase.getParticlesBuffer().getSendExchangeStack(exchange).maxPayloadCount())
             , lastSize(0)
             , retryCounter(0)
         {
@@ -66,11 +66,28 @@ namespace pmacc
                 if(nullptr == Manager::getInstance().getITaskIfNotFinished(tmpEvent.getTaskId())
                    && nullptr == Manager::getInstance().getITaskIfNotFinished(lastSendEvent.getTaskId()))
                 {
-                    state = InitSend;
-                    // bash is finished
+                    state = InitPublish;
+                    /* bash is finished: publish the counters, they are the pack result. The
+                     * publish copy runs in the device queue while the host keeps going; the
+                     * counts and the transport lengths are read once it completed.
+                     */
                     eventSystem::startTransaction();
-                    lastSize
-                        = parBase.getParticlesBuffer().getSendExchangeStack(exchange).getDeviceParticlesCurrentSize();
+                    publishEvent = parBase.getParticlesBuffer().getSendExchangeStack(exchange).startPublish();
+                    eventSystem::endTransaction();
+                    state = WaitForPublish;
+                }
+
+                break;
+            case InitPublish:
+                break;
+            case WaitForPublish:
+                if(nullptr == Manager::getInstance().getITaskIfNotFinished(publishEvent.getTaskId()))
+                {
+                    state = InitSend;
+                    eventSystem::startTransaction();
+                    auto stack = parBase.getParticlesBuffer().getSendExchangeStack(exchange);
+                    stack.applyPublishedLengths();
+                    lastSize = stack.payloadCount();
                     lastSendEvent = parBase.getParticlesBuffer().asyncSendParticles(
                         eventSystem::getTransactionEvent(),
                         exchange);
@@ -78,9 +95,6 @@ namespace pmacc
                     eventSystem::endTransaction();
                     state = WaitForSend;
                 }
-
-                break;
-            case InitSend:
                 break;
             case WaitForSend:
                 if(nullptr == Manager::getInstance().getITaskIfNotFinished(tmpEvent.getTaskId()))
@@ -140,6 +154,8 @@ namespace pmacc
             Constructor,
             Init,
             WaitForBash,
+            InitPublish,
+            WaitForPublish,
             InitSend,
             WaitForSend,
             WaitForSendEnd,
@@ -149,6 +165,7 @@ namespace pmacc
         ParBase& parBase;
         state_t state;
         EventTask tmpEvent;
+        EventTask publishEvent;
         EventTask lastSendEvent;
         EventTask initDependency;
         uint32_t exchange;

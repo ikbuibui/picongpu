@@ -28,8 +28,6 @@
 #include "pmacc/memory/boxes/PitchedBox.hpp"
 #include "pmacc/types.hpp"
 
-#include <limits>
-
 namespace pmacc
 {
     /** Minimal function description of a buffer,
@@ -130,9 +128,6 @@ namespace pmacc
         {
             MemSpace<T_dim> tmp;
             auto current_size = size;
-
-            //!\todo: current size can be changed if it is a DeviceBuffer and current size is on device
-            // call first get current size (but const not allow this)
 
             if constexpr(T_dim == DIM1)
             {

@@ -57,8 +57,7 @@ namespace pmacc
             DataSpace<DIM> guardingCells,
             uint32_t extype,
             uint32_t commTag,
-            uint32_t area = BORDER,
-            bool sizeOnDevice = false)
+            uint32_t area = BORDER)
             : hostBuffer(nullptr)
             , deviceDoubleBuffer(nullptr)
             , exchange(extype)
@@ -80,12 +79,11 @@ namespace pmacc
             deviceBuffer = std::make_unique<DeviceBuffer>(
                 source,
                 tmp_size,
-                exchangeTypeToOffset(exchange, memoryLayout, guardingCells, area),
-                sizeOnDevice);
+                exchangeTypeToOffset(exchange, memoryLayout, guardingCells, area));
             if constexpr(DIM > DIM1)
             {
                 /*create double buffer on gpu for faster memory transfers*/
-                deviceDoubleBuffer = std::make_unique<DeviceBuffer>(tmp_size, false);
+                deviceDoubleBuffer = std::make_unique<DeviceBuffer>(tmp_size);
             }
 
             if(!Environment<>::get().isMpiDirectEnabled())
@@ -95,19 +93,19 @@ namespace pmacc
             }
         }
 
-        Exchange(DataSpace<DIM> exchangeDataSpace, uint32_t extype, uint32_t commTag, bool sizeOnDevice = false)
+        Exchange(DataSpace<DIM> exchangeDataSpace, uint32_t extype, uint32_t commTag)
             : hostBuffer(nullptr)
             , deviceDoubleBuffer(nullptr)
             , exchange(extype)
             , communicationTag(commTag)
         {
             using DeviceBuffer = DeviceBuffer<TYPE, DIM>;
-            deviceBuffer = std::make_unique<DeviceBuffer>(exchangeDataSpace, sizeOnDevice);
+            deviceBuffer = std::make_unique<DeviceBuffer>(exchangeDataSpace);
 
             if constexpr(DIM > DIM1)
             {
                 /*create double buffer on gpu for faster memory transfers*/
-                deviceDoubleBuffer = std::make_unique<DeviceBuffer>(exchangeDataSpace, false);
+                deviceDoubleBuffer = std::make_unique<DeviceBuffer>(exchangeDataSpace);
             }
 
             if(!Environment<>::get().isMpiDirectEnabled())

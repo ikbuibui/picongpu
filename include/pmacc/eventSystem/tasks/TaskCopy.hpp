@@ -54,9 +54,9 @@ namespace pmacc
 
         void init() override
         {
-            /* @attention: `setSize()` must be called before `getAlpakaQueue()` is called else `setSize()`
-             * is not handled as part of this task. The reason for this is that is not registered to the eventsystem
-             * before `init()` is finished.
+            /* The number of copied elements defines how much of the destination is valid.
+             * Mirroring it into the destination keeps the host-only logical size in line with
+             * the data, which later consumers (MPI sends, exchange stacks) read back.
              */
             if(source->isContiguous() && destination->isContiguous())
             {
